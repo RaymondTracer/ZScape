@@ -1202,9 +1202,8 @@ public partial class MainForm : Form
             wadsListView.Items.Clear();
             wadsLabel.Text = "WADs";
             AdjustWadsListColumn();
-            playerListView.Items.Clear();
+            playerListView.Clear();
             playerListLabel.Text = "Players (0)";
-            AdjustPlayerListColumns();
         }
     }
 
@@ -2605,39 +2604,8 @@ public partial class MainForm : Form
 
     private void DisplayPlayerList(ServerInfo server)
     {
-        playerListView.Items.Clear();
-        
-        foreach (var player in server.Players)
-        {
-            var item = new ListViewItem(DoomColorCodes.StripColorCodes(player.Name));
-            item.SubItems.Add(player.Score.ToString());
-            item.SubItems.Add(player.Ping.ToString());
-            
-            string team = player.Team >= 0 && player.Team < server.Teams.Length 
-                ? server.Teams[player.Team].Name 
-                : "-";
-            item.SubItems.Add(team);
-            
-            // Color spectators differently
-            if (player.IsSpectator)
-            {
-                item.ForeColor = DarkTheme.TextSecondary;
-            }
-            
-            // Mark bots
-            if (player.IsBot)
-            {
-                item.Text += " [BOT]";
-                item.ForeColor = DarkTheme.TextDisabled;
-            }
-            
-            playerListView.Items.Add(item);
-        }
-
+        playerListView.SetPlayers(server.Players, server.Teams);
         playerListLabel.Text = $"Players ({server.Players.Count})";
-        
-        // Recalculate column widths after populating
-        AdjustPlayerListColumns();
     }
     
     private void DisplayWadList(ServerInfo server)
@@ -2768,42 +2736,6 @@ public partial class MainForm : Form
             e.Item.Selected = false;
         }
     }
-    
-    private void PlayerListView_Resize(object? sender, EventArgs e)
-    {
-        AdjustPlayerListColumns();
-    }
-    
-    private void AdjustPlayerListColumns()
-    {
-        if (playerListView == null || !playerListView.IsHandleCreated) return;
-        if (playerListView.Columns.Count < 4) return;
-        
-        // Fixed widths for Score, Ping, Team
-        const int scoreWidth = 50;
-        const int pingWidth = 50;
-        const int teamWidth = 50;
-        
-        // Account for vertical scrollbar if items exceed visible area
-        int scrollBarWidth = 0;
-        if (playerListView.Items.Count > 0)
-        {
-            int visibleItems = playerListView.ClientSize.Height / (playerListView.Items[0].Bounds.Height > 0 ? playerListView.Items[0].Bounds.Height : 16);
-            if (playerListView.Items.Count > visibleItems)
-            {
-                scrollBarWidth = SystemInformation.VerticalScrollBarWidth;
-            }
-        }
-        
-        int availableWidth = playerListView.ClientSize.Width - scoreWidth - pingWidth - teamWidth - scrollBarWidth;
-        int nameWidth = Math.Max(60, availableWidth);
-        
-        // Set all column widths
-        playerNameColumn.Width = nameWidth;
-        playerScoreColumn.Width = scoreWidth;
-        playerPingColumn.Width = pingWidth;
-        playerTeamColumn.Width = teamWidth;
-    }
 
     private void UpdateStatusBar()
     {
@@ -2866,8 +2798,7 @@ public partial class MainForm : Form
         // Load settings after controls are fully ready
         LoadSettings();
         
-        // Initialize list column widths
-        AdjustPlayerListColumns();
+        // Initialize wads list column width
         AdjustWadsListColumn();
         
         // Now allow saving settings
