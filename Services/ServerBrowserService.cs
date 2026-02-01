@@ -634,6 +634,244 @@ public class ServerBrowserService : IDisposable
         return upper == "XIP";
     }
 
+    #region Server State Persistence
+    
+    /// <summary>
+    /// Gets the current server state for persistence during updates.
+    /// Returns all server endpoints and full data for queried servers.
+    /// </summary>
+    public UpdateServerState GetServerState()
+    {
+        var state = new UpdateServerState();
+        
+        foreach (var kvp in _servers)
+        {
+            state.Servers.Add(kvp.Key);
+            
+            // Create full snapshot for queried servers
+            if (kvp.Value.IsQueried)
+            {
+                state.QueriedServerData.Add(CreateSnapshot(kvp.Value));
+            }
+        }
+        
+        return state;
+    }
+    
+    /// <summary>
+    /// Creates a serializable snapshot from a ServerInfo.
+    /// </summary>
+    private static ServerSnapshot CreateSnapshot(ServerInfo server)
+    {
+        return new ServerSnapshot
+        {
+            Address = server.Address,
+            Port = server.Port,
+            Name = server.Name,
+            Map = server.Map,
+            CurrentPlayers = server.CurrentPlayers,
+            MaxPlayers = server.MaxPlayers,
+            MaxClients = server.MaxClients,
+            Ping = server.Ping,
+            GameModeCode = (int)server.GameMode.Type,
+            IsOnline = server.IsOnline,
+            IWAD = server.IWAD,
+            PWADs = server.PWADs.Select(p => new PWadSnapshot 
+            { 
+                Name = p.Name, 
+                IsOptional = p.IsOptional, 
+                Hash = p.Hash 
+            }).ToList(),
+            GameVersion = server.GameVersion,
+            IsPassworded = server.IsPassworded,
+            RequiresJoinPassword = server.RequiresJoinPassword,
+            IsTestingServer = server.IsTestingServer,
+            TestingArchive = server.TestingArchive,
+            Skill = server.Skill,
+            BotSkill = server.BotSkill,
+            Players = server.Players.Select(p => new PlayerSnapshot
+            {
+                Name = p.Name,
+                Score = p.Score,
+                Ping = p.Ping,
+                Team = p.Team,
+                IsSpectator = p.IsSpectator,
+                IsBot = p.IsBot
+            }).ToList(),
+            NumTeams = server.NumTeams,
+            FragLimit = server.FragLimit,
+            TimeLimit = server.TimeLimit,
+            TimeLeft = server.TimeLeft,
+            PointLimit = server.PointLimit,
+            DuelLimit = server.DuelLimit,
+            WinLimit = server.WinLimit,
+            TeamDamage = server.TeamDamage,
+            Country = server.Country,
+            Website = server.Website,
+            Email = server.Email,
+            IsSecure = server.IsSecure,
+            Instagib = server.Instagib,
+            Buckshot = server.Buckshot
+        };
+    }
+    
+    /// <summary>
+    /// Restores a ServerInfo from a serialized snapshot.
+    /// </summary>
+    private static ServerInfo RestoreFromSnapshot(ServerSnapshot snapshot)
+    {
+        return new ServerInfo
+        {
+            EndPoint = new IPEndPoint(IPAddress.Parse(snapshot.Address), snapshot.Port),
+            Name = snapshot.Name,
+            Map = snapshot.Map,
+            CurrentPlayers = snapshot.CurrentPlayers,
+            MaxPlayers = snapshot.MaxPlayers,
+            MaxClients = snapshot.MaxClients,
+            Ping = snapshot.Ping,
+            GameMode = GameMode.FromCode(snapshot.GameModeCode),
+            IsOnline = snapshot.IsOnline,
+            IWAD = snapshot.IWAD,
+            PWADs = snapshot.PWADs.Select(p => new PWadInfo 
+            { 
+                Name = p.Name, 
+                IsOptional = p.IsOptional, 
+                Hash = p.Hash 
+            }).ToList(),
+            GameVersion = snapshot.GameVersion,
+            IsPassworded = snapshot.IsPassworded,
+            RequiresJoinPassword = snapshot.RequiresJoinPassword,
+            IsTestingServer = snapshot.IsTestingServer,
+            TestingArchive = snapshot.TestingArchive,
+            Skill = snapshot.Skill,
+            BotSkill = snapshot.BotSkill,
+            Players = snapshot.Players.Select(p => new PlayerInfo
+            {
+                Name = p.Name,
+                Score = p.Score,
+                Ping = p.Ping,
+                Team = p.Team,
+                IsSpectator = p.IsSpectator,
+                IsBot = p.IsBot
+            }).ToList(),
+            NumTeams = snapshot.NumTeams,
+            FragLimit = snapshot.FragLimit,
+            TimeLimit = snapshot.TimeLimit,
+            TimeLeft = snapshot.TimeLeft,
+            PointLimit = snapshot.PointLimit,
+            DuelLimit = snapshot.DuelLimit,
+            WinLimit = snapshot.WinLimit,
+            TeamDamage = snapshot.TeamDamage,
+            Country = snapshot.Country,
+            Website = snapshot.Website,
+            Email = snapshot.Email,
+            IsSecure = snapshot.IsSecure,
+            Instagib = snapshot.Instagib,
+            Buckshot = snapshot.Buckshot,
+            IsQueried = true,
+            LastQueryTime = DateTime.UtcNow
+        };
+    }
+    
+    /// <summary>
+    /// Resumes from a saved state after update.
+    /// Restores queried server data immediately, then queries remaining servers.
+    /// </summary>
+    public async Task ResumeFromStateAsync(UpdateServerState state, CancellationToken cancellationToken = default)
+    {
+        if (state.Servers.Count == 0)
+            return;
+        
+        var queriedKeys = new HashSet<string>();
+        
+        // First, restore all queried servers with full data
+        foreach (var snapshot in state.QueriedServerData)
+        {
+            try
+            {
+                var server = RestoreFromSnapshot(snapshot);
+                var key = snapshot.EndPointKey;
+                _servers[key] = server;
+                queriedKeys.Add(key);
+                
+                // Notify UI of restored server
+                ServerUpdated?.Invoke(this, server);
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to restore server {snapshot.EndPointKey}: {ex.Message}");
+            }
+        }
+        
+        _logger.Info($"Restored {queriedKeys.Count} servers with full data");
+            
+        // Parse the pending (unqueried) servers
+        var pendingServers = state.Servers
+            .Where(s => !queriedKeys.Contains(s))
+            .Select(s =>
+            {
+                var parts = s.Split(':');
+                if (parts.Length == 2 && 
+                    IPAddress.TryParse(parts[0], out var ip) && 
+                    int.TryParse(parts[1], out var port))
+                {
+                    return new IPEndPoint(ip, port);
+                }
+                return null;
+            })
+            .Where(ep => ep != null)
+            .Cast<IPEndPoint>()
+            .ToList();
+            
+        if (pendingServers.Count == 0)
+        {
+            _logger.Info("No pending servers to query after update");
+            return;
+        }
+        
+        _logger.Info($"Resuming query of {pendingServers.Count} servers after update...");
+        
+        IsRefreshing = true;
+        RefreshStarted?.Invoke(this, EventArgs.Empty);
+        _refreshCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        
+        try
+        {
+            // Initialize pending servers
+            foreach (var endpoint in pendingServers)
+            {
+                var key = endpoint.ToString();
+                if (!_servers.ContainsKey(key))
+                {
+                    _servers[key] = new ServerInfo { EndPoint = endpoint, IsRefreshPending = true };
+                }
+            }
+            
+            // Query the pending servers
+            await QueryAllServersAsync(pendingServers, _refreshCts.Token);
+            
+            RefreshCompleted?.Invoke(this, new RefreshCompletedEventArgs(
+                TotalServers, OnlineServers, null));
+        }
+        catch (OperationCanceledException)
+        {
+            RefreshCompleted?.Invoke(this, new RefreshCompletedEventArgs(
+                TotalServers, OnlineServers, "Cancelled"));
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"Error resuming server query: {ex.Message}");
+            RefreshCompleted?.Invoke(this, new RefreshCompletedEventArgs(
+                TotalServers, OnlineServers, ex.Message));
+        }
+        finally
+        {
+            IsRefreshing = false;
+        }
+    }
+    
+    #endregion
+
     public void Dispose()
     {
         if (!_disposed)

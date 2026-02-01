@@ -1,3 +1,5 @@
+using ZScape.Utilities;
+
 namespace ZScape.UI;
 
 /// <summary>
@@ -40,6 +42,12 @@ public static class DarkTheme
     {
         control.BackColor = PrimaryBackground;
         control.ForeColor = TextPrimary;
+        
+        // Apply dark title bar for Forms on Windows
+        if (control is Form form)
+        {
+            DarkModeHelper.ApplyDarkTitleBar(form);
+        }
 
         foreach (Control child in control.Controls)
         {

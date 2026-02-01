@@ -38,7 +38,6 @@ public class UnifiedSettingsDialog : Form
     // Downloads controls
     private NumericUpDown _maxConcurrentDownloads = null!;
     private NumericUpDown _maxConcurrentDomains = null!;
-    private NumericUpDown _defaultMaxThreads = null!;
     private NumericUpDown _maxThreadsPerFile = null!;
     private NumericUpDown _defaultInitialThreads = null!;
     private NumericUpDown _defaultMinSegmentKb = null!;
@@ -56,6 +55,13 @@ public class UnifiedSettingsDialog : Form
     private NumericUpDown _consecutiveFailuresBeforeOffline = null!;
     private NumericUpDown _autoRefreshIntervalMinutes = null!;
     private CheckBox _autoRefreshFavoritesOnlyCheckBox = null!;
+    
+    // Updates controls
+    private ComboBox _updateBehaviorComboBox = null!;
+    private CheckBox _autoRestartCheckBox = null!;
+    private NumericUpDown _updateCheckIntervalValue = null!;
+    private ComboBox _updateCheckIntervalUnit = null!;
+    private ComboBox _updateIntervalPresets = null!;
     
     // Favorites & Servers controls
     private ListBox _favoritesListBox = null!;
@@ -76,6 +82,7 @@ public class UnifiedSettingsDialog : Form
     private const string CategoryDomainThreads = "Domain Threads";
     private const string CategoryServerQueries = "Server Queries";
     private const string CategoryFavorites = "Favorites & Servers";
+    private const string CategoryUpdates = "Updates";
     
     // WAD settings properties for external access
     public List<string> SearchPaths { get; private set; } = [];
@@ -150,7 +157,7 @@ public class UnifiedSettingsDialog : Form
             IntegralHeight = false,
             Font = new Font(Font.FontFamily, 10f)
         };
-        _categoryList.Items.AddRange([CategoryGeneral, CategoryFavorites, CategoryWadPaths, CategoryDownloadSites, CategoryDownloads, CategoryDomainThreads, CategoryServerQueries]);
+        _categoryList.Items.AddRange([CategoryGeneral, CategoryFavorites, CategoryWadPaths, CategoryDownloadSites, CategoryDownloads, CategoryDomainThreads, CategoryServerQueries, CategoryUpdates]);
         _categoryList.SelectedIndexChanged += OnCategoryChanged;
         splitContainer.Panel1.Controls.Add(_categoryList);
         
@@ -170,6 +177,7 @@ public class UnifiedSettingsDialog : Form
         CreateDownloadsPanel();
         CreateDomainThreadsPanel();
         CreateServerQueriesPanel();
+        CreateUpdatesPanel();
         
         // Add all panels to content area (hidden by default)
         foreach (var panel in _categoryPanels.Values)
@@ -249,7 +257,7 @@ public class UnifiedSettingsDialog : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 15));  // Spacer
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));  // Label
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));  // Testing path
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 15));  // Spacer
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));  // Testing hint
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));  // Label
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));  // Hash concurrency
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));  // Info
@@ -297,6 +305,10 @@ public class UnifiedSettingsDialog : Form
         var testingPathPanel = CreatePathBrowseRow(out _zandronumTestingPathTextBox, "Browse...", 
             () => BrowseForFolder(_zandronumTestingPathTextBox));
         layout.Controls.Add(testingPathPanel, 0, 5);
+        
+        // Testing path hint
+        var testingHint = UIHelpers.CreateHintLabel(UIHelpers.TestingFolderHint);
+        layout.Controls.Add(testingHint, 0, 6);
         
         // Hash concurrency label
         var hashLabel = new Label
@@ -356,7 +368,7 @@ public class UnifiedSettingsDialog : Form
         // Screenshot checkbox
         _screenshotMonitorCheckBox = new CheckBox
         {
-            Text = "Automatically move screenshots from testing versions to a single folder",
+            Text = "Consolidate screenshots to a single folder",
             Dock = DockStyle.Fill,
             AutoSize = true
         };
@@ -953,29 +965,23 @@ public class UnifiedSettingsDialog : Form
         new ToolTip().SetToolTip(_maxConcurrentDomains, "Max domains to download from simultaneously (0=unlimited)");
         settingsGrid.Controls.Add(_maxConcurrentDomains, 1, 1);
         
-        // Row 2: Default Max Threads
-        settingsGrid.Controls.Add(new Label { Text = "Default Max Threads:", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill, AutoSize = false }, 0, 2);
-        _defaultMaxThreads = new NumericUpDown { Minimum = 1, Maximum = 256, Value = settings.DefaultMaxThreads, Width = 80 };
-        new ToolTip().SetToolTip(_defaultMaxThreads, "Default threads per file when domain not configured");
-        settingsGrid.Controls.Add(_defaultMaxThreads, 1, 2);
-        
-        // Row 3: Max Threads/File
-        settingsGrid.Controls.Add(new Label { Text = "Max Threads/File:", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill, AutoSize = false }, 0, 3);
+        // Row 2: Max Threads/File
+        settingsGrid.Controls.Add(new Label { Text = "Max Threads/File:", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill, AutoSize = false }, 0, 2);
         _maxThreadsPerFile = new NumericUpDown { Minimum = 0, Maximum = 1024, Value = settings.MaxThreadsPerFile, Width = 80 };
         new ToolTip().SetToolTip(_maxThreadsPerFile, "Hard cap on threads per file (0=no limit)");
-        settingsGrid.Controls.Add(_maxThreadsPerFile, 1, 3);
+        settingsGrid.Controls.Add(_maxThreadsPerFile, 1, 2);
         
-        // Row 4: Default Initial Threads
-        settingsGrid.Controls.Add(new Label { Text = "Default Initial Threads:", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill, AutoSize = false }, 0, 4);
+        // Row 3: Default Initial Threads
+        settingsGrid.Controls.Add(new Label { Text = "Default Initial Threads:", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill, AutoSize = false }, 0, 3);
         _defaultInitialThreads = new NumericUpDown { Minimum = 1, Maximum = 32, Value = settings.DefaultInitialThreads, Width = 80 };
         new ToolTip().SetToolTip(_defaultInitialThreads, "Starting thread count for probing new domains");
-        settingsGrid.Controls.Add(_defaultInitialThreads, 1, 4);
+        settingsGrid.Controls.Add(_defaultInitialThreads, 1, 3);
         
-        // Row 5: Min Segment KB
-        settingsGrid.Controls.Add(new Label { Text = "Min Segment KB:", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill, AutoSize = false }, 0, 5);
+        // Row 4: Min Segment KB
+        settingsGrid.Controls.Add(new Label { Text = "Min Segment KB:", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill, AutoSize = false }, 0, 4);
         _defaultMinSegmentKb = new NumericUpDown { Minimum = 64, Maximum = 4096, Value = settings.DefaultMinSegmentSizeKb, Width = 80 };
         new ToolTip().SetToolTip(_defaultMinSegmentKb, "Minimum bytes per thread segment");
-        settingsGrid.Controls.Add(_defaultMinSegmentKb, 1, 5);
+        settingsGrid.Controls.Add(_defaultMinSegmentKb, 1, 4);
         
         layout.Controls.Add(settingsGrid, 0, 1);
         
@@ -985,7 +991,8 @@ public class UnifiedSettingsDialog : Form
             Text = "These settings control overall download behavior.\n\n" +
                    "Max Downloads: Total simultaneous file downloads (0=unlimited).\n" +
                    "Max Domains: How many servers to download from at once (0=unlimited).\n" +
-                   "Default Max/Initial Threads: Used for domains without specific configuration.\n" +
+                   "Max Threads/File: Hard limit on concurrent connections per download.\n" +
+                   "Default Initial Threads: Starting thread count when probing new domains.\n" +
                    "Min Segment KB: Smallest chunk size per thread.\n\n" +
                    "For per-domain settings, use the Domain Threads category.",
             Dock = DockStyle.Top,
@@ -1243,6 +1250,264 @@ public class UnifiedSettingsDialog : Form
         
         panel.Controls.Add(layout);
         _categoryPanels[CategoryServerQueries] = panel;
+    }
+    
+    private void CreateUpdatesPanel()
+    {
+        var settings = SettingsService.Instance.Settings;
+        
+        var panel = new Panel { Dock = DockStyle.Fill };
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            RowCount = 10,
+            Padding = new Padding(5)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        
+        // Header
+        var header = new Label
+        {
+            Text = "Automatic Updates",
+            Font = new Font(Font.FontFamily, 12f, FontStyle.Bold),
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Padding = new Padding(0, 0, 0, 10)
+        };
+        layout.Controls.Add(header, 0, 0);
+        
+        // Update behavior dropdown
+        var behaviorPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            AutoSize = true
+        };
+        behaviorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        behaviorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        
+        behaviorPanel.Controls.Add(new Label 
+        { 
+            Text = "Update behavior:", 
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoSize = true 
+        }, 0, 0);
+        
+        _updateBehaviorComboBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 250
+        };
+        _updateBehaviorComboBox.Items.AddRange(new object[]
+        {
+            "Disabled - Never check for updates",
+            "Notify only - Check but don't download",
+            "Download - Check and download automatically"
+        });
+        _updateBehaviorComboBox.SelectedIndex = (int)settings.UpdateBehavior;
+        _updateBehaviorComboBox.SelectedIndexChanged += (_, _) => UpdateAutoRestartState();
+        behaviorPanel.Controls.Add(_updateBehaviorComboBox, 1, 0);
+        
+        layout.Controls.Add(behaviorPanel, 0, 1);
+        
+        // Auto-restart checkbox
+        _autoRestartCheckBox = new CheckBox
+        {
+            Text = "Automatically restart to install updates (when idle)",
+            Checked = settings.AutoRestartForUpdates,
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Enabled = settings.UpdateBehavior == UpdateBehavior.CheckAndDownload,
+            Margin = new Padding(0, 10, 0, 0)
+        };
+        layout.Controls.Add(_autoRestartCheckBox, 0, 2);
+        
+        // Warning label for auto-restart
+        var autoRestartWarning = new Label
+        {
+            Text = "Auto-restart will only occur when the application is idle (not refreshing servers).",
+            ForeColor = Color.FromArgb(180, 180, 100),
+            AutoSize = true,
+            Margin = new Padding(20, 0, 0, 10)
+        };
+        layout.Controls.Add(autoRestartWarning, 0, 3);
+        
+        // Check interval
+        var intervalPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 1,
+            AutoSize = true,
+            Margin = new Padding(0, 10, 0, 0)
+        };
+        intervalPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        intervalPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+        intervalPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
+        intervalPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+        
+        intervalPanel.Controls.Add(new Label 
+        { 
+            Text = "Check every:", 
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoSize = true 
+        }, 0, 0);
+        
+        var applyingPreset = false;
+        
+        // Presets dropdown (first, before value/unit)
+        _updateIntervalPresets = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 120
+        };
+        _updateIntervalPresets.Items.AddRange(["Custom:", "Every 6 hours", "Once a day", "Once a week", "Once a month"]);
+        
+        // Determine initial preset based on current settings
+        var initialPreset = 0; // Default to Custom
+        if (settings.UpdateCheckIntervalValue == 6 && settings.UpdateCheckIntervalUnit == UpdateIntervalUnit.Hours)
+            initialPreset = 1;
+        else if (settings.UpdateCheckIntervalValue == 1 && settings.UpdateCheckIntervalUnit == UpdateIntervalUnit.Days)
+            initialPreset = 2;
+        else if (settings.UpdateCheckIntervalValue == 1 && settings.UpdateCheckIntervalUnit == UpdateIntervalUnit.Weeks)
+            initialPreset = 3;
+        else if (settings.UpdateCheckIntervalValue == 4 && settings.UpdateCheckIntervalUnit == UpdateIntervalUnit.Weeks)
+            initialPreset = 4;
+        _updateIntervalPresets.SelectedIndex = initialPreset;
+        
+        _updateIntervalPresets.SelectedIndexChanged += (_, _) =>
+        {
+            if (_updateIntervalPresets.SelectedIndex == 0) return; // Custom selected
+            applyingPreset = true;
+            switch (_updateIntervalPresets.SelectedIndex)
+            {
+                case 1: // Every 6 hours
+                    _updateCheckIntervalValue.Value = 6;
+                    _updateCheckIntervalUnit.SelectedIndex = 0;
+                    break;
+                case 2: // Once a day
+                    _updateCheckIntervalValue.Value = 1;
+                    _updateCheckIntervalUnit.SelectedIndex = 1;
+                    break;
+                case 3: // Once a week
+                    _updateCheckIntervalValue.Value = 1;
+                    _updateCheckIntervalUnit.SelectedIndex = 2;
+                    break;
+                case 4: // Once a month (4 weeks)
+                    _updateCheckIntervalValue.Value = 4;
+                    _updateCheckIntervalUnit.SelectedIndex = 2;
+                    break;
+            }
+            applyingPreset = false;
+        };
+        intervalPanel.Controls.Add(_updateIntervalPresets, 1, 0);
+        
+        _updateCheckIntervalValue = new NumericUpDown
+        {
+            Minimum = 1,
+            Maximum = 99,
+            Value = settings.UpdateCheckIntervalValue,
+            Width = 60
+        };
+        intervalPanel.Controls.Add(_updateCheckIntervalValue, 2, 0);
+        
+        _updateCheckIntervalUnit = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 80
+        };
+        _updateCheckIntervalUnit.Items.AddRange(["Hours", "Days", "Weeks"]);
+        _updateCheckIntervalUnit.SelectedIndex = (int)settings.UpdateCheckIntervalUnit;
+        intervalPanel.Controls.Add(_updateCheckIntervalUnit, 3, 0);
+        
+        // When user manually changes interval, switch to "Custom:"
+        _updateCheckIntervalValue.ValueChanged += (_, _) => { if (!applyingPreset) _updateIntervalPresets.SelectedIndex = 0; };
+        _updateCheckIntervalUnit.SelectedIndexChanged += (_, _) => { if (!applyingPreset) _updateIntervalPresets.SelectedIndex = 0; };
+        
+        layout.Controls.Add(intervalPanel, 0, 4);
+        
+        // Check now button
+        var checkNowButton = new Button
+        {
+            Text = "Check for Updates Now",
+            AutoSize = true,
+            Padding = new Padding(10, 5, 10, 5),
+            Margin = new Padding(0, 15, 0, 0)
+        };
+        checkNowButton.Click += async (_, _) =>
+        {
+            checkNowButton.Enabled = false;
+            checkNowButton.Text = "Checking...";
+            try
+            {
+                var hasUpdate = await UpdateService.Instance.CheckForUpdatesAsync();
+                if (hasUpdate)
+                {
+                    var result = MessageBox.Show(
+                        $"A new version ({UpdateService.Instance.LatestVersion}) is available!\n\n" +
+                        "Would you like to download it now?",
+                        "Update Available",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Information);
+                    
+                    if (result == DialogResult.Yes)
+                    {
+                        await UpdateService.Instance.DownloadUpdateAsync();
+                    }
+                }
+                else
+                {
+                    MessageBox.Show(
+                        $"You are running the latest version ({UpdateService.Instance.CurrentVersion}).",
+                        "No Updates",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+            }
+            finally
+            {
+                checkNowButton.Enabled = true;
+                checkNowButton.Text = "Check for Updates Now";
+            }
+        };
+        layout.Controls.Add(checkNowButton, 0, 5);
+        
+        // Info text
+        var info = new Label
+        {
+            Text = "When an update is downloaded, you will be notified with a non-intrusive banner.\n" +
+                   "Installing an update will close and restart the application.",
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            ForeColor = Color.Gray,
+            Padding = new Padding(0, 20, 0, 0)
+        };
+        layout.Controls.Add(info, 0, 6);
+        
+        // Version info
+        var versionInfo = new Label
+        {
+            Text = $"Current version: {UpdateService.Instance.CurrentVersion}",
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            ForeColor = Color.DarkGray,
+            Padding = new Padding(0, 10, 0, 0)
+        };
+        layout.Controls.Add(versionInfo, 0, 7);
+        
+        panel.Controls.Add(layout);
+        _categoryPanels[CategoryUpdates] = panel;
+    }
+    
+    private void UpdateAutoRestartState()
+    {
+        var isDownloadMode = _updateBehaviorComboBox.SelectedIndex == (int)UpdateBehavior.CheckAndDownload;
+        _autoRestartCheckBox.Enabled = isDownloadMode;
+        if (!isDownloadMode)
+            _autoRestartCheckBox.Checked = false;
     }
     
     #endregion
@@ -1882,10 +2147,15 @@ public class UnifiedSettingsDialog : Form
         settings.EnableScreenshotMonitoring = _screenshotMonitorCheckBox.Checked;
         settings.ScreenshotConsolidationPath = _screenshotPathTextBox.Text.Trim();
         
+        // Update settings
+        settings.UpdateBehavior = (UpdateBehavior)_updateBehaviorComboBox.SelectedIndex;
+        settings.AutoRestartForUpdates = _autoRestartCheckBox.Checked;
+        settings.UpdateCheckIntervalValue = (int)_updateCheckIntervalValue.Value;
+        settings.UpdateCheckIntervalUnit = (UpdateIntervalUnit)_updateCheckIntervalUnit.SelectedIndex;
+        
         // Downloads
         settings.MaxConcurrentDownloads = (int)_maxConcurrentDownloads.Value;
         settings.MaxConcurrentDomains = (int)_maxConcurrentDomains.Value;
-        settings.DefaultMaxThreads = (int)_defaultMaxThreads.Value;
         settings.MaxThreadsPerFile = (int)_maxThreadsPerFile.Value;
         settings.DefaultInitialThreads = (int)_defaultInitialThreads.Value;
         settings.DefaultMinSegmentSizeKb = (int)_defaultMinSegmentKb.Value;

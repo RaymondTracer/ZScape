@@ -55,11 +55,20 @@ This repository contains a desktop client that queries the Zandronum master serv
 - Configuration file copying to new testing versions
 - Screenshot consolidation from testing versions
 
+### Automatic Updates
+- GitHub releases integration for automatic update checking (`UpdateService`)
+- Configurable update check intervals (hours, days, weeks) with presets
+- Background update downloading with progress display
+- Optional auto-restart when updates are ready (when idle)
+- Non-intrusive update notification banner
+
 ### UI & UX
-- Dark theme UI with custom control styling (`DarkTheme`)
+- First-time setup wizard for initial configuration
+- Dark theme UI with custom control styling and dark title bars
 - Sortable columns with persistent sort settings
 - Verbose logging and optional hexdump output for protocol debugging
 - Persisted application settings (`settings.json`) using `SettingsService`
+- Shared UI components for consistent dialog appearance (`UIHelpers`)
 
 ---
 
@@ -134,8 +143,8 @@ Key directories and files:
 
 - `Protocol/` — `HuffmanCodec.cs`, `ProtocolConstants.cs`, `MasterServerClient.cs`, `ServerQueryClient.cs`
 - `Models/` — `ServerInfo.cs`, `PlayerInfo.cs`, `TeamInfo.cs`, `PWadInfo.cs`, `WadInfo.cs`, `GameMode.cs`, `ServerFilter.cs`
-- `Services/` — `ServerBrowserService.cs`, `SettingsService.cs`, `LoggingService.cs`, `WadDownloader.cs`, `WadManager.cs`, `GameLauncher.cs`, `DomainThreadConfig.cs`, `NotificationService.cs`, `ScreenshotMonitorService.cs`, `Ip2CountryService.cs`
-- `UI/` — `MainForm.cs`, `DarkTheme.cs`, `UnifiedSettingsDialog.cs`, `ServerFilterDialog.cs`, `AddServerDialog.cs`, `ConnectionHistoryDialog.cs`, `FetchWadsDialog.cs`, `WadBrowserDialog.cs`, `WadDownloadDialog.cs`, `TestingVersionManagerDialog.cs`
+- `Services/` — `ServerBrowserService.cs`, `SettingsService.cs`, `LoggingService.cs`, `WadDownloader.cs`, `WadManager.cs`, `GameLauncher.cs`, `DomainThreadConfig.cs`, `NotificationService.cs`, `ScreenshotMonitorService.cs`, `Ip2CountryService.cs`, `UpdateService.cs`
+- `UI/` — `MainForm.cs`, `DarkTheme.cs`, `UIHelpers.cs`, `UnifiedSettingsDialog.cs`, `FirstTimeSetupDialog.cs`, `UpdateProgressDialog.cs`, `ServerFilterDialog.cs`, `AddServerDialog.cs`, `ConnectionHistoryDialog.cs`, `FetchWadsDialog.cs`, `WadBrowserDialog.cs`, `WadDownloadDialog.cs`, `TestingVersionManagerDialog.cs`
 - `Utilities/` — `AppConstants.cs`, `FormatUtils.cs`, `JsonUtils.cs`, `DarkModeHelper.cs`, `DoomColorCodes.cs`, `WadExtensions.cs`
 
 Testing & debugging tips:
