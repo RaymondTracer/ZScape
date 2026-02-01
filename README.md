@@ -172,6 +172,7 @@ Testing & debugging tips:
 ## License
 
 ZScape - Copyright (C) 2026 Charlie Gadd
+
 Licensed under the GNU General Public License v3.0. See LICENSE for details.
 
 ---
