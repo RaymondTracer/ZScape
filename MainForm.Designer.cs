@@ -1,3 +1,4 @@
+using ZScape.UI;
 using ZScape.Utilities;
 
 namespace ZScape;
@@ -87,11 +88,7 @@ partial class MainForm
         // Player list panel
         playerListPanel = new Panel();
         playerListLabel = new Label();
-        playerListView = new ListView();
-        playerNameColumn = new ColumnHeader();
-        playerScoreColumn = new ColumnHeader();
-        playerPingColumn = new ColumnHeader();
-        playerTeamColumn = new ColumnHeader();
+        playerListView = new PlayerListControl();
         
         // Log panel
         logPanel = new Panel();
@@ -403,22 +400,6 @@ partial class MainForm
 
         playerListView.Dock = DockStyle.Fill;
         playerListView.Name = "playerListView";
-        playerListView.View = View.Details;
-        playerListView.FullRowSelect = true;
-        playerListView.Columns.AddRange(new ColumnHeader[] { playerNameColumn, playerScoreColumn, playerPingColumn, playerTeamColumn });
-        playerListView.Resize += PlayerListView_Resize;
-
-        playerNameColumn.Text = "Name";
-        playerNameColumn.Width = AppConstants.PlayerListColumns.NameWidth;
-
-        playerScoreColumn.Text = "Score";
-        playerScoreColumn.Width = AppConstants.PlayerListColumns.ScoreWidth;
-
-        playerPingColumn.Text = "Ping";
-        playerPingColumn.Width = AppConstants.PlayerListColumns.PingWidth;
-
-        playerTeamColumn.Text = "Team";
-        playerTeamColumn.Width = AppConstants.PlayerListColumns.TeamWidth;
 
         // === Log Panel ===
         logPanel.Dock = DockStyle.Bottom;
@@ -607,11 +588,7 @@ partial class MainForm
     // Player list
     private Panel playerListPanel;
     private Label playerListLabel;
-    private ListView playerListView;
-    private ColumnHeader playerNameColumn;
-    private ColumnHeader playerScoreColumn;
-    private ColumnHeader playerPingColumn;
-    private ColumnHeader playerTeamColumn;
+    private PlayerListControl playerListView;
 
     // Log panel
     private Panel logPanel;
