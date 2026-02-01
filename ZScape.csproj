@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ZScape</RootNamespace>
+    <AssemblyName>ZScape</AssemblyName>
+    <Version>1.0.0</Version>
+    <Authors>Charlie Gadd</Authors>
+    <Description>A modern Zandronum server browser with dark theme</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpCompress" Version="0.44.5" />
+  </ItemGroup>
+
+</Project>
