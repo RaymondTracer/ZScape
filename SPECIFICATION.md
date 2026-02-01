@@ -1,4 +1,4 @@
-# Zandronum Server Browser Specification
+# ZScape Specification
 
 ## Project Overview
 
@@ -28,7 +28,8 @@ This specification has been synchronized with the implementation and documents p
 - **NotificationService**: System tray notifications for server alerts (favorite servers coming online).
 - **ScreenshotMonitorService**: Consolidates screenshots from testing versions to a central location.
 - **Ip2CountryService**: IP-to-country geolocation service using ip-api.com with caching, rate limiting, and batch lookup support.
-- **UI**: WinForms MainForm and supporting dialogs, with `DarkTheme` to consistently style controls.
+- **UpdateService**: Automatic updates from GitHub releases with configurable check intervals, background downloading, and optional auto-restart.
+- **UI**: WinForms MainForm and supporting dialogs, with `DarkTheme` to consistently style controls and `UIHelpers` for shared component creation.
 
 ---
 
@@ -188,6 +189,8 @@ Server List Row Colors:
 ### UI Dialogs
 - **MainForm**: Primary server browser interface
 - **UnifiedSettingsDialog**: Comprehensive settings configuration
+- **FirstTimeSetupDialog**: Initial setup wizard shown when settings.json doesn't exist
+- **UpdateProgressDialog**: Update download progress display with cancel option
 - **ServerFilterDialog**: Advanced server filtering options
 - **AddServerDialog**: Manually add servers by IP:Port
 - **ConnectionHistoryDialog**: View and reconnect to recent servers
@@ -993,15 +996,19 @@ ZScape/
 │   ├── DomainThreadConfig.cs
 │   ├── NotificationService.cs
 │   ├── ScreenshotMonitorService.cs
-│   └── Ip2CountryService.cs
+│   ├── Ip2CountryService.cs
+│   └── UpdateService.cs
 ├── UI/
 │   ├── DarkTheme.cs
+│   ├── UIHelpers.cs
 │   ├── AddServerDialog.cs
 │   ├── ConnectionHistoryDialog.cs
 │   ├── FetchWadsDialog.cs
+│   ├── FirstTimeSetupDialog.cs
 │   ├── ServerFilterDialog.cs
 │   ├── TestingVersionManagerDialog.cs
 │   ├── UnifiedSettingsDialog.cs
+│   ├── UpdateProgressDialog.cs
 │   ├── WadBrowserDialog.cs
 │   └── WadDownloadDialog.cs
 ├── Utilities/
@@ -1070,6 +1077,17 @@ dotnet run
   - Fixed WadManager.ComputeFileHash() documentation (static method)
   - Added WadDownloadTask: ProgressText, SpeedText properties, IncrementSitesSearched() method
   - Added complete Utilities section: AppConstants, FormatUtils, JsonUtils, WadExtensions, DoomColorCodes, DarkModeHelper
+- 1.0.5 - Spec synchronized to repository (2026-02-02): automatic updates and first-time setup:
+  - Added UpdateService for GitHub releases integration (check, download, install updates)
+  - Added FirstTimeSetupDialog for initial configuration wizard
+  - Added UpdateProgressDialog for update download progress display
+  - Added UIHelpers utility class for shared UI component creation
+  - Added UpdateIntervalUnit enum (Hours, Days, Weeks) for flexible update scheduling
+  - Added update settings: UpdateCheckIntervalValue, UpdateCheckIntervalUnit, AutoRestartForUpdates
+  - Added SettingsService.SettingsFileExists property for first-run detection
+  - Removed FirstTimeSetupCompleted setting (settings file existence used instead)
+  - DarkTheme.Apply() now automatically applies dark title bar on Windows
+  - Consistent UI across dialogs using UIHelpers for hints and interval controls
 
 ---
 
@@ -1084,4 +1102,6 @@ dotnet run
 - Country codes are normalized during filtering: alpha-3 codes (USA, DEU) convert to alpha-2 (US, DE). Unknown codes (XIP, XUN, O1, empty) normalize to "??".
 - Servers with "XIP" or empty country codes trigger automatic IP geolocation lookup via ip-api.com after querying. Failed lookups are marked as "??" to prevent retry.
 - Auto-refresh can be configured to only refresh favorite servers, skipping the master server query entirely.
+- First-time setup wizard is shown automatically when `settings.json` doesn't exist; settings file is only created after completing setup.
+- Automatic updates check GitHub releases on configurable intervals (hours/days/weeks); downloads occur in background with optional auto-restart when idle.
 - For any behavioral differences, consult the corresponding class in `Protocol/`, `Services/`, or `UI/` for precise implementation details.

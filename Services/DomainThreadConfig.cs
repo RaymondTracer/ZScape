@@ -68,10 +68,10 @@ public class DomainThreadConfig
         {
             if (DomainSettings.TryGetValue(domain, out var settings))
             {
-                // Domain has been seen before - use its settings with global fallbacks
+                // Domain has been seen before - use its settings
                 int maxThreads = settings.MaxThreads > 0 
                     ? settings.MaxThreads 
-                    : globalSettings.DefaultMaxThreads;
+                    : 32; // Fallback, probing will discover actual limit
                 
                 // Apply global cap if set
                 if (globalSettings.MaxThreadsPerFile > 0)
@@ -92,8 +92,8 @@ public class DomainThreadConfig
             }
             else
             {
-                // New/unknown domain - use global defaults and recommend probing
-                int maxThreads = globalSettings.DefaultMaxThreads;
+                // New/unknown domain - probing will discover actual limit
+                int maxThreads = 32; // Starting point, probing will adjust
                 
                 // Apply global cap if set
                 if (globalSettings.MaxThreadsPerFile > 0)

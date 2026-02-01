@@ -518,7 +518,7 @@ partial class MainForm
         Controls.Add(statusStrip);
         MainMenuStrip = menuStrip;
         Name = "MainForm";
-        Text = "Zandronum Server Browser";
+        Text = "ZScape";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(800, 500);
 

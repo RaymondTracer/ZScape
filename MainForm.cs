@@ -7,7 +7,7 @@ using ZScape.Utilities;
 namespace ZScape;
 
 /// <summary>
-/// Main application form for the Zandronum Server Browser.
+/// Main application form for ZScape.
 /// </summary>
 public partial class MainForm : Form
 {
@@ -37,6 +37,9 @@ public partial class MainForm : Form
     // Server alert system
     private System.Windows.Forms.Timer? _alertTimer;
     private readonly Dictionary<string, ServerAlertState> _serverAlertStates = new();
+    
+    // Update notification
+    private Panel? _updateNotificationPanel;
 
     public MainForm()
     {
@@ -198,6 +201,141 @@ public partial class MainForm : Form
         
         // Start screenshot monitoring if enabled
         _screenshotMonitor.StartMonitoring();
+        
+        // Subscribe to update service events
+        UpdateService.Instance.UpdateReady += UpdateService_UpdateReady;
+        UpdateService.Instance.UpdateAvailable += UpdateService_UpdateAvailable;
+        UpdateService.Instance.IsApplicationBusy = () => _browserService.IsRefreshing;
+        UpdateService.Instance.GetServerState = () => _browserService.GetServerState();
+    }
+    
+    private void UpdateService_UpdateAvailable(object? sender, UpdateAvailableEventArgs e)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(() => UpdateService_UpdateAvailable(sender, e));
+            return;
+        }
+        
+        // Only show dialog in CheckOnly mode (CheckAndDownload mode uses the notification bar)
+        var settings = SettingsService.Instance.Settings;
+        if (settings.UpdateBehavior == UpdateBehavior.CheckOnly)
+        {
+            var result = MessageBox.Show(
+                $"A new version (v{e.NewVersion}) is available!\n\n" +
+                $"Current version: v{e.CurrentVersion}\n\n" +
+                "Would you like to view the release page?",
+                "Update Available",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+            
+            if (result == DialogResult.Yes)
+            {
+                UpdateService.Instance.OpenReleasePage();
+            }
+        }
+    }
+    
+    private void UpdateService_UpdateReady(object? sender, EventArgs e)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(() => UpdateService_UpdateReady(sender, e));
+            return;
+        }
+        
+        ShowUpdateNotification();
+    }
+    
+    private void ShowUpdateNotification()
+    {
+        if (_updateNotificationPanel != null) return; // Already showing
+        
+        _updateNotificationPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 40,
+            BackColor = Color.FromArgb(40, 80, 120),
+            Padding = new Padding(10, 5, 10, 5)
+        };
+        
+        var message = new Label
+        {
+            Text = $"Update available: v{UpdateService.Instance.LatestVersion}",
+            ForeColor = Color.White,
+            AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Dock = DockStyle.Left,
+            Font = new Font(Font.FontFamily, 9.5f)
+        };
+        
+        var installButton = new Button
+        {
+            Text = "Install && Restart",
+            Dock = DockStyle.Right,
+            AutoSize = true,
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = Color.White,
+            BackColor = Color.FromArgb(60, 120, 180)
+        };
+        installButton.FlatAppearance.BorderColor = Color.White;
+        installButton.Click += (_, _) =>
+        {
+            var result = MessageBox.Show(
+                "This will close ZScape and install the update. Continue?",
+                "Install Update",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+            
+            if (result == DialogResult.Yes)
+            {
+                UpdateService.Instance.InstallUpdate();
+            }
+        };
+        
+        var laterButton = new Button
+        {
+            Text = "Later",
+            Dock = DockStyle.Right,
+            AutoSize = true,
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = Color.White,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 0, 10, 0)
+        };
+        laterButton.FlatAppearance.BorderSize = 0;
+        laterButton.Click += (_, _) => HideUpdateNotification();
+        
+        var releaseNotesButton = new Button
+        {
+            Text = "Release Notes",
+            Dock = DockStyle.Right,
+            AutoSize = true,
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = Color.LightGray,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 0, 10, 0)
+        };
+        releaseNotesButton.FlatAppearance.BorderSize = 0;
+        releaseNotesButton.Click += (_, _) => UpdateService.Instance.OpenReleasePage();
+        
+        _updateNotificationPanel.Controls.Add(message);
+        _updateNotificationPanel.Controls.Add(laterButton);
+        _updateNotificationPanel.Controls.Add(releaseNotesButton);
+        _updateNotificationPanel.Controls.Add(installButton);
+        
+        Controls.Add(_updateNotificationPanel);
+        _updateNotificationPanel.BringToFront();
+    }
+    
+    private void HideUpdateNotification()
+    {
+        if (_updateNotificationPanel != null)
+        {
+            Controls.Remove(_updateNotificationPanel);
+            _updateNotificationPanel.Dispose();
+            _updateNotificationPanel = null;
+        }
     }
     
     private void InitializeAlertTimer()
@@ -490,6 +628,20 @@ public partial class MainForm : Form
         if (serverListView.Columns.Contains("Favorite"))
         {
             serverListView.Columns["Favorite"]!.Visible = settings.ShowFavoritesColumn;
+        }
+
+        // First-time setup wizard - show if settings file doesn't exist
+        if (!_settings.SettingsFileExists)
+        {
+            using var setupDialog = new UI.FirstTimeSetupDialog();
+            if (setupDialog.ShowDialog(this) != DialogResult.OK)
+            {
+                // User cancelled - exit the application
+                Environment.Exit(0);
+                return;
+            }
+            // Reload settings after setup
+            settings = _settings.Settings;
         }
 
         // WAD settings - auto-detect search paths if not configured
@@ -956,7 +1108,7 @@ public partial class MainForm : Form
 
         var label = new Label
         {
-            Text = "Zandronum Server Browser\n\n" +
+            Text = "ZScape\n\n" +
                    "Version 1.0.0\n\n" +
                    "A modern server browser for Zandronum.\n\n" +
                    "Protocol implementation based on Doomseeker.\n" +
@@ -2737,6 +2889,33 @@ public partial class MainForm : Form
         else
         {
             _logger.Info("Press F5 or click Refresh to load servers");
+        }
+        
+        // Check for updates in the background
+        _ = CheckForUpdatesAsync();
+    }
+    
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            // Clean up any old update files from previous updates
+            UpdateService.Instance.CleanupOldUpdates();
+            
+            // Check if we just restarted after an update and need to resume querying
+            var savedState = UpdateService.Instance.LoadServerState();
+            if (savedState != null)
+            {
+                _logger.Info($"Detected post-update restart to v{UpdateService.Instance.CurrentVersion}, resuming server query...");
+                await _browserService.ResumeFromStateAsync(savedState);
+            }
+            
+            // Perform automatic update check if enabled
+            await UpdateService.Instance.PerformAutoUpdateCheckAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Update check failed: {ex.Message}");
         }
     }
 

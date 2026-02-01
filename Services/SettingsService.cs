@@ -18,6 +18,9 @@ public class SettingsService
     private bool _isLoading;
 
     public AppSettings Settings => _settings;
+    
+    /// <summary>Returns true if the settings file exists on disk.</summary>
+    public bool SettingsFileExists => File.Exists(_settingsPath);
 
     public event EventHandler? SettingsChanged;
 
@@ -200,9 +203,6 @@ public class AppSettings
     /// <summary>Global maximum threads per file. 0 = no global limit (use per-domain settings).</summary>
     public int MaxThreadsPerFile { get; set; } = 0;
     
-    /// <summary>Default max threads for new/unknown domains.</summary>
-    public int DefaultMaxThreads { get; set; } = 32;
-    
     /// <summary>Default initial threads for probing new domains.</summary>
     public int DefaultInitialThreads { get; set; } = 2;
     
@@ -280,6 +280,63 @@ public class AppSettings
     /// If empty, defaults to "Screenshots" folder in the Zandronum root directory.
     /// </summary>
     public string ScreenshotConsolidationPath { get; set; } = string.Empty;
+    
+    // Update settings
+    /// <summary>Update behavior mode.</summary>
+    public UpdateBehavior UpdateBehavior { get; set; } = UpdateBehavior.CheckAndDownload;
+    
+    /// <summary>Automatically restart to install updates (only when safe).</summary>
+    public bool AutoRestartForUpdates { get; set; } = false;
+    
+    /// <summary>Update check interval value.</summary>
+    public int UpdateCheckIntervalValue { get; set; } = 1;
+    
+    /// <summary>Unit for update check interval.</summary>
+    public UpdateIntervalUnit UpdateCheckIntervalUnit { get; set; } = UpdateIntervalUnit.Days;
+    
+    /// <summary>Gets the update check interval in hours.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int UpdateCheckIntervalHours => UpdateCheckIntervalUnit switch
+    {
+        UpdateIntervalUnit.Hours => UpdateCheckIntervalValue,
+        UpdateIntervalUnit.Days => UpdateCheckIntervalValue * 24,
+        UpdateIntervalUnit.Weeks => UpdateCheckIntervalValue * 24 * 7,
+        _ => 24
+    };
+    
+    /// <summary>Last time an update check was performed.</summary>
+    public DateTime LastUpdateCheck { get; set; } = DateTime.MinValue;
+    
+    /// <summary>GitHub repository owner for update checks.</summary>
+    public string GitHubOwner { get; set; } = "RaymondTracer";
+    
+    /// <summary>GitHub repository name for update checks.</summary>
+    public string GitHubRepo { get; set; } = "ZScape";
+}
+
+/// <summary>
+/// Unit for update check intervals.
+/// </summary>
+public enum UpdateIntervalUnit
+{
+    Hours = 0,
+    Days = 1,
+    Weeks = 2
+}
+
+/// <summary>
+/// Defines how the application handles updates.
+/// </summary>
+public enum UpdateBehavior
+{
+    /// <summary>Never check for updates.</summary>
+    Disabled = 0,
+    
+    /// <summary>Check for updates and notify, but don't download automatically.</summary>
+    CheckOnly = 1,
+    
+    /// <summary>Check and download updates, prompt user to install.</summary>
+    CheckAndDownload = 2
 }
 
 /// <summary>
