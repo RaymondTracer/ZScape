@@ -3,7 +3,7 @@ namespace ZScape.Services;
 /// <summary>
 /// Manages domain-specific thread configuration with persistence.
 /// Remembers successful thread counts and automatically dials back when issues occur.
-/// Settings are stored in settings.json.
+/// Settings are stored in domain-settings.json.
 /// </summary>
 public class DomainThreadConfig
 {
@@ -15,10 +15,10 @@ public class DomainThreadConfig
     private readonly LoggingService _logger = LoggingService.Instance;
     
     /// <summary>
-    /// Gets the domain settings dictionary from the main settings.
+    /// Gets the domain settings dictionary from the settings service.
     /// </summary>
     private Dictionary<string, DomainSettings> DomainSettings => 
-        SettingsService.Instance.Settings.DomainThreadSettings;
+        SettingsService.Instance.DomainThreadSettings;
 
     private DomainThreadConfig()
     {
@@ -142,7 +142,7 @@ public class DomainThreadConfig
                 settings.FailureCount++;
             }
 
-            SettingsService.Instance.Save();
+            SettingsService.Instance.SaveDomainSettings();
         }
     }
 
@@ -180,7 +180,7 @@ public class DomainThreadConfig
                 _logger.Verbose($"Domain {domain}: Connection issue (adaptive learning disabled, keeping {reducedCount} threads)");
             }
             
-            SettingsService.Instance.Save();
+            SettingsService.Instance.SaveDomainSettings();
         }
 
         return reducedCount;
@@ -226,9 +226,6 @@ public class DomainSettings
     
     /// <summary>Enable adaptive learning (probing and auto-backoff on failures).</summary>
     public bool AdaptiveLearning { get; set; } = true;
-    
-    /// <summary>Whether this domain was manually configured by user.</summary>
-    public bool IsUserConfigured { get; set; }
     
     public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
     public int SuccessCount { get; set; }
