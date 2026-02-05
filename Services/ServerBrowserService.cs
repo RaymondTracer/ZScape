@@ -31,6 +31,7 @@ public class ServerBrowserService : IDisposable
 
     public IReadOnlyCollection<ServerInfo> Servers => _servers.Values.ToList();
     public bool IsRefreshing { get; private set; }
+    public bool HasEverRefreshed { get; private set; }
 
     public int TotalServers => _servers.Count;
     public int OnlineServers => _servers.Values.Count(s => s.IsOnline && s.IsQueried);
@@ -51,6 +52,7 @@ public class ServerBrowserService : IDisposable
         }
 
         IsRefreshing = true;
+        HasEverRefreshed = true;
         RefreshStarted?.Invoke(this, EventArgs.Empty);
         _refreshCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -63,7 +65,7 @@ public class ServerBrowserService : IDisposable
             _logger.Info($"Received {masterEndpoints.Count} servers from master");
 
             // Get manual servers (always probe these regardless of master list)
-            var manualEndpoints = GetManualServerEndpoints();
+            var manualEndpoints = await GetManualServerEndpointsAsync();
             _logger.Info($"Including {manualEndpoints.Count} manual servers");
 
             // Combine all endpoints (manual + master, deduplicated)
@@ -182,6 +184,7 @@ public class ServerBrowserService : IDisposable
         }
 
         IsRefreshing = true;
+        HasEverRefreshed = true;
         RefreshStarted?.Invoke(this, EventArgs.Empty);
         _refreshCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -238,7 +241,7 @@ public class ServerBrowserService : IDisposable
     /// <summary>
     /// Gets endpoints for all manually added servers.
     /// </summary>
-    private List<IPEndPoint> GetManualServerEndpoints()
+    private async Task<List<IPEndPoint>> GetManualServerEndpointsAsync()
     {
         var endpoints = new List<IPEndPoint>();
         
@@ -252,8 +255,8 @@ public class ServerBrowserService : IDisposable
                 }
                 else
                 {
-                    // Try DNS resolution for hostnames
-                    var resolved = Dns.GetHostAddresses(manual.Address);
+                    // Try async DNS resolution for hostnames
+                    var resolved = await Dns.GetHostAddressesAsync(manual.Address);
                     if (resolved.Length > 0)
                     {
                         endpoints.Add(new IPEndPoint(resolved[0], manual.Port));
@@ -832,6 +835,7 @@ public class ServerBrowserService : IDisposable
         _logger.Info($"Resuming query of {pendingServers.Count} servers after update...");
         
         IsRefreshing = true;
+        HasEverRefreshed = true;
         RefreshStarted?.Invoke(this, EventArgs.Empty);
         _refreshCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         

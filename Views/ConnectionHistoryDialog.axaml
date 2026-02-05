@@ -1,0 +1,146 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
+        x:Class="ZScape.Views.ConnectionHistoryDialog"
+        x:CompileBindings="False"
+        Title="Connection History"
+        Width="750" Height="450"
+        WindowStartupLocation="CenterOwner"
+        MinWidth="550" MinHeight="350"
+        ExtendClientAreaToDecorationsHint="False">
+    
+    <Grid Margin="10" RowDefinitions="30,*,35,45">
+        <!-- Header -->
+        <TextBlock Grid.Row="0" Text="Recently Connected Servers" 
+                   FontWeight="Bold" FontSize="14"
+                   VerticalAlignment="Center"/>
+        
+        <!-- Main content area -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,120">
+            <!-- Custom list with header -->
+            <Border Grid.Column="0" Margin="0,5,10,5" 
+                    BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="3"
+                    Background="#1E1E1E">
+                <Grid RowDefinitions="28,*">
+                    <!-- Column Header with resizable columns -->
+                    <Border Grid.Row="0" Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="0,0,0,1">
+                        <Grid x:Name="HeaderGrid">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" MinWidth="80"/>
+                                <ColumnDefinition Width="5"/>
+                                <ColumnDefinition Width="140" MinWidth="80"/>
+                                <ColumnDefinition Width="5"/>
+                                <ColumnDefinition Width="90" MinWidth="60"/>
+                                <ColumnDefinition Width="5"/>
+                                <ColumnDefinition Width="55" MinWidth="40"/>
+                                <ColumnDefinition Width="5"/>
+                                <ColumnDefinition Width="*" MinWidth="60"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Server Name" FontWeight="SemiBold" 
+                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            <GridSplitter Grid.Column="1" Width="5" Background="Transparent" 
+                                          ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
+                            <TextBlock Grid.Column="2" Text="Address" FontWeight="SemiBold" 
+                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                            <GridSplitter Grid.Column="3" Width="5" Background="Transparent" 
+                                          ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
+                            <TextBlock Grid.Column="4" Text="Last Played" FontWeight="SemiBold" 
+                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                            <GridSplitter Grid.Column="5" Width="5" Background="Transparent" 
+                                          ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
+                            <TextBlock Grid.Column="6" Text="Count" FontWeight="SemiBold" 
+                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                            <GridSplitter Grid.Column="7" Width="5" Background="Transparent" 
+                                          ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
+                            <TextBlock Grid.Column="8" Text="Mode" FontWeight="SemiBold" 
+                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- Scrollable list -->
+                    <ScrollViewer Grid.Row="1" x:Name="HistoryScrollViewer"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="HistoryItemsControl">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border x:Name="RowBorder" Height="26"
+                                            Background="{Binding RowBackground}"
+                                            PointerPressed="HistoryRow_PointerPressed"
+                                            DoubleTapped="HistoryRow_DoubleTapped"
+                                            PointerEntered="HistoryRow_PointerEntered"
+                                            PointerExited="HistoryRow_PointerExited">
+                                        <Grid x:Name="RowGrid">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="180" MinWidth="80"/>
+                                                <ColumnDefinition Width="5"/>
+                                                <ColumnDefinition Width="140" MinWidth="80"/>
+                                                <ColumnDefinition Width="5"/>
+                                                <ColumnDefinition Width="90" MinWidth="60"/>
+                                                <ColumnDefinition Width="5"/>
+                                                <ColumnDefinition Width="55" MinWidth="40"/>
+                                                <ColumnDefinition Width="5"/>
+                                                <ColumnDefinition Width="*" MinWidth="60"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding DisplayServerName}" 
+                                                       Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding DisplayAddress}" 
+                                                       Margin="5,0,0,0" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Grid.Column="4" Text="{Binding LastPlayedDisplay}" 
+                                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="6" Text="{Binding ConnectionCount}" 
+                                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="8" Text="{Binding GameMode}" 
+                                                       Margin="5,0,0,0" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+            
+            <!-- Button stack -->
+            <StackPanel Grid.Column="1" Spacing="5">
+                <Button x:Name="ReconnectButton" Content="Reconnect" Width="105" Height="28"
+                        Click="ReconnectButton_Click"/>
+                <Button x:Name="CopyAddressButton" Content="Copy Address" Width="105" Height="28"
+                        Click="CopyAddressButton_Click"/>
+                <Button x:Name="RemoveButton" Content="Remove" Width="105" Height="28"
+                        Click="RemoveButton_Click"/>
+                <Button x:Name="ClearButton" Content="Clear All" Width="105" Height="28"
+                        Click="ClearButton_Click"/>
+            </StackPanel>
+        </Grid>
+        
+        <!-- Settings row -->
+        <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,20,Auto,Auto">
+            <TextBlock Grid.Column="0" Text="Max entries:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+            <controls:NumericSpinner Grid.Column="1" x:Name="MaxEntriesNumeric" 
+                           Minimum="10" Maximum="500" Value="100"
+                           Width="70"/>
+            <TextBlock Grid.Column="3" Text="Track by:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+            <ComboBox Grid.Column="4" x:Name="TrackingModeComboBox" Width="130" Height="28"
+                      VerticalAlignment="Center" Margin="0,2,0,0"
+                      SelectionChanged="TrackingModeComboBox_SelectionChanged">
+                <ComboBoxItem Content="Server Address"/>
+                <ComboBoxItem Content="Server Name"/>
+                <ComboBoxItem Content="Both"/>
+            </ComboBox>
+        </Grid>
+        
+        <!-- Bottom bar -->
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0" x:Name="InfoLabel" 
+                       Text="Double-click an entry to reconnect"
+                       VerticalAlignment="Center" Foreground="Gray"/>
+            <Button Grid.Column="1" x:Name="CloseButton" Content="Close" 
+                    Width="80" Height="28"
+                    Click="CloseButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

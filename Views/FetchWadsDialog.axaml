@@ -1,0 +1,54 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ZScape.Views.FetchWadsDialog"
+        Title="Fetch WADs"
+        Width="500" Height="450"
+        WindowStartupLocation="CenterOwner"
+        MinWidth="400" MinHeight="350"
+        ExtendClientAreaToDecorationsHint="False">
+    
+    <Grid Margin="10" RowDefinitions="30,*,Auto,45">
+        <!-- Instructions -->
+        <TextBlock Grid.Row="0" Text="Enter WAD file names to fetch (one per line):" 
+                   VerticalAlignment="Center"/>
+        
+        <!-- WAD names text box -->
+        <TextBox Grid.Row="1" x:Name="WadNamesTextBox"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 FontFamily="Consolas"
+                 Margin="0,5,0,10"/>
+        
+        <!-- Options group -->
+        <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" 
+                BorderThickness="1" CornerRadius="3" Padding="10,5" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="Download Sources" FontWeight="Bold" Margin="0,0,0,5"/>
+                <StackPanel Spacing="3">
+                    <CheckBox x:Name="WadHostingSitesCheckBox" 
+                              Content="WAD Hosting Sites (configure in Settings)" 
+                              IsChecked="True"/>
+                    <CheckBox x:Name="IdgamesCheckBox" 
+                              Content="/idgames Archive (Doomworld)" 
+                              IsChecked="True"/>
+                    <CheckBox x:Name="WebSearchCheckBox" 
+                              Content="Web Search (DuckDuckGo) - slower fallback" 
+                              IsChecked="True"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+        
+        <!-- Buttons -->
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,10,Auto">
+            <TextBlock Grid.Column="0" x:Name="StatusLabel" 
+                       Text="Enter at least one WAD name"
+                       VerticalAlignment="Center" Foreground="Gray"/>
+            <Button Grid.Column="1" x:Name="FetchButton" Content="Fetch" 
+                    Width="80" Height="30" IsEnabled="False"
+                    Click="FetchButton_Click"/>
+            <Button Grid.Column="3" Content="Cancel" 
+                    Width="80" Height="30"
+                    Click="CancelButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

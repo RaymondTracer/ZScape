@@ -1,0 +1,51 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ZScape.Views.TestingVersionManagerDialog"
+        x:CompileBindings="False"
+        Title="Testing Version Manager"
+        Width="700" Height="500"
+        WindowStartupLocation="CenterOwner"
+        MinWidth="500" MinHeight="350"
+        ExtendClientAreaToDecorationsHint="False">
+    
+    <Grid Margin="10" RowDefinitions="35,*,50">
+        <!-- Toolbar -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10">
+            <Button x:Name="RefreshButton" Content="Refresh" Width="80" Height="28"
+                    Click="RefreshButton_Click"/>
+            <TextBlock x:Name="TotalSizeLabel" Text="Total: --" VerticalAlignment="Center" Margin="10,0,0,0"/>
+        </StackPanel>
+        
+        <!-- DataGrid -->
+        <DataGrid Grid.Row="1" x:Name="VersionDataGrid"
+                  Margin="0,5"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  SelectionMode="Extended"
+                  CanUserReorderColumns="False"
+                  CanUserResizeColumns="True"
+                  GridLinesVisibility="Horizontal"
+                  LoadingRow="VersionDataGrid_LoadingRow">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Version" Binding="{Binding VersionName}" Width="200"/>
+                <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}" Width="100"/>
+                <DataGridTextColumn Header="Files" Binding="{Binding FileCount}" Width="80"/>
+                <DataGridTextColumn Header="Screenshots" Binding="{Binding ScreenshotDisplay}" Width="80"/>
+                <DataGridTextColumn Header="Path" Binding="{Binding Path}" Width="200"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        
+        <!-- Bottom bar -->
+        <Grid Grid.Row="2" ColumnDefinitions="*,100,80,20,80">
+            <TextBlock Grid.Column="0" x:Name="StatusLabel" Text="Scanning..." VerticalAlignment="Center"/>
+            <Button Grid.Column="1" x:Name="OpenFolderButton" Content="Open Folder" 
+                    Width="90" Height="28" IsEnabled="False"
+                    Click="OpenFolderButton_Click"/>
+            <Button Grid.Column="2" x:Name="DeleteButton" Content="Delete" 
+                    Width="70" Height="28" IsEnabled="False"
+                    Click="DeleteButton_Click"/>
+            <Button Grid.Column="4" Content="Close" Width="70" Height="28"
+                    Click="CloseButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ZScape.Services;
+using ZScape.Utilities;
 
 namespace ZScape.UI;
 
@@ -343,26 +344,7 @@ public class TestingVersionManagerDialog : Form
         }
     }
     
-    private static string? GetTestingRootPath()
-    {
-        var settings = SettingsService.Instance.Settings;
-        
-        if (!string.IsNullOrEmpty(settings.ZandronumTestingPath))
-        {
-            return settings.ZandronumTestingPath;
-        }
-        
-        if (!string.IsNullOrEmpty(settings.ZandronumPath) && File.Exists(settings.ZandronumPath))
-        {
-            var exeDir = Path.GetDirectoryName(settings.ZandronumPath);
-            if (!string.IsNullOrEmpty(exeDir))
-            {
-                return Path.Combine(exeDir, "TestingVersions");
-            }
-        }
-        
-        return null;
-    }
+    private static string? GetTestingRootPath() => PathResolver.GetTestingVersionsPath();
     
     private void ApplyDarkTheme()
     {

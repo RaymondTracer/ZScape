@@ -557,28 +557,7 @@ public class GameLauncher
     /// Gets the root path for testing versions.
     /// Falls back to {ZandronumPath}/TestingVersions/ if not explicitly configured.
     /// </summary>
-    public string? GetTestingRootPath()
-    {
-        var settings = SettingsService.Instance.Settings;
-        
-        // Use configured path if available
-        if (!string.IsNullOrEmpty(settings.ZandronumTestingPath))
-        {
-            return settings.ZandronumTestingPath;
-        }
-        
-        // Fall back to TestingVersions subfolder next to stable exe
-        if (!string.IsNullOrEmpty(settings.ZandronumPath) && File.Exists(settings.ZandronumPath))
-        {
-            var exeDir = Path.GetDirectoryName(settings.ZandronumPath);
-            if (!string.IsNullOrEmpty(exeDir))
-            {
-                return Path.Combine(exeDir, "TestingVersions");
-            }
-        }
-        
-        return null;
-    }
+    public string? GetTestingRootPath() => PathResolver.GetTestingVersionsPath();
 
     /// <summary>
     /// Gets the exe path for a specific testing version.

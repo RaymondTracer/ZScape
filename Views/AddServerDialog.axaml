@@ -1,0 +1,49 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
+        x:Class="ZScape.Views.AddServerDialog"
+        Title="Add Server Manually"
+        Width="400" Height="220"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False"
+        ExtendClientAreaToDecorationsHint="False">
+    
+    <Grid Margin="15" RowDefinitions="35,35,35,*,45">
+        <!-- IP Address -->
+        <Grid Grid.Row="0" ColumnDefinitions="100,*">
+            <TextBlock Grid.Column="0" Text="IP Address:" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" x:Name="AddressTextBox" Margin="0,5"/>
+        </Grid>
+        
+        <!-- Port -->
+        <Grid Grid.Row="1" ColumnDefinitions="100,*">
+            <TextBlock Grid.Column="0" Text="Port:" VerticalAlignment="Center"/>
+            <controls:NumericSpinner Grid.Column="1" x:Name="PortNumeric" 
+                           Minimum="1" Maximum="65535" Value="10666" 
+                           Width="100" HorizontalAlignment="Left" Margin="0,5"/>
+        </Grid>
+        
+        <!-- Add to Favorites -->
+        <CheckBox Grid.Row="2" x:Name="FavoriteCheckBox" 
+                  Content="Add to Favorites" IsChecked="True" 
+                  VerticalAlignment="Center"/>
+        
+        <!-- Spacer -->
+        <Grid Grid.Row="3"/>
+        
+        <!-- Buttons -->
+        <Grid Grid.Row="4" ColumnDefinitions="*,Auto,10,Auto">
+            <TextBlock Grid.Column="0" x:Name="StatusLabel" 
+                       Text="Enter an IP address" 
+                       VerticalAlignment="Center"
+                       Foreground="Gray"/>
+            <Button Grid.Column="1" x:Name="AddButton" Content="Add" 
+                    Width="80" Height="30" IsEnabled="False"
+                    Click="AddButton_Click"/>
+            <Button Grid.Column="3" x:Name="CancelButton" Content="Cancel" 
+                    Width="80" Height="30"
+                    Click="CancelButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

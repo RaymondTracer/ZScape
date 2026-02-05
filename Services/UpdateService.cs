@@ -207,8 +207,13 @@ public class UpdateService
     }
     
     /// <summary>
+    /// Request confirmation to install update.
+    /// </summary>
+    public event EventHandler<UpdateInstallEventArgs>? InstallRequested;
+    
+    /// <summary>
     /// Install the downloaded update and restart the application.
-    /// Shows a progress dialog while saving server state.
+    /// Note: Platform-specific implementation needed for actual installation.
     /// </summary>
     public void InstallUpdate()
     {
@@ -218,38 +223,29 @@ public class UpdateService
             return;
         }
         
-        // Show progress dialog for saving state
-        using var progressDialog = new UI.UpdateProgressDialog(SaveServerStateAsync);
-        var result = progressDialog.ShowDialog();
-        
-        if (result == DialogResult.Cancel)
+        // For cross-platform, we fire an event and let the UI handle confirmation
+        // The actual installation logic can be triggered by calling PerformInstallation
+        InstallRequested?.Invoke(this, new UpdateInstallEventArgs { Version = LatestVersion ?? "unknown" });
+    }
+    
+    /// <summary>
+    /// Actually perform the installation after user confirms.
+    /// </summary>
+    public void PerformInstallation()
+    {
+        if (!IsUpdateReady || string.IsNullOrEmpty(_downloadedUpdatePath))
         {
-            LoggingService.Instance.Info("Update installation cancelled by user");
+            LoggingService.Instance.Warning("No update ready to install");
             return;
-        }
-        
-        if (!progressDialog.SaveSucceeded)
-        {
-            // Ask if user wants to proceed without state
-            var proceed = MessageBox.Show(
-                "Failed to save server state. The server list will not be restored after the update.\n\n" +
-                "Do you want to proceed with the update anyway?",
-                "Save Failed",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning);
-                
-            if (proceed != DialogResult.Yes)
-            {
-                LoggingService.Instance.Info("Update installation cancelled due to save failure");
-                return;
-            }
         }
         
         try
         {
             var appDirectory = AppContext.BaseDirectory;
             var extractPath = Path.Combine(_updateDirectory, "extract");
-            var updateScript = Path.Combine(_updateDirectory, "update.bat");
+            var updateScript = OperatingSystem.IsWindows() 
+                ? Path.Combine(_updateDirectory, "update.bat")
+                : Path.Combine(_updateDirectory, "update.sh");
             
             // Clean extract directory
             if (Directory.Exists(extractPath))
@@ -269,8 +265,10 @@ public class UpdateService
                 }
             }
             
-            // Create update script that waits for app to close, copies files, and restarts
-            var scriptContent = $@"@echo off
+            if (OperatingSystem.IsWindows())
+            {
+                // Windows batch script
+                var scriptContent = $@"@echo off
 echo Waiting for ZScape to close...
 :waitloop
 tasklist /FI ""IMAGENAME eq ZScape.exe"" 2>NUL | find /I /N ""ZScape.exe"">NUL
@@ -289,26 +287,49 @@ echo Starting ZScape...
 start """" ""{Path.Combine(appDirectory, "ZScape.exe")}""
 exit
 ";
-            File.WriteAllText(updateScript, scriptContent);
-            
-            // Start the update script and exit
-            Process.Start(new ProcessStartInfo
+                File.WriteAllText(updateScript, scriptContent);
+                
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c \"{updateScript}\"",
+                    UseShellExecute = true,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                });
+            }
+            else
             {
-                FileName = "cmd.exe",
-                Arguments = $"/c \"{updateScript}\"",
-                UseShellExecute = true,
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden
-            });
+                // Linux/macOS shell script
+                var appName = OperatingSystem.IsMacOS() ? "ZScape" : "ZScape";
+                var scriptContent = $@"#!/bin/bash
+sleep 2
+cp -rf ""{extractPath}""/* ""{appDirectory}""
+rm -rf ""{_updateDirectory}""
+chmod +x ""{Path.Combine(appDirectory, appName)}""
+""{Path.Combine(appDirectory, appName)}"" &
+";
+                File.WriteAllText(updateScript, scriptContent);
+                
+                // Make script executable
+                Process.Start("chmod", $"+x \"{updateScript}\"")?.WaitForExit();
+                
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "/bin/bash",
+                    Arguments = $"\"{updateScript}\"",
+                    UseShellExecute = true
+                });
+            }
             
             LoggingService.Instance.Info("Update installation started, exiting application...");
-            Application.Exit();
+            
+            // Signal the application to exit
+            Environment.Exit(0);
         }
         catch (Exception ex)
         {
             LoggingService.Instance.Error($"Error installing update: {ex.Message}");
-            MessageBox.Show($"Failed to install update: {ex.Message}", "Update Error", 
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
     
@@ -444,13 +465,13 @@ exit
     /// <summary>
     /// Callback for saving state with progress dialog.
     /// </summary>
-    public Func<IProgress<UI.SaveStateProgress>, CancellationToken, Task<bool>>? SaveStateWithProgress { get; set; }
+    public Func<IProgress<SaveStateProgress>, CancellationToken, Task<bool>>? SaveStateWithProgress { get; set; }
     
     /// <summary>
     /// Save the current server state before restarting for an update.
     /// Uses async save with progress reporting for large server lists.
     /// </summary>
-    public async Task<bool> SaveServerStateAsync(IProgress<UI.SaveStateProgress> progress, CancellationToken cancellationToken)
+    public async Task<bool> SaveServerStateAsync(IProgress<SaveStateProgress> progress, CancellationToken cancellationToken)
     {
         try
         {
@@ -464,7 +485,7 @@ exit
             var total = state.Servers.Count;
             var current = 0;
             
-            progress.Report(new UI.SaveStateProgress 
+            progress.Report(new SaveStateProgress 
             { 
                 Current = 0, 
                 Total = total, 
@@ -478,7 +499,7 @@ exit
                 cancellationToken.ThrowIfCancellationRequested();
                 
                 current = Math.Min(i + batchSize, total);
-                progress.Report(new UI.SaveStateProgress
+                progress.Report(new SaveStateProgress
                 {
                     Current = current,
                     Total = total,
@@ -489,7 +510,7 @@ exit
                 await Task.Delay(1, cancellationToken);
             }
             
-            progress.Report(new UI.SaveStateProgress
+            progress.Report(new SaveStateProgress
             {
                 Current = total,
                 Total = total,
@@ -696,6 +717,14 @@ public class GitHubAsset
     
     [JsonPropertyName("size")]
     public long Size { get; set; }
+}
+
+/// <summary>
+/// Event arguments for update installation request.
+/// </summary>
+public class UpdateInstallEventArgs : EventArgs
+{
+    public string Version { get; init; } = "";
 }
 
 #endregion

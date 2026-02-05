@@ -127,7 +127,7 @@ public class ServerInfo : INotifyPropertyChanged
     /// </summary>
     public int ConsecutiveFailures { get; set; }
 
-    public string PlayerCountDisplay => $"{CurrentPlayers}/{MaxPlayers}";
+    public string PlayerCountDisplay => $"{CurrentPlayers}/{MaxClients}";
     
     public string PingDisplay => Ping >= 0 ? $"{Ping} ms" : "N/A";
 
@@ -146,7 +146,7 @@ public class ServerInfo : INotifyPropertyChanged
         ? string.Join(", ", PWADs.Select(p => p.Name)) 
         : "None";
 
-    public bool IsFull => CurrentPlayers >= MaxPlayers;
+    public bool IsFull => CurrentPlayers >= MaxClients;
     public bool IsEmpty => CurrentPlayers == 0;
     public bool HasBots => Players.Any(p => p.IsBot);
     public bool IsTesting => IsTestingServer;

@@ -4,7 +4,7 @@
 
 A modern, dark-themed WinForms application for browsing Zandronum game servers. Built with .NET 10 and C#.
 
-**Author**: Raymond Tracer
+**Author**: Charlie Gadd
 
 This specification has been synchronized with the implementation and documents protocol constants, encoding/decoding behavior, data models, services, UI theme details, settings, and build instructions as implemented in the repository.
 
