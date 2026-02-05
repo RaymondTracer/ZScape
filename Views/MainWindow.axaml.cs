@@ -584,6 +584,10 @@ public partial class MainWindow : Window
                     return false;
             }
             
+            // Apply advanced filter (WAD filters, country filters, player counts, etc.)
+            if (!_settings.Settings.CurrentFilter.Matches(s))
+                return false;
+            
             return true;
         }).ToList();
     }
