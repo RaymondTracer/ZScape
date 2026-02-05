@@ -1,0 +1,123 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:ZScape.Controls"
+        x:Class="ZScape.Views.FirstTimeSetupDialog"
+        Title="ZScape - First Time Setup"
+        Width="600" Height="620"
+        WindowStartupLocation="CenterScreen"
+        CanResize="False"
+        ExtendClientAreaToDecorationsHint="False">
+    
+    <Grid Margin="20" RowDefinitions="Auto,Auto,Auto,*,Auto,Auto,45">
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Spacing="5" Margin="0,0,0,15">
+            <TextBlock Text="Welcome to ZScape!" FontSize="20" FontWeight="Bold"/>
+            <TextBlock Text="Let's configure the essential settings to get you started." 
+                       Foreground="Gray"/>
+        </StackPanel>
+        
+        <!-- Zandronum Executable -->
+        <StackPanel Grid.Row="1" Spacing="5" Margin="0,0,0,15">
+            <TextBlock Text="Zandronum Executable" FontWeight="Bold" FontSize="12"/>
+            <Grid ColumnDefinitions="*,90">
+                <TextBox Grid.Column="0" x:Name="ZandronumPathTextBox"/>
+                <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0"
+                        Click="BrowseZandronum_Click"/>
+            </Grid>
+        </StackPanel>
+        
+        <!-- Testing Versions Folder -->
+        <StackPanel Grid.Row="2" Spacing="5" Margin="0,0,0,15">
+            <TextBlock Text="Testing Versions Folder (optional)" FontWeight="Bold" FontSize="12"/>
+            <Grid ColumnDefinitions="*,90">
+                <TextBox Grid.Column="0" x:Name="TestingFolderTextBox"/>
+                <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0"
+                        Click="BrowseTestingFolder_Click"/>
+            </Grid>
+            <TextBlock Text="Auto-downloaded when connecting to testing servers" 
+                       FontSize="11" Foreground="Gray"/>
+        </StackPanel>
+        
+        <!-- WAD Settings -->
+        <Grid Grid.Row="3" RowDefinitions="Auto,*,Auto,Auto" ColumnDefinitions="*,90" Margin="0,0,0,15">
+            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="WAD Settings" 
+                       FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
+            
+            <TextBlock Grid.Row="1" Grid.ColumnSpan="2" 
+                       Text="WAD Search Folders (first entry is also the download folder):"
+                       Margin="0,0,0,5" VerticalAlignment="Top"/>
+            
+            <ListBox Grid.Row="1" Grid.Column="0" x:Name="WadPathsListBox" 
+                     SelectionMode="Single" Margin="0,22,5,0"/>
+            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,22,0,0">
+                <Button Content="Add..." Width="80" Click="AddWadPath_Click"/>
+                <Button x:Name="RemoveWadPathButton" Content="Remove" Width="80" 
+                        IsEnabled="False" Click="RemoveWadPath_Click"/>
+            </StackPanel>
+            
+            <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="WAD Download Folder:"
+                       Margin="0,10,0,5"/>
+            <Grid Grid.Row="3" Grid.ColumnSpan="2" ColumnDefinitions="*,90">
+                <TextBox Grid.Column="0" x:Name="WadDownloadPathTextBox"/>
+                <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0"
+                        Click="BrowseDownloadFolder_Click"/>
+            </Grid>
+        </Grid>
+        
+        <!-- Update Settings -->
+        <StackPanel Grid.Row="4" Spacing="8" Margin="0,0,0,15">
+            <TextBlock Text="Update Settings" FontWeight="Bold" FontSize="12"/>
+            
+            <Grid ColumnDefinitions="110,*">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                
+                <TextBlock Grid.Row="0" Text="Update behavior:" VerticalAlignment="Center"/>
+                <controls:PersistentComboBox Grid.Row="0" Grid.Column="1" x:Name="UpdateBehaviorComboBox" Width="320"
+                          HorizontalAlignment="Left">
+                    <ComboBoxItem Content="Disabled - Never check for updates"/>
+                    <ComboBoxItem Content="Notify Only - Check but don't download"/>
+                    <ComboBoxItem Content="Auto Download - Check and download automatically" IsSelected="True"/>
+                </controls:PersistentComboBox>
+                
+                <TextBlock Grid.Row="1" Text="Check every:" VerticalAlignment="Center"/>
+                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="10">
+                    <controls:PersistentComboBox x:Name="UpdatePresetsComboBox" Width="120">
+                        <ComboBoxItem Content="Custom:"/>
+                        <ComboBoxItem Content="Every 6 hours"/>
+                        <ComboBoxItem Content="Once a day" IsSelected="True"/>
+                        <ComboBoxItem Content="Once a week"/>
+                        <ComboBoxItem Content="Once a month"/>
+                    </controls:PersistentComboBox>
+                    <controls:NumericSpinner x:Name="UpdateIntervalSpinner" 
+                                              Value="1" Minimum="1" Maximum="99"
+                                              Width="50" VerticalAlignment="Center"/>
+                    <controls:PersistentComboBox x:Name="UpdateIntervalUnitComboBox" Width="80">
+                        <ComboBoxItem Content="Hours"/>
+                        <ComboBoxItem Content="Days" IsSelected="True"/>
+                        <ComboBoxItem Content="Weeks"/>
+                    </controls:PersistentComboBox>
+                </StackPanel>
+                
+                <CheckBox Grid.Row="2" Grid.Column="1" x:Name="AutoRestartCheckBox"
+                          Content="Automatically restart when an update is ready"/>
+            </Grid>
+        </StackPanel>
+        
+        <!-- Info text -->
+        <TextBlock Grid.Row="5" 
+                   Text="You can change these settings at any time from the Settings menu."
+                   Foreground="Gray" FontStyle="Italic" Margin="0,0,0,10"/>
+        
+        <!-- Buttons -->
+        <Grid Grid.Row="6" ColumnDefinitions="*,Auto,10,Auto">
+            <Button Grid.Column="1" x:Name="ExitButton" Content="Exit" Width="80" Height="32"
+                    Click="ExitButton_Click"/>
+            <Button Grid.Column="3" x:Name="FinishButton" Content="Finish Setup" Width="120" Height="32"
+                    Click="FinishButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

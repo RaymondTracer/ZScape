@@ -1,0 +1,45 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ZScape.Controls.NumericSpinner">
+    <UserControl.Styles>
+        <Style Selector="Border.spinnerButton">
+            <Setter Property="Background" Value="{DynamicResource SecondaryBackgroundBrush}"/>
+        </Style>
+        <Style Selector="Border.spinnerButton:pointerover">
+            <Setter Property="Background" Value="#FF3E3E42"/>
+        </Style>
+    </UserControl.Styles>
+    <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" 
+            Background="{DynamicResource TertiaryBackgroundBrush}" CornerRadius="2"
+            Height="22" VerticalAlignment="Center">
+        <Grid ColumnDefinitions="*,16">
+            <TextBox x:Name="ValueTextBox" Grid.Column="0"
+                     Text="1" MinWidth="30"
+                     BorderThickness="0" Background="Transparent"
+                     VerticalContentAlignment="Center"
+                     HorizontalContentAlignment="Center"
+                     Padding="4,0"
+                     TextAlignment="Center"
+                     KeyDown="ValueTextBox_KeyDown"
+                     LostFocus="ValueTextBox_LostFocus"/>
+            <Grid Grid.Column="1" RowDefinitions="*,*">
+                <Border Grid.Row="0" Classes="spinnerButton"
+                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0.5"
+                        Cursor="Hand" PointerPressed="UpButton_PointerPressed">
+                    <TextBlock Text="▲" FontSize="6" 
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ForegroundBrush}"
+                               IsHitTestVisible="False"/>
+                </Border>
+                <Border Grid.Row="1" Classes="spinnerButton"
+                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0.5,0,0"
+                        Cursor="Hand" PointerPressed="DownButton_PointerPressed">
+                    <TextBlock Text="▼" FontSize="6"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ForegroundBrush}"
+                               IsHitTestVisible="False"/>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

@@ -1,0 +1,74 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ZScape.Views.WadBrowserDialog"
+        x:CompileBindings="False"
+        Title="WAD Browser"
+        Width="900" Height="600"
+        WindowStartupLocation="CenterOwner"
+        MinWidth="750" MinHeight="450"
+        ExtendClientAreaToDecorationsHint="False">
+    
+    <Grid Margin="10" RowDefinitions="Auto,*,Auto,45">
+        <!-- Toolbar -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,10">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="5">
+                <Button x:Name="RefreshButton" Content="Refresh" Click="RefreshButton_Click"/>
+                <Button x:Name="OpenFolderButton" Content="Open Folder" Click="OpenFolderButton_Click"/>
+                <Separator Width="1" Height="24" Margin="5,0"/>
+                <TextBlock Text="Search:" VerticalAlignment="Center"/>
+                <TextBox x:Name="SearchTextBox" Width="200" TextChanged="SearchTextBox_TextChanged"/>
+                <Button Content="Clear" Click="ClearSearch_Click"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
+                <TextBlock Text="Filter:" VerticalAlignment="Center"/>
+                <ComboBox x:Name="FilterComboBox" Width="120" SelectedIndex="0"
+                          SelectionChanged="FilterComboBox_SelectionChanged">
+                    <ComboBoxItem Content="All Files"/>
+                    <ComboBoxItem Content="WAD Files"/>
+                    <ComboBoxItem Content="PK3 Files"/>
+                    <ComboBoxItem Content="PKE Files"/>
+                    <ComboBoxItem Content="IPK3 Files"/>
+                    <ComboBoxItem Content="Duplicates"/>
+                </ComboBox>
+            </StackPanel>
+        </Grid>
+        
+        <!-- WAD list -->
+        <DataGrid Grid.Row="1" x:Name="WadListView"
+                  AutoGenerateColumns="False"
+                  CanUserReorderColumns="True"
+                  CanUserSortColumns="True"
+                  CanUserResizeColumns="True"
+                  SelectionMode="Extended"
+                  GridLinesVisibility="Horizontal"
+                  DoubleTapped="WadListView_DoubleTapped">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="200"/>
+                <DataGridTextColumn Header="Extension" Binding="{Binding Extension}" Width="60"/>
+                <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}" Width="80"/>
+                <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedDisplay}" Width="120"/>
+                <DataGridTextColumn Header="MD5" Binding="{Binding Md5Hash}" Width="230"/>
+                <DataGridTextColumn Header="Path" Binding="{Binding FullPath}" Width="*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        
+        <!-- Status bar -->
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="0,5,0,0">
+            <TextBlock x:Name="StatusLabel" Text="Loading..." VerticalAlignment="Center"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
+                <TextBlock x:Name="CountLabel" Text="0 files" VerticalAlignment="Center"/>
+                <TextBlock x:Name="TotalSizeLabel" Text="0 MB" VerticalAlignment="Center"/>
+                <TextBlock x:Name="DuplicateLabel" Text="0 duplicates" VerticalAlignment="Center" Foreground="Orange"/>
+            </StackPanel>
+        </Grid>
+        
+        <!-- Button panel -->
+        <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
+            <Button Grid.Column="0" Content="Compute MD5" Margin="0,0,5,0" Click="ComputeMd5_Click"/>
+            <Button Grid.Column="1" Content="Find Duplicates" Margin="0,0,5,0" Click="FindDuplicates_Click"/>
+            <Button Grid.Column="2" Content="Delete Selected" Margin="0,0,5,0" Click="DeleteSelected_Click"/>
+            <Button Grid.Column="4" Content="Copy Name" Margin="0,0,5,0" Click="CopyName_Click"/>
+            <Button Grid.Column="5" Content="Close" Width="80" Height="30" Click="CloseButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

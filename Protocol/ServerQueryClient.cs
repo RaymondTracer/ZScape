@@ -434,7 +434,8 @@ public class ServerQueryClient : IDisposable
                 for (int i = 0; i < server.NumTeams && i < server.Teams.Length; i++)
                 {
                     uint colorRgb = reader.ReadUInt32();
-                    server.Teams[i].Color = Color.FromArgb((int)colorRgb);
+                    // Convert RGB to hex string for cross-platform compatibility
+                    server.Teams[i].ColorHex = $"#{colorRgb:X6}";
                 }
             }
 

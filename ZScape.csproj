@@ -2,19 +2,54 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
-    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>ZScape</RootNamespace>
     <AssemblyName>ZScape</AssemblyName>
     <Version>1.0.0</Version>
     <Authors>Charlie Gadd</Authors>
     <Description>A modern Zandronum server browser with dark theme</Description>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-x64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.2.3" />
+    <!--Condition below is needed to remove Avalonia.Diagnostics package from build output in Release configuration.-->
+    <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="Avalonia.Diagnostics" Version="11.2.3" />
     <PackageReference Include="SharpCompress" Version="0.44.5" />
+  </ItemGroup>
+
+  <!-- Exclude old WinForms UI files during Avalonia migration -->
+  <ItemGroup>
+    <Compile Remove="MainForm.cs" />
+    <Compile Remove="MainForm.Designer.cs" />
+    <Compile Remove="UI\AddServerDialog.cs" />
+    <Compile Remove="UI\ConnectionHistoryDialog.cs" />
+    <Compile Remove="UI\DarkTheme.cs" />
+    <Compile Remove="UI\FetchWadsDialog.cs" />
+    <Compile Remove="UI\FirstTimeSetupDialog.cs" />
+    <Compile Remove="UI\PlayerListControl.cs" />
+    <Compile Remove="UI\ServerFilterDialog.cs" />
+    <Compile Remove="UI\TestingVersionManagerDialog.cs" />
+    <Compile Remove="UI\UnifiedSettingsDialog.cs" />
+    <Compile Remove="UI\WadBrowserDialog.cs" />
+    <Compile Remove="UI\WadDownloadDialog.cs" />
+    <Compile Remove="UI\UIHelpers.cs" />
+    <Compile Remove="UI\UpdateProgressDialog.cs" />
+    <Compile Remove="Utilities\DarkModeHelper.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**"/>
+    <AvaloniaResource Include="Themes\**"/>
   </ItemGroup>
 
 </Project>

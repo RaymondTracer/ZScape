@@ -1,3 +1,5 @@
+using ZScape.Utilities;
+
 namespace ZScape.Services;
 
 /// <summary>
@@ -321,62 +323,14 @@ public class ScreenshotMonitorService : IDisposable
     /// <summary>
     /// Gets the configured destination path for screenshots.
     /// </summary>
-    public string? GetDestinationPath()
-    {
-        var settings = SettingsService.Instance.Settings;
-        
-        // Use configured path if specified
-        if (!string.IsNullOrEmpty(settings.ScreenshotConsolidationPath))
-        {
-            return settings.ScreenshotConsolidationPath;
-        }
-        
-        // Default to "Screenshots" in the Zandronum root directory
-        if (!string.IsNullOrEmpty(settings.ZandronumPath) && File.Exists(settings.ZandronumPath))
-        {
-            var exeDir = Path.GetDirectoryName(settings.ZandronumPath);
-            if (!string.IsNullOrEmpty(exeDir))
-            {
-                return Path.Combine(exeDir, "Screenshots");
-            }
-        }
-        
-        return null;
-    }
+    public string? GetDestinationPath() => PathResolver.GetScreenshotsPath();
     
-    private static string? GetTestingRootPath()
-    {
-        var settings = SettingsService.Instance.Settings;
-        
-        if (!string.IsNullOrEmpty(settings.ZandronumTestingPath))
-        {
-            return settings.ZandronumTestingPath;
-        }
-        
-        if (!string.IsNullOrEmpty(settings.ZandronumPath) && File.Exists(settings.ZandronumPath))
-        {
-            var exeDir = Path.GetDirectoryName(settings.ZandronumPath);
-            if (!string.IsNullOrEmpty(exeDir))
-            {
-                return Path.Combine(exeDir, "TestingVersions");
-            }
-        }
-        
-        return null;
-    }
+    private static string? GetTestingRootPath() => PathResolver.GetTestingVersionsPath();
     
     /// <summary>
     /// Gets the stable Zandronum directory (where the main exe lives).
     /// </summary>
-    private static string? GetStableZandronumDir()
-    {
-        var settings = SettingsService.Instance.Settings;
-        if (!string.IsNullOrEmpty(settings.ZandronumPath) && File.Exists(settings.ZandronumPath))
-        {
-            return Path.GetDirectoryName(settings.ZandronumPath);
-        }
-        return null;
-    }
+    private static string? GetStableZandronumDir() => PathResolver.GetZandronumDirectory();
     
     public void Dispose()
     {

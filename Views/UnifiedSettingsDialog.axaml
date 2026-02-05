@@ -1,0 +1,452 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
+        x:Class="ZScape.Views.UnifiedSettingsDialog"
+        x:CompileBindings="False"
+        Title="Settings"
+        Width="900" Height="600"
+        WindowStartupLocation="CenterOwner"
+        MinWidth="750" MinHeight="500"
+        ExtendClientAreaToDecorationsHint="False">
+    
+    <Grid Margin="10" RowDefinitions="*,45">
+        <!-- Main content: categories on left, content on right -->
+        <Grid Grid.Row="0" ColumnDefinitions="160,*">
+            <!-- Category list -->
+            <ListBox Grid.Column="0" x:Name="CategoryList" 
+                     SelectionMode="Single"
+                     SelectedIndex="0">
+                <ListBoxItem Content="General"/>
+                <ListBoxItem Content="Favorites"/>
+                <ListBoxItem Content="WAD Paths"/>
+                <ListBoxItem Content="Download Sites"/>
+                <ListBoxItem Content="Downloads"/>
+                <ListBoxItem Content="Domain Threads"/>
+                <ListBoxItem Content="Server Queries"/>
+                <ListBoxItem Content="Updates"/>
+            </ListBox>
+            
+            <!-- Content panels (TabControl without visible tabs) -->
+            <TabControl Grid.Column="1" x:Name="ContentTabControl" Margin="10,0,0,0">
+                <TabControl.Styles>
+                    <Style Selector="TabControl">
+                        <Setter Property="TabStripPlacement" Value="Top"/>
+                    </Style>
+                    <Style Selector="TabItem">
+                        <Setter Property="IsVisible" Value="False"/>
+                    </Style>
+                </TabControl.Styles>
+                
+                <!-- General Tab -->
+                <TabItem Header="General">
+                    <ScrollViewer>
+                        <StackPanel Margin="5" Spacing="10">
+                            <TextBlock Text="Zandronum Configuration" FontWeight="Bold" FontSize="14"/>
+                            
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="Zandronum Executable (Stable):"/>
+                                <Grid ColumnDefinitions="*,90">
+                                    <TextBox Grid.Column="0" x:Name="ZandronumPathTextBox"/>
+                                    <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0"
+                                            Click="BrowseZandronumPath_Click"/>
+                                </Grid>
+                            </StackPanel>
+                            
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="Testing Versions Folder (leave empty for default):"/>
+                                <Grid ColumnDefinitions="*,90">
+                                    <TextBox Grid.Column="0" x:Name="ZandronumTestingPathTextBox"/>
+                                    <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0"
+                                            Click="BrowseTestingPath_Click"/>
+                                </Grid>
+                                <TextBlock Text="Auto-downloaded when connecting to testing servers" 
+                                           FontSize="11" Foreground="Gray"/>
+                            </StackPanel>
+                            
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="Hash Verification Threads:"/>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <controls:NumericSpinner x:Name="HashConcurrencyNumeric" 
+                                                   Minimum="0" Maximum="32" Width="70"/>
+                                    <TextBlock Text="(0 = unlimited, 1 = sequential)" 
+                                               VerticalAlignment="Center" Foreground="Gray"/>
+                                </StackPanel>
+                            </StackPanel>
+                            
+                            <Separator Margin="0,10"/>
+                            
+                            <TextBlock Text="Display Options" FontWeight="Bold"/>
+                            <CheckBox x:Name="ColorizePlayerNamesCheckBox" 
+                                      Content="Colorize player names using Doom color codes"/>
+                            
+                            <Separator Margin="0,10"/>
+                            
+                            <TextBlock Text="Screenshot Consolidation" FontWeight="Bold"/>
+                            <CheckBox x:Name="ScreenshotMonitorCheckBox" 
+                                      Content="Consolidate screenshots to a single folder"/>
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="Screenshots Folder (leave empty for default):"/>
+                                <Grid ColumnDefinitions="*,90">
+                                    <TextBox Grid.Column="0" x:Name="ScreenshotPathTextBox"/>
+                                    <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0"
+                                            Click="BrowseScreenshotPath_Click"/>
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+                
+                <!-- Favorites Tab -->
+                <TabItem Header="Favorites">
+                    <Grid RowDefinitions="*,*,Auto">
+                        <!-- Favorites section -->
+                        <Grid Grid.Row="0" RowDefinitions="Auto,*" ColumnDefinitions="*,100" Margin="5">
+                            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Favorite Servers" FontWeight="Bold"/>
+                            <ListBox Grid.Row="1" Grid.Column="0" x:Name="FavoritesListBox" 
+                                     SelectionMode="Single" Margin="0,5,10,0"/>
+                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,5,0,0">
+                                <Button Content="Remove" Width="90" Click="RemoveFavorite_Click"/>
+                                <Button Content="Clear All" Width="90" Click="ClearFavorites_Click"/>
+                            </StackPanel>
+                        </Grid>
+                        
+                        <!-- Manual servers section -->
+                        <Grid Grid.Row="1" RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,100" Margin="5">
+                            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Manually Added Servers" FontWeight="Bold"/>
+                            <ListBox Grid.Row="1" Grid.Column="0" x:Name="ManualServersListBox" 
+                                     SelectionMode="Single" Margin="0,5,10,0"/>
+                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,5,0,0">
+                                <Button Content="Add..." Width="90" Click="AddManualServer_Click"/>
+                                <Button Content="Remove" Width="90" Click="RemoveManualServer_Click"/>
+                            </StackPanel>
+                            <TextBlock Grid.Row="2" Grid.ColumnSpan="2" 
+                                       Text="Manual servers are queried first and never removed from the list."
+                                       Foreground="Gray" FontSize="11"/>
+                        </Grid>
+                        
+                        <!-- Alert settings -->
+                        <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" 
+                                BorderThickness="1" CornerRadius="3" Padding="10" Margin="5">
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="Server Alerts" FontWeight="Bold"/>
+                                <CheckBox x:Name="EnableFavoriteAlertsCheckBox" 
+                                          Content="Alert when favorite servers come online with players"/>
+                                <CheckBox x:Name="EnableManualAlertsCheckBox" 
+                                          Content="Alert when manually added servers come online with players"/>
+                                <CheckBox x:Name="ShowFavoritesColumnCheckBox" 
+                                          Content="Show favorites column in server list"/>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="Minimum players:" VerticalAlignment="Center"/>
+                                    <controls:NumericSpinner x:Name="AlertMinPlayersNumeric" 
+                                                   Minimum="0" Maximum="64" Width="70"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="Check interval (seconds):" VerticalAlignment="Center"/>
+                                    <controls:NumericSpinner x:Name="AlertIntervalNumeric" 
+                                                   Minimum="30" Maximum="600" Width="70"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </TabItem>
+                
+                <!-- WAD Paths Tab -->
+                <TabItem Header="WAD Paths">
+                    <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" ColumnDefinitions="*,100" Margin="5">
+                        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="WAD Search Paths" 
+                                   FontWeight="Bold" FontSize="14"/>
+                        <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="Folders to search for WAD files:" 
+                                   Margin="0,10,0,5"/>
+                        
+                        <ListBox Grid.Row="2" Grid.Column="0" x:Name="WadPathsListBox" 
+                                 SelectionMode="Single" Margin="0,0,10,0"/>
+                        
+                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="5">
+                            <Button Content="Add..." Width="90" Click="AddWadPath_Click"/>
+                            <Button x:Name="RemoveWadPathButton" Content="Remove" Width="90" 
+                                    IsEnabled="False" Click="RemoveWadPath_Click"/>
+                            <Button x:Name="MoveUpWadPathButton" Content="Move Up" Width="90" 
+                                    IsEnabled="False" Click="MoveUpWadPath_Click"/>
+                            <Button x:Name="MoveDownWadPathButton" Content="Move Down" Width="90" 
+                                    IsEnabled="False" Click="MoveDownWadPath_Click"/>
+                            <Button x:Name="SetAsDownloadButton" Content="Set as DL" Width="90" 
+                                    IsEnabled="False" Click="SetAsDownload_Click"/>
+                        </StackPanel>
+                        
+                        <TextBlock Grid.Row="3" Grid.ColumnSpan="2" Text="Default folder for downloaded WADs:" 
+                                   Margin="0,10,0,5"/>
+                        <Grid Grid.Row="4" Grid.ColumnSpan="2" ColumnDefinitions="*,90">
+                            <TextBox Grid.Column="0" x:Name="WadDownloadPathTextBox"/>
+                            <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0"
+                                    Click="BrowseDownloadPath_Click"/>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+                
+                <!-- Download Sites Tab -->
+                <TabItem Header="Download Sites">
+                    <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" ColumnDefinitions="*,100" Margin="5">
+                        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="WAD Download Sites" 
+                                   FontWeight="Bold" FontSize="14"/>
+                        <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="Sites searched in order:" 
+                                   Margin="0,10,0,5"/>
+                        
+                        <ListBox Grid.Row="2" Grid.Column="0" x:Name="DownloadSitesListBox" 
+                                 SelectionMode="Single" Margin="0,0,10,0"/>
+                        
+                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="5">
+                            <Button Content="Add Defaults" Width="90" Click="AddDefaultSites_Click"/>
+                            <Button Content="Remove" Width="90" Click="RemoveDownloadSite_Click"/>
+                            <Button Content="Move Up" Width="90" Click="MoveUpSite_Click"/>
+                            <Button Content="Move Down" Width="90" Click="MoveDownSite_Click"/>
+                        </StackPanel>
+                        
+                        <TextBlock Grid.Row="3" Grid.ColumnSpan="2" Text="Add new site URL:" 
+                                   Margin="0,10,0,5"/>
+                        <Grid Grid.Row="4" Grid.ColumnSpan="2" ColumnDefinitions="*,60">
+                            <TextBox Grid.Column="0" x:Name="NewSiteTextBox"/>
+                            <Button Grid.Column="1" Content="Add" Margin="5,0,0,0"
+                                    Click="AddSite_Click"/>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+                
+                <!-- Downloads Tab -->
+                <TabItem Header="Downloads">
+                    <ScrollViewer>
+                        <StackPanel Margin="5" Spacing="15">
+                            <TextBlock Text="Download Behavior" FontWeight="Bold" FontSize="14"/>
+                            
+                            <Grid ColumnDefinitions="200,*" RowDefinitions="Auto">
+                                <TextBlock Grid.Row="0" Text="When joining server:" VerticalAlignment="Center"/>
+                                <ComboBox Grid.Row="0" Grid.Column="1" x:Name="DownloadBehaviorComboBox" 
+                                          Width="220" HorizontalAlignment="Left"/>
+                            </Grid>
+                            
+                            <TextBlock Text="Controls whether the download dialog closes automatically&#10;after downloading WADs when joining a server."
+                                       Foreground="Gray" TextWrapping="Wrap"/>
+                            
+                            <TextBlock Text="Download Concurrency" FontWeight="Bold" FontSize="14" Margin="0,10,0,0"/>
+                            
+                            <Grid ColumnDefinitions="160,80,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                                <TextBlock Grid.Row="0" Text="Max Downloads:" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="0" Grid.Column="1" x:Name="MaxConcurrentDownloadsNumeric" 
+                                               Minimum="0" Maximum="100" Width="70"/>
+                                
+                                <TextBlock Grid.Row="1" Text="Max Domains:" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="1" Grid.Column="1" x:Name="MaxConcurrentDomainsNumeric" 
+                                               Minimum="0" Maximum="50" Width="70"/>
+                                
+                                <TextBlock Grid.Row="2" Text="Max Threads/File:" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="2" Grid.Column="1" x:Name="MaxThreadsPerFileNumeric" 
+                                               Minimum="0" Maximum="1024" Width="70"/>
+                                
+                                <TextBlock Grid.Row="3" Text="Min Segment KB:" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="3" Grid.Column="1" x:Name="DefaultMinSegmentKbNumeric" 
+                                               Minimum="64" Maximum="4096" Width="70"/>
+                            </Grid>
+                            
+                            <TextBlock Text="Max Downloads: Total simultaneous file downloads (0=unlimited).&#10;Max Domains: How many servers to download from at once.&#10;Max Threads/File: Hard limit on concurrent connections per download."
+                                       Foreground="Gray" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+                
+                <!-- Domain Threads Tab -->
+                <TabItem Header="Domain Threads">
+                    <TabItem.Styles>
+                        <!-- Inline edit TextBox style - looks like text until focused -->
+                        <Style Selector="TextBox.editCell">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Padding" Value="2,0"/>
+                            <Setter Property="MinHeight" Value="20"/>
+                            <Setter Property="VerticalContentAlignment" Value="Center"/>
+                        </Style>
+                        <Style Selector="TextBox.editCell:focus">
+                            <Setter Property="Background" Value="#3F3F46"/>
+                            <Setter Property="BorderThickness" Value="1"/>
+                            <Setter Property="BorderBrush" Value="#007ACC"/>
+                        </Style>
+                        <Style Selector="TextBox.editCell:pointerover">
+                            <Setter Property="Background" Value="#333337"/>
+                        </Style>
+                        <Style Selector="TextBox.editCellNum">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Padding" Value="2,0"/>
+                            <Setter Property="MinHeight" Value="20"/>
+                            <Setter Property="MinWidth" Value="35"/>
+                            <Setter Property="TextAlignment" Value="Center"/>
+                            <Setter Property="VerticalContentAlignment" Value="Center"/>
+                        </Style>
+                        <Style Selector="TextBox.editCellNum:focus">
+                            <Setter Property="Background" Value="#3F3F46"/>
+                            <Setter Property="BorderThickness" Value="1"/>
+                            <Setter Property="BorderBrush" Value="#007ACC"/>
+                        </Style>
+                        <Style Selector="TextBox.editCellNum:pointerover">
+                            <Setter Property="Background" Value="#333337"/>
+                        </Style>
+                    </TabItem.Styles>
+                    <Grid RowDefinitions="Auto,Auto,*,40" Margin="5">
+                        <TextBlock Grid.Row="0" Text="Domain Thread Settings" FontWeight="Bold" FontSize="14"/>
+                        <TextBlock Grid.Row="1" Text="Per-domain download thread settings. Click cells to edit." 
+                                   Foreground="Gray" Margin="0,5,0,10"/>
+                        
+                        <Border Grid.Row="2" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="2">
+                            <Grid RowDefinitions="Auto,*">
+                                <!-- Column headers -->
+                                <Border Grid.Row="0" Background="#252526" BorderBrush="#3F3F46" BorderThickness="0,0,0,1">
+                                    <Grid ColumnDefinitions="140,55,50,50,55,55,40,40,*" Height="28">
+                                        <TextBlock Grid.Column="0" Text="Domain" VerticalAlignment="Center" Margin="8,0" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="1" Text="Threads" VerticalAlignment="Center" Margin="2,0" FontWeight="SemiBold" FontSize="11"/>
+                                        <TextBlock Grid.Column="2" Text="DL Lim" VerticalAlignment="Center" Margin="2,0" FontWeight="SemiBold" FontSize="11"/>
+                                        <TextBlock Grid.Column="3" Text="Initial" VerticalAlignment="Center" Margin="2,0" FontWeight="SemiBold" FontSize="11"/>
+                                        <TextBlock Grid.Column="4" Text="Seg KB" VerticalAlignment="Center" Margin="2,0" FontWeight="SemiBold" FontSize="11"/>
+                                        <TextBlock Grid.Column="5" Text="Adaptive" VerticalAlignment="Center" Margin="2,0" FontWeight="SemiBold" FontSize="11"/>
+                                        <TextBlock Grid.Column="6" Text="OK" VerticalAlignment="Center" Margin="2,0" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                        <TextBlock Grid.Column="7" Text="Fail" VerticalAlignment="Center" Margin="2,0" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                        <TextBlock Grid.Column="8" Text="Notes" VerticalAlignment="Center" Margin="4,0" FontWeight="SemiBold"/>
+                                    </Grid>
+                                </Border>
+                                
+                                <!-- Scrollable items -->
+                                <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl x:Name="DomainListControl">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="{Binding RowBackground}" BorderBrush="#3F3F46" BorderThickness="0,0,0,1" MinHeight="26"
+                                                        PointerPressed="DomainRow_PointerPressed" GotFocus="DomainRow_GotFocus">
+                                                    <Grid ColumnDefinitions="140,55,50,50,55,55,40,40,*" VerticalAlignment="Center">
+                                                        <TextBox Grid.Column="0" Classes="editCell" Text="{Binding Domain, Mode=TwoWay}" Margin="4,0"/>
+                                                        <TextBox Grid.Column="1" Classes="editCellNum" Text="{Binding MaxThreads, Mode=TwoWay}"/>
+                                                        <TextBox Grid.Column="2" Classes="editCellNum" Text="{Binding MaxConcurrentDownloads, Mode=TwoWay}"/>
+                                                        <TextBox Grid.Column="3" Classes="editCellNum" Text="{Binding InitialThreads, Mode=TwoWay}"/>
+                                                        <TextBox Grid.Column="4" Classes="editCellNum" Text="{Binding MinSegmentSizeKb, Mode=TwoWay}"/>
+                                                        <CheckBox Grid.Column="5" IsChecked="{Binding AdaptiveLearning, Mode=TwoWay}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                        <TextBlock Grid.Column="6" Text="{Binding SuccessCount}" VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="#888"/>
+                                                        <TextBlock Grid.Column="7" Text="{Binding FailureCount}" VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="#888"/>
+                                                        <TextBox Grid.Column="8" Classes="editCell" Text="{Binding Notes, Mode=TwoWay}" Margin="2,0,4,0"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Grid>
+                        </Border>
+                        
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                            <Button Content="Add Domain" Width="100" Height="28" Click="AddDomain_Click"/>
+                            <Button Content="Remove" Width="80" Height="28" Click="RemoveDomain_Click"/>
+                            <Button Content="Clear All" Width="80" Height="28" Click="ResetDomains_Click"/>
+                        </StackPanel>
+                    </Grid>
+                </TabItem>
+                
+                <!-- Server Queries Tab -->
+                <TabItem Header="Server Queries">
+                    <ScrollViewer>
+                        <StackPanel Margin="5" Spacing="15">
+                            <TextBlock Text="Server Query Settings" FontWeight="Bold" FontSize="14"/>
+                            
+                            <Grid ColumnDefinitions="180,80,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                                <TextBlock Grid.Row="0" Text="Query Interval (ms):" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="0" Grid.Column="1" x:Name="QueryIntervalMsNumeric" 
+                                               Minimum="1" Maximum="1000" Width="70"/>
+                                
+                                <TextBlock Grid.Row="1" Text="Max Concurrent Queries:" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="1" Grid.Column="1" x:Name="MaxConcurrentQueriesNumeric" 
+                                               Minimum="0" Maximum="500" Width="70"/>
+                                
+                                <TextBlock Grid.Row="2" Text="Retry Attempts:" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="2" Grid.Column="1" x:Name="QueryRetryAttemptsNumeric" 
+                                               Minimum="1" Maximum="10" Width="70"/>
+                                
+                                <TextBlock Grid.Row="3" Text="Retry Delay (ms):" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="3" Grid.Column="1" x:Name="QueryRetryDelayMsNumeric" 
+                                               Minimum="100" Maximum="10000" Width="70"/>
+                                
+                                <TextBlock Grid.Row="4" Text="Master Server Retries:" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="4" Grid.Column="1" x:Name="MasterServerRetryCountNumeric" 
+                                               Minimum="1" Maximum="10" Width="70"/>
+                                
+                                <TextBlock Grid.Row="5" Text="Failures Before Offline:" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="5" Grid.Column="1" x:Name="ConsecutiveFailuresNumeric" 
+                                               Minimum="1" Maximum="10" Width="70"/>
+                                
+                                <TextBlock Grid.Row="6" Text="Auto Refresh (min):" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="6" Grid.Column="1" x:Name="AutoRefreshIntervalNumeric" 
+                                               Minimum="1" Maximum="60" Width="70"/>
+                                
+                                <CheckBox Grid.Row="7" Grid.ColumnSpan="3" x:Name="AutoRefreshFavoritesOnlyCheckBox" 
+                                          Content="Auto-refresh favorites only"/>
+                            </Grid>
+                            
+                            <TextBlock Text="Query Interval: Delay between sending queries. Lower = faster but more aggressive.&#10;  1-5ms: Very Aggressive | 5-30ms: Aggressive | 30-60ms: Moderate | 60+ms: Cautious"
+                                       Foreground="Gray" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+                
+                <!-- Updates Tab -->
+                <TabItem Header="Updates">
+                    <ScrollViewer>
+                        <StackPanel Margin="5" Spacing="15">
+                            <TextBlock Text="Automatic Updates" FontWeight="Bold" FontSize="14"/>
+                            
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <TextBlock Text="Update behavior:" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="UpdateBehaviorComboBox" Width="280">
+                                    <ComboBoxItem Content="Disabled - Never check for updates"/>
+                                    <ComboBoxItem Content="Notify only - Check but don't download"/>
+                                    <ComboBoxItem Content="Download - Check and download automatically"/>
+                                </ComboBox>
+                            </StackPanel>
+                            
+                            <CheckBox x:Name="AutoRestartCheckBox" 
+                                      Content="Automatically restart to install updates (when idle)"/>
+                            <TextBlock Text="Auto-restart will only occur when the application is idle."
+                                       Foreground="Orange" FontSize="11" Margin="20,0,0,0"/>
+                            
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <TextBlock Text="Check every:" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="UpdateIntervalPresets" Width="120">
+                                    <ComboBoxItem Content="Custom:"/>
+                                    <ComboBoxItem Content="Every 6 hours"/>
+                                    <ComboBoxItem Content="Once a day"/>
+                                    <ComboBoxItem Content="Once a week"/>
+                                    <ComboBoxItem Content="Once a month"/>
+                                </ComboBox>
+                                <controls:NumericSpinner x:Name="UpdateCheckIntervalValue" Minimum="1" Maximum="99" Width="70"/>
+                                <ComboBox x:Name="UpdateCheckIntervalUnit" Width="80">
+                                    <ComboBoxItem Content="Hours"/>
+                                    <ComboBoxItem Content="Days"/>
+                                    <ComboBoxItem Content="Weeks"/>
+                                </ComboBox>
+                            </StackPanel>
+                            
+                            <Button x:Name="CheckNowButton" Content="Check for Updates Now" 
+                                    HorizontalAlignment="Left" Padding="10,5"
+                                    Click="CheckNowButton_Click"/>
+                            
+                            <TextBlock Text="When an update is downloaded, you will be notified with a banner.&#10;Installing an update will close and restart the application."
+                                       Foreground="Gray" TextWrapping="Wrap"/>
+                            
+                            <TextBlock x:Name="VersionInfoLabel" Text="Current version: ..." Foreground="DarkGray"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+        </Grid>
+        
+        <!-- Button panel -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,10,Auto">
+            <Button Grid.Column="1" x:Name="OkButton" Content="OK" Width="80" Height="30"
+                    Click="OkButton_Click"/>
+            <Button Grid.Column="3" Content="Cancel" Width="80" Height="30"
+                    Click="CancelButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

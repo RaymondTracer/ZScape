@@ -88,9 +88,17 @@ public class SettingsService
     {
         var fullAddress = $"{address}:{port}";
         
-        // Find existing entry
-        var existing = _settings.ConnectionHistory.FirstOrDefault(
-            h => h.FullAddress.Equals(fullAddress, StringComparison.OrdinalIgnoreCase));
+        // Find existing entry based on tracking mode
+        ConnectionHistoryEntry? existing = _settings.HistoryTrackingMode switch
+        {
+            HistoryTrackingMode.ByServerName => _settings.ConnectionHistory.FirstOrDefault(
+                h => h.ServerName.Equals(serverName, StringComparison.OrdinalIgnoreCase)),
+            HistoryTrackingMode.Both => _settings.ConnectionHistory.FirstOrDefault(
+                h => h.FullAddress.Equals(fullAddress, StringComparison.OrdinalIgnoreCase) &&
+                     h.ServerName.Equals(serverName, StringComparison.OrdinalIgnoreCase)),
+            _ => _settings.ConnectionHistory.FirstOrDefault(
+                h => h.FullAddress.Equals(fullAddress, StringComparison.OrdinalIgnoreCase))
+        };
         
         if (existing != null)
         {
@@ -165,7 +173,9 @@ public class AppSettings
     // View options
     public bool VerboseMode { get; set; }
     public bool ShowHexDumps { get; set; }
-    public bool ShowLogPanel { get; set; } = true;
+    public bool ShowLogPanel { get; set; }
+    public bool VerboseLogging { get; set; }
+    public bool ColorizePlayerNames { get; set; } = true;
 
     // Behavior options
     public bool RefreshOnLaunch { get; set; } = true;
@@ -271,6 +281,13 @@ public class AppSettings
     /// <summary>Maximum number of history entries to keep.</summary>
     public int MaxHistoryEntries { get; set; } = 50;
     
+    /// <summary>How to identify unique servers in history: by address or server name.</summary>
+    public HistoryTrackingMode HistoryTrackingMode { get; set; } = HistoryTrackingMode.ByAddress;
+    
+    // Download Dialog
+    /// <summary>Behavior of the WAD download dialog after downloads complete.</summary>
+    public DownloadDialogBehavior DownloadDialogBehavior { get; set; } = DownloadDialogBehavior.CloseOnSuccess;
+    
     // Screenshot consolidation
     /// <summary>Enable automatic screenshot consolidation from testing versions.</summary>
     public bool EnableScreenshotMonitoring { get; set; }
@@ -366,4 +383,40 @@ public class ConnectionHistoryEntry
     public string? GameMode { get; set; }
     
     public string FullAddress => $"{Address}:{Port}";
+}
+
+/// <summary>
+/// Defines how connection history identifies unique servers.
+/// </summary>
+public enum HistoryTrackingMode
+{
+    /// <summary>Track by server IP:Port address. Different addresses = different entries.</summary>
+    ByAddress = 0,
+    
+    /// <summary>Track by server name. Same name = same entry even if address changes.</summary>
+    ByServerName = 1,
+    
+    /// <summary>Track by both address and name. Records exact entries without merging.</summary>
+    Both = 2
+}
+
+/// <summary>
+/// Defines how the WAD download dialog behaves after downloads complete.
+/// </summary>
+public enum DownloadDialogBehavior
+{
+    /// <summary>Always stay open until user closes manually.</summary>
+    StayOpen = 0,
+    
+    /// <summary>Auto-close only if all downloads succeed.</summary>
+    CloseOnSuccess = 1,
+    
+    /// <summary>Auto-close on success only if the application window is focused.</summary>
+    CloseOnSuccessIfFocused = 2,
+    
+    /// <summary>Auto-close on success after a brief delay to show results.</summary>
+    CloseOnSuccessAfterDelay = 3,
+    
+    /// <summary>Always auto-close regardless of success or failure.</summary>
+    AlwaysClose = 4
 }

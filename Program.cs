@@ -1,22 +1,22 @@
+using Avalonia;
+
 namespace ZScape;
 
-static class Program
+class Program
 {
     /// <summary>
     /// The main entry point for the application.
     /// </summary>
     [STAThread]
-    static void Main()
-    {
-        try
-        {
-            ApplicationConfiguration.Initialize();
-            Application.Run(new MainForm());
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Fatal error: {ex}");
-            MessageBox.Show($"Error: {ex.Message}\n\n{ex.StackTrace}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
+    public static void Main(string[] args) => BuildAvaloniaApp()
+        .StartWithClassicDesktopLifetime(args);
+
+    /// <summary>
+    /// Avalonia configuration - do not remove; also used by visual designer.
+    /// </summary>
+    public static AppBuilder BuildAvaloniaApp()
+        => AppBuilder.Configure<App>()
+            .UsePlatformDetect()
+            .WithInterFont()
+            .LogToTrace();
 }

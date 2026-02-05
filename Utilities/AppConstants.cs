@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+
 namespace ZScape.Utilities;
 
 /// <summary>
@@ -185,5 +188,30 @@ public static class AppConstants
     {
         public const int AboutDialogWidth = 400;
         public const int AboutDialogHeight = 250;
+    }
+    
+    /// <summary>
+    /// Display labels for DownloadDialogBehavior enum values.
+    /// Single source of truth for UI ComboBox options.
+    /// </summary>
+    public static class DownloadDialogBehaviorLabels
+    {
+        public static readonly (Services.DownloadDialogBehavior Value, string Label)[] Options =
+        [
+            (Services.DownloadDialogBehavior.StayOpen, "Stay Open"),
+            (Services.DownloadDialogBehavior.CloseOnSuccess, "Close on Success"),
+            (Services.DownloadDialogBehavior.CloseOnSuccessIfFocused, "Close on Success (if focused)"),
+            (Services.DownloadDialogBehavior.CloseOnSuccessAfterDelay, "Close on Success (after delay)"),
+            (Services.DownloadDialogBehavior.AlwaysClose, "Always Close")
+        ];
+        
+        public static string GetLabel(Services.DownloadDialogBehavior behavior) =>
+            Options.FirstOrDefault(o => o.Value == behavior).Label ?? behavior.ToString();
+        
+        public static Services.DownloadDialogBehavior GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Services.DownloadDialogBehavior.CloseOnSuccess;
+        
+        public static int GetIndex(Services.DownloadDialogBehavior behavior) =>
+            Array.FindIndex(Options, o => o.Value == behavior);
     }
 }

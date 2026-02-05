@@ -1,0 +1,313 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:views="clr-namespace:ZScape.Views"
+        xmlns:controls="clr-namespace:ZScape.Controls"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="700"
+        x:Class="ZScape.Views.MainWindow"
+        x:DataType="views:MainWindow"
+        Title="ZScape"
+        Width="1200" Height="700"
+        MinWidth="800" MinHeight="500"
+        WindowStartupLocation="CenterScreen">
+    
+    <Window.Styles>
+        <Style Selector="ToggleButton:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#2D5A27"/>
+        </Style>
+        <Style Selector="ToggleButton:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#3A7033"/>
+        </Style>
+    </Window.Styles>
+    
+    <DockPanel>
+        <!-- Menu Bar -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Refresh" Click="RefreshMenuItem_Click" InputGesture="F5" />
+                <MenuItem Header="_Stop" x:Name="StopMenuItem" Click="StopMenuItem_Click" IsEnabled="False" />
+                <Separator />
+                <MenuItem Header="_Fetch WADs..." Click="FetchWadsMenuItem_Click" />
+                <Separator />
+                <MenuItem Header="E_xit" Click="ExitMenuItem_Click" InputGesture="Alt+F4" />
+            </MenuItem>
+            <MenuItem Header="_View">
+                <MenuItem Header="_Log Panel">
+                    <MenuItem Header="_Show" x:Name="ShowLogPanelMenuItem" Click="ShowLogPanelMenuItem_Click" />
+                    <MenuItem Header="_Verbose Logging" x:Name="VerboseLoggingMenuItem" Click="VerboseLoggingMenuItem_Click" />
+                </MenuItem>
+                <Separator />
+                <MenuItem Header="_Show Empty Servers" x:Name="ShowEmptyMenuItem" Click="ShowEmptyMenuItem_Click" />
+                <MenuItem Header="Show _Full Servers" x:Name="ShowFullMenuItem" Click="ShowFullMenuItem_Click" />
+                <MenuItem Header="Show _Passworded Servers" x:Name="ShowPasswordedMenuItem" Click="ShowPasswordedMenuItem_Click" />
+                <Separator />
+                <MenuItem Header="_Favorites Only" x:Name="FavoritesOnlyMenuItem" Click="FavoritesOnlyMenuItem_Click" />
+            </MenuItem>
+            <MenuItem Header="_Settings">
+                <MenuItem Header="_Refresh on Launch" x:Name="RefreshOnLaunchMenuItem" Click="RefreshOnLaunchMenuItem_Click" />
+                <MenuItem Header="_Auto-Refresh" x:Name="AutoRefreshMenuItem" Click="AutoRefreshMenuItem_Click" />
+                <MenuItem Header="Auto-Refresh _Favorites Only" x:Name="AutoRefreshFavoritesOnlyMenuItem" Click="AutoRefreshFavoritesOnlyMenuItem_Click" />
+                <Separator />
+                <MenuItem Header="_WAD Browser..." Click="WadBrowserMenuItem_Click" />
+                <MenuItem Header="_Testing Version Manager..." Click="TestingVersionsMenuItem_Click" />
+                <Separator />
+                <MenuItem Header="_Preferences..." Click="PreferencesMenuItem_Click" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About ZScape" Click="AboutMenuItem_Click" />
+            </MenuItem>
+        </Menu>
+        
+        <!-- Toolbar -->
+        <Border DockPanel.Dock="Top" Background="{DynamicResource SecondaryBackgroundBrush}" Padding="4,2">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <Button Content="Refresh" Click="RefreshButton_Click" Padding="8,2" />
+                <Button Content="Stop" x:Name="StopButton" Click="StopButton_Click" IsEnabled="False" Padding="8,2" />
+                <TextBlock Text="Search:" VerticalAlignment="Center" Margin="8,0,4,0" />
+                <TextBox x:Name="SearchBox" Watermark="" Width="120" 
+                         TextChanged="SearchBox_TextChanged" Padding="4,2" />
+                <ToggleButton x:Name="HideEmptyCheckBox" Content="Hide Empty" 
+                          IsCheckedChanged="FilterCheckBox_Changed" VerticalAlignment="Center" Padding="8,2" />
+                <ToggleButton x:Name="HideBotOnlyCheckBox" Content="Hide Bot-Only" 
+                          IsCheckedChanged="FilterCheckBox_Changed" VerticalAlignment="Center" Padding="8,2" />
+                <ToggleButton x:Name="HideFullCheckBox" Content="Hide Full" 
+                          IsCheckedChanged="FilterCheckBox_Changed" VerticalAlignment="Center" Padding="8,2" />
+                <ToggleButton x:Name="HidePasswordedCheckBox" Content="Hide Passworded" 
+                          IsCheckedChanged="FilterCheckBox_Changed" VerticalAlignment="Center" Padding="8,2" />
+                <ToggleButton x:Name="FavoritesOnlyCheckBox" Content="Favorites Only" 
+                          IsCheckedChanged="FilterCheckBox_Changed" VerticalAlignment="Center" Padding="8,2" />
+                <TextBlock Text="Mode:" VerticalAlignment="Center" Margin="8,0,4,0" />
+                <controls:PersistentComboBox x:Name="GameModeComboBox" Width="100" 
+                          SelectedIndex="0"
+                          SelectionChanged="GameModeComboBox_SelectionChanged" Padding="4,2" />
+                <Button Content="Advanced Filter..." Click="AdvancedFilterButton_Click" Padding="8,2" />
+                <Button Content="History" Click="HistoryButton_Click" Padding="8,2" />
+            </StackPanel>
+        </Border>
+        
+        <!-- Status Bar -->
+        <Border DockPanel.Dock="Bottom" Background="{DynamicResource SecondaryBackgroundBrush}" 
+                Padding="8,4" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderBrush}">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                <TextBlock x:Name="ServerCountLabel" Text="Servers: 0" Margin="0,0,16,0" />
+                <TextBlock x:Name="PlayerCountLabel" Text="Players: 0" Grid.Column="1" Margin="0,0,16,0" />
+                <TextBlock x:Name="StatusLabel" Text="Ready" Grid.Column="2" />
+                <ProgressBar x:Name="ProgressBar" Grid.Column="3" Width="150" Height="16" 
+                             Minimum="0" Maximum="100" IsVisible="False" IsIndeterminate="False" />
+            </Grid>
+        </Border>
+        
+        <!-- Main Content -->
+        <Grid x:Name="MainContentGrid">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" MinHeight="150" />
+                <RowDefinition Height="5" />
+                <RowDefinition Height="200" MinHeight="80" />
+                <RowDefinition Height="5" />
+                <RowDefinition Height="100" MinHeight="50" />
+            </Grid.RowDefinitions>
+            
+            <!-- Server List with Header -->
+            <DockPanel Grid.Row="0">
+                <!-- Column Headers (Clickable for sorting) -->
+                <Border DockPanel.Dock="Top" Background="{DynamicResource SecondaryBackgroundBrush}" 
+                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0">
+                    <Grid ColumnDefinitions="30,24,*,80,60,100,80,100,140">
+                        <TextBlock Grid.Column="0" Text="" Padding="4,4" />
+                        <TextBlock Grid.Column="1" Text="" Padding="4,4" />
+                        <Button Grid.Column="2" Content="Server Name" Click="SortByName_Click" 
+                                Classes="headerButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+                        <Button Grid.Column="3" Content="Players" Click="SortByPlayers_Click" 
+                                Classes="headerButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+                        <Button Grid.Column="4" Content="Ping" Click="SortByPing_Click" 
+                                Classes="headerButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+                        <Button Grid.Column="5" Content="Map" Click="SortByMap_Click" 
+                                Classes="headerButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+                        <Button Grid.Column="6" Content="Mode" Click="SortByMode_Click" 
+                                Classes="headerButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+                        <Button Grid.Column="7" Content="IWAD" Click="SortByIwad_Click" 
+                                Classes="headerButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+                        <Button Grid.Column="8" Content="Address" Click="SortByAddress_Click" 
+                                Classes="headerButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
+                    </Grid>
+                </Border>
+                
+                <!-- Server List (custom selection handling) -->
+                <ScrollViewer x:Name="ServerScrollViewer" Background="Transparent">
+                    <ScrollViewer.ContextMenu>
+                        <ContextMenu x:Name="ServerContextMenu" Opening="ServerContextMenu_Opening">
+                            <MenuItem Header="_Connect" Click="ConnectMenuItem_Click" FontWeight="Bold" />
+                            <MenuItem Header="_Download WADs..." Click="DownloadWadsMenuItem_Click" />
+                            <Separator />
+                            <MenuItem Header="Copy Connect C_ommand" Click="CopyConnectMenuItem_Click" />
+                            <MenuItem Header="Copy _Address" Click="CopyAddressMenuItem_Click" />
+                            <Separator />
+                            <MenuItem Header="_Refresh Server" Click="RefreshServerMenuItem_Click" />
+                            <MenuItem x:Name="ToggleFavoriteMenuItem" Header="_Add to Favorites" Click="ToggleFavoriteMenuItem_Click" />
+                            <Separator />
+                            <MenuItem Header="_Add Server..." Click="AddServerMenuItem_Click" />
+                        </ContextMenu>
+                    </ScrollViewer.ContextMenu>
+                    <ItemsControl x:Name="ServerItemsControl" ItemsSource="{Binding Servers}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border x:Name="RowBorder" Padding="0,2" Cursor="Hand"
+                                        PointerPressed="ServerRow_PointerPressed"
+                                        PointerEntered="ServerRow_PointerEntered"
+                                        PointerExited="ServerRow_PointerExited"
+                                        DoubleTapped="ServerRow_DoubleTapped">
+                                    <Border.Background>
+                                        <MultiBinding Converter="{x:Static views:MainWindow.SelectionBackgroundConverter}">
+                                            <Binding Path="IsSelected" />
+                                            <Binding Path="IsHovered" />
+                                            <Binding Path="RowBackground" />
+                                        </MultiBinding>
+                                    </Border.Background>
+                                    <Grid ColumnDefinitions="30,24,*,80,60,100,80,100,140">
+                                        <!-- Clickable favorite star -->
+                                        <Button Grid.Column="0" Click="FavoriteButton_Click"
+                                                Background="Transparent" BorderThickness="0" Padding="0"
+                                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                                Cursor="Hand">
+                                            <TextBlock Text="{ReflectionBinding FavoriteIcon}" 
+                                                       Foreground="{ReflectionBinding FavoriteColor}" FontSize="14" />
+                                        </Button>
+                                        <!-- Lock icon for passworded servers -->
+                                        <Viewbox Grid.Column="1" Width="14" Height="14" VerticalAlignment="Center" 
+                                                 HorizontalAlignment="Center" IsVisible="{ReflectionBinding IsPassworded}">
+                                            <Path Fill="#FFCC00" Data="M 12 2 C 9.79 2 8 3.79 8 6 L 8 8 L 6 8 C 4.9 8 4 8.9 4 10 L 4 20 C 4 21.1 4.9 22 6 22 L 18 22 C 19.1 22 20 21.1 20 20 L 20 10 C 20 8.9 19.1 8 18 8 L 16 8 L 16 6 C 16 3.79 14.21 2 12 2 Z M 10 6 C 10 4.9 10.9 4 12 4 C 13.1 4 14 4.9 14 6 L 14 8 L 10 8 Z M 12 17 C 10.9 17 10 16.1 10 15 C 10 13.9 10.9 13 12 13 C 13.1 13 14 13.9 14 15 C 14 16.1 13.1 17 12 17 Z" />
+                                        </Viewbox>
+                                        <TextBlock Grid.Column="2" Text="{ReflectionBinding Name}" 
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0" />
+                                        <TextBlock Grid.Column="3" Text="{ReflectionBinding PlayersDisplay}" 
+                                                   VerticalAlignment="Center" Margin="4,0" />
+                                        <TextBlock Grid.Column="4" Text="{ReflectionBinding Ping}" 
+                                                   VerticalAlignment="Center" Margin="4,0" />
+                                        <TextBlock Grid.Column="5" Text="{ReflectionBinding Map}" 
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0" />
+                                        <TextBlock Grid.Column="6" Text="{ReflectionBinding GameModeDisplay}" 
+                                                   VerticalAlignment="Center" Margin="4,0" />
+                                        <TextBlock Grid.Column="7" Text="{ReflectionBinding IWAD}" 
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0" />
+                                        <TextBlock Grid.Column="8" Text="{ReflectionBinding AddressDisplay}" 
+                                                   VerticalAlignment="Center" Margin="4,0" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </DockPanel>
+            
+            <!-- Splitter -->
+            <GridSplitter x:Name="MainSplitter" Grid.Row="1" ResizeDirection="Rows" 
+                          Background="{DynamicResource BorderBrush}" />
+            
+            <!-- Details Panel -->
+            <Grid Grid.Row="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="200" />
+                    <ColumnDefinition Width="5" />
+                    <ColumnDefinition Width="200" MinWidth="100" />
+                    <ColumnDefinition Width="5" />
+                    <ColumnDefinition Width="400" MinWidth="200" />
+                </Grid.ColumnDefinitions>
+                
+                <!-- Server Details -->
+                <Border Classes="panel" Grid.Column="0" Margin="4">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Top" Classes="header" Text="Server Details" />
+                        <ScrollViewer>
+                            <TextBlock x:Name="ServerDetailsText" TextWrapping="Wrap" />
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+                
+                <GridSplitter x:Name="DetailsSplitter1" Grid.Column="1" ResizeDirection="Columns" 
+                              Background="{DynamicResource BorderBrush}" />
+                
+                <!-- WADs List -->
+                <Border Classes="panel" Grid.Column="2" Margin="4">
+                    <DockPanel>
+                        <TextBlock x:Name="WadsLabel" DockPanel.Dock="Top" Classes="header" Text="WADs" />
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="WadsList">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{ReflectionBinding DisplayText}" 
+                                                   Foreground="{ReflectionBinding StatusColor}" 
+                                                   Margin="2,1" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+                
+                <GridSplitter x:Name="DetailsSplitter2" Grid.Column="3" ResizeDirection="Columns" 
+                              Background="{DynamicResource BorderBrush}" />
+                
+                <!-- Players List -->
+                <Border Classes="panel" Grid.Column="4" Margin="4">
+                    <DockPanel>
+                        <TextBlock x:Name="PlayersLabel" DockPanel.Dock="Top" Classes="header" Text="Players" />
+                        <!-- Column Headers -->
+                        <Grid x:Name="PlayersHeaderGrid" DockPanel.Dock="Top" ColumnDefinitions="*,50,50,80" Margin="2,4,2,2">
+                            <TextBlock Grid.Column="0" Text="Name" FontWeight="SemiBold" Foreground="Gray" />
+                            <TextBlock Grid.Column="1" Text="Score" FontWeight="SemiBold" Foreground="Gray" />
+                            <TextBlock Grid.Column="2" Text="Ping" FontWeight="SemiBold" Foreground="Gray" />
+                            <TextBlock x:Name="TeamHeader" Grid.Column="3" Text="Team" FontWeight="SemiBold" Foreground="Gray" />
+                        </Grid>
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="PlayersGrid">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid ColumnDefinitions="*,50,50,80" Margin="2,1">
+                                            <!-- Colorized player name -->
+                                            <ItemsControl Grid.Column="0" ItemsSource="{ReflectionBinding ColoredNameParts}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Horizontal"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{ReflectionBinding Text}" 
+                                                                   Foreground="{ReflectionBinding Color}"/>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <TextBlock Grid.Column="1" Text="{ReflectionBinding Score}" />
+                                            <TextBlock Grid.Column="2" Text="{ReflectionBinding Ping}" />
+                                            <TextBlock Grid.Column="3" Text="{ReflectionBinding Team}" 
+                                                       Foreground="{ReflectionBinding TeamColor}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </Grid>
+            
+            <!-- Log Splitter -->
+            <GridSplitter Grid.Row="3" x:Name="LogSplitter" ResizeDirection="Rows" 
+                          Background="{DynamicResource BorderBrush}" />
+            
+            <!-- Log Panel -->
+            <Border Grid.Row="4" x:Name="LogPanel" Classes="panel" Margin="4">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Classes="header" Text="Log" />
+                    <controls:LogPanelControl x:Name="LogControl" />
+                </DockPanel>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>

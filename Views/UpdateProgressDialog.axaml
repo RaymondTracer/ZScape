@@ -1,0 +1,34 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ZScape.Views.UpdateProgressDialog"
+        Title="Preparing Update"
+        Width="450" Height="180"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False"
+        ExtendClientAreaToDecorationsHint="False">
+    
+    <Grid Margin="20" RowDefinitions="Auto,Auto,Auto,*,Auto">
+        <!-- Status label -->
+        <TextBlock Grid.Row="0" x:Name="StatusLabel" 
+                   Text="Saving server state..." 
+                   FontWeight="Bold" FontSize="13" Margin="0,0,0,5"/>
+        
+        <!-- Detail label -->
+        <TextBlock Grid.Row="1" x:Name="DetailLabel" 
+                   Text="Preparing..." 
+                   Foreground="Gray" Margin="0,0,0,10"/>
+        
+        <!-- Progress bar -->
+        <ProgressBar Grid.Row="2" x:Name="ProgressBar" 
+                     Minimum="0" Maximum="100" Value="0" 
+                     Height="25" Margin="0,0,0,15"/>
+        
+        <!-- Cancel button -->
+        <Button Grid.Row="4" x:Name="CancelButton" 
+                Content="Cancel" 
+                Width="80" Height="28"
+                HorizontalAlignment="Right"
+                Click="CancelButton_Click"/>
+    </Grid>
+</Window>

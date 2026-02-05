@@ -1,0 +1,278 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ZScape Dark Theme Colors -->
+    <Style>
+        <Style.Resources>
+            <!-- Background Colors -->
+            <Color x:Key="PrimaryBackground">#FF1E1E1E</Color>
+            <Color x:Key="SecondaryBackground">#FF252526</Color>
+            <Color x:Key="TertiaryBackground">#FF2D2D30</Color>
+            
+            <!-- Text Colors -->
+            <Color x:Key="TextPrimary">#FFF1F1F1</Color>
+            <Color x:Key="TextSecondary">#FF999999</Color>
+            <Color x:Key="TextDisabled">#FF646464</Color>
+            
+            <!-- Accent Colors -->
+            <Color x:Key="AccentColor">#FF007ACC</Color>
+            <Color x:Key="AccentHover">#FF1C97EA</Color>
+            
+            <!-- Status Colors -->
+            <Color x:Key="SuccessColor">#FF32CD32</Color>
+            <Color x:Key="WarningColor">#FFFFA500</Color>
+            <Color x:Key="ErrorColor">#FFFF6347</Color>
+            
+            <!-- Border Colors -->
+            <Color x:Key="BorderColor">#FF3E3E42</Color>
+            
+            <!-- Brushes -->
+            <SolidColorBrush x:Key="PrimaryBackgroundBrush" Color="{StaticResource PrimaryBackground}" />
+            <SolidColorBrush x:Key="SecondaryBackgroundBrush" Color="{StaticResource SecondaryBackground}" />
+            <SolidColorBrush x:Key="TertiaryBackgroundBrush" Color="{StaticResource TertiaryBackground}" />
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimary}" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondary}" />
+            <SolidColorBrush x:Key="TextDisabledBrush" Color="{StaticResource TextDisabled}" />
+            <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHover}" />
+            <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
+            <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource SuccessColor}" />
+            <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource WarningColor}" />
+            <SolidColorBrush x:Key="ErrorBrush" Color="{StaticResource ErrorColor}" />
+        </Style.Resources>
+    </Style>
+
+    <!-- Window Style -->
+    <Style Selector="Window">
+        <Setter Property="Background" Value="{StaticResource PrimaryBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+    
+    <!-- Panel Style -->
+    <Style Selector="Panel">
+        <Setter Property="Background" Value="{StaticResource PrimaryBackgroundBrush}" />
+    </Style>
+    
+    <!-- Border Style -->
+    <Style Selector="Border.panel">
+        <Setter Property="Background" Value="{StaticResource SecondaryBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="8" />
+    </Style>
+    
+    <!-- Label/TextBlock Style -->
+    <Style Selector="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+    
+    <Style Selector="TextBlock.header">
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+    
+    <Style Selector="TextBlock.secondary">
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+    </Style>
+    
+    <!-- DataGrid Styles -->
+    <Style Selector="DataGrid">
+        <Setter Property="Background" Value="{StaticResource SecondaryBackgroundBrush}" />
+        <Setter Property="RowBackground" Value="{StaticResource SecondaryBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="GridLinesVisibility" Value="None" />
+        <Setter Property="HeadersVisibility" Value="Column" />
+    </Style>
+    
+    <Style Selector="DataGridColumnHeader">
+        <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="MinHeight" Value="32" />
+    </Style>
+    
+    <Style Selector="DataGridRow">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+    
+    <Style Selector="DataGridRow:pointerover">
+        <Setter Property="Background" Value="#FF3E3E42" />
+    </Style>
+    
+    <Style Selector="DataGridRow:selected">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    </Style>
+    
+    <Style Selector="DataGridCell">
+        <Setter Property="Padding" Value="8,4" />
+    </Style>
+    
+    <!-- ListBox Styles -->
+    <Style Selector="ListBox">
+        <Setter Property="Background" Value="{StaticResource SecondaryBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+    </Style>
+    
+    <Style Selector="ListBoxItem">
+        <Setter Property="Padding" Value="8,4" />
+    </Style>
+    
+    <Style Selector="ListBoxItem:pointerover">
+        <Setter Property="Background" Value="#FF3E3E42" />
+    </Style>
+    
+    <Style Selector="ListBoxItem:selected">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    </Style>
+    
+    <!-- TextBox Styles -->
+    <Style Selector="TextBox">
+        <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="CaretBrush" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="SelectionBrush" Value="{StaticResource AccentBrush}" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Padding" Value="6,4" />
+    </Style>
+    
+    <!-- Button Styles -->
+    <Style Selector="Button">
+        <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    
+    <Style Selector="Button:pointerover">
+        <Setter Property="Background" Value="#FF3E3E42" />
+    </Style>
+    
+    <Style Selector="Button.accent">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    
+    <Style Selector="Button.accent:pointerover">
+        <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+    </Style>
+    
+    <!-- Header Button Style (for clickable column headers) -->
+    <Style Selector="Button.headerButton">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="4,4" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    
+    <Style Selector="Button.headerButton:pointerover">
+        <Setter Property="Background" Value="#FF3E3E42" />
+    </Style>
+    
+    <Style Selector="Button.headerButton:pressed">
+        <Setter Property="Background" Value="#FF505050" />
+    </Style>
+
+    <!-- Menu Styles -->
+    <Style Selector="Menu">
+        <Setter Property="Background" Value="{StaticResource SecondaryBackgroundBrush}" />
+    </Style>
+    
+    <Style Selector="MenuItem">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+    
+    <!-- ScrollBar Styles -->
+    <Style Selector="ScrollViewer">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- ToolTip Style -->
+    <Style Selector="ToolTip">
+        <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+    </Style>
+
+    <!-- ComboBox Style -->
+    <Style Selector="ComboBox">
+        <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Padding" Value="6,4" />
+    </Style>
+    
+    <!-- CheckBox Style with visible box -->
+    <Style Selector="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Padding" Value="8,0,0,0" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid ColumnDefinitions="Auto,*">
+                    <Border x:Name="CheckBorder" 
+                            Width="16" Height="16"
+                            CornerRadius="2"
+                            Background="{StaticResource TertiaryBackgroundBrush}"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1"
+                            VerticalAlignment="Center">
+                        <Path x:Name="CheckMark"
+                              Stroke="White" StrokeThickness="2"
+                              Data="M 2 8 L 6 12 L 14 4"
+                              IsVisible="False"/>
+                    </Border>
+                    <ContentPresenter Grid.Column="1" 
+                                      Content="{TemplateBinding Content}"
+                                      Margin="{TemplateBinding Padding}"
+                                      VerticalAlignment="Center"/>
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    
+    <Style Selector="CheckBox:checked /template/ Border#CheckBorder">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+    </Style>
+    
+    <Style Selector="CheckBox:checked /template/ Path#CheckMark">
+        <Setter Property="IsVisible" Value="True" />
+    </Style>
+
+    <!-- ProgressBar Style -->
+    <Style Selector="ProgressBar">
+        <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+    </Style>
+
+    <!-- NumericUpDown Style - vertical spinner buttons -->
+    <Style Selector="NumericUpDown">
+        <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="MinWidth" Value="70" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Padding" Value="4,0" />
+    </Style>
+    
+    <!-- ButtonSpinner inside NumericUpDown - stack buttons vertically -->
+    <Style Selector="ButtonSpinner">
+        <Setter Property="Height" Value="24" />
+        <Setter Property="AllowSpin" Value="True" />
+    </Style>
+
+</Styles>
