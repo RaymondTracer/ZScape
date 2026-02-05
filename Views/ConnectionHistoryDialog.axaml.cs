@@ -174,9 +174,9 @@ public partial class ConnectionHistoryDialog : Window
     private void LoadHistory()
     {
         HistoryEntries.Clear();
-        var settings = SettingsService.Instance.Settings;
+        var history = SettingsService.Instance.ConnectionHistory;
         int index = 0;
-        foreach (var entry in settings.ConnectionHistory)
+        foreach (var entry in history)
         {
             HistoryEntries.Add(new HistoryEntryViewModel(entry, index++));
         }
@@ -254,10 +254,11 @@ public partial class ConnectionHistoryDialog : Window
         var index = HistoryEntries.IndexOf(entry);
         if (index >= 0)
         {
-            var settings = SettingsService.Instance.Settings;
-            if (index < settings.ConnectionHistory.Count)
+            var history = SettingsService.Instance.ConnectionHistory;
+            if (index < history.Count)
             {
-                settings.ConnectionHistory.RemoveAt(index);
+                history.RemoveAt(index);
+                SettingsService.Instance.SaveHistory();
                 HistoryEntries.RemoveAt(index);
                 _selectedEntry = null;
                 

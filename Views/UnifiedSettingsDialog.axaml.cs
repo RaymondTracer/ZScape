@@ -220,7 +220,7 @@ public partial class UnifiedSettingsDialog : Window
     private void LoadDomainConfigs()
     {
         _domainConfigs.Clear();
-        foreach (var config in Settings.DomainThreadSettings.OrderBy(k => k.Key))
+        foreach (var config in SettingsService.Instance.DomainThreadSettings.OrderBy(k => k.Key))
         {
             var display = new DomainThreadDisplay();
             display.InitializeFromSettings(
@@ -230,7 +230,6 @@ public partial class UnifiedSettingsDialog : Window
                 config.Value.InitialThreads,
                 config.Value.MinSegmentSizeKb,
                 config.Value.AdaptiveLearning,
-                config.Value.IsUserConfigured,
                 config.Value.SuccessCount,
                 config.Value.FailureCount,
                 config.Value.Notes ?? "",
@@ -437,27 +436,28 @@ public partial class UnifiedSettingsDialog : Window
 
     private void SaveDomainConfigs()
     {
-        Settings.DomainThreadSettings.Clear();
+        var domainSettings = SettingsService.Instance.DomainThreadSettings;
+        domainSettings.Clear();
         foreach (var item in _domainConfigs)
         {
             // Normalize domain to lowercase like WinForms
             string domain = item.Domain.ToLowerInvariant().Trim();
             if (string.IsNullOrWhiteSpace(domain)) continue;
             
-            Settings.DomainThreadSettings[domain] = new DomainSettings
+            domainSettings[domain] = new DomainSettings
             {
                 MaxThreads = item.MaxThreads,
                 MaxConcurrentDownloads = item.MaxConcurrentDownloads,
                 InitialThreads = item.InitialThreads,
                 MinSegmentSizeKb = item.MinSegmentSizeKb,
                 AdaptiveLearning = item.AdaptiveLearning,
-                IsUserConfigured = item.IsUserConfigured,
                 SuccessCount = item.SuccessCount,
                 FailureCount = item.FailureCount,
                 Notes = string.IsNullOrWhiteSpace(item.Notes) ? null : item.Notes,
                 LastUpdated = DateTime.UtcNow
             };
         }
+        SettingsService.Instance.SaveDomainSettings();
     }
 
     private void SaveUpdateInterval()
@@ -760,7 +760,6 @@ public partial class UnifiedSettingsDialog : Window
             2,       // InitialThreads
             256,     // MinSegmentSizeKb
             true,    // AdaptiveLearning
-            true,    // IsUserConfigured (user creating it)
             0,       // SuccessCount
             0,       // FailureCount
             "",      // Notes
@@ -910,7 +909,6 @@ public partial class UnifiedSettingsDialog : Window
         private string _notes = "";
         private int _index;
         private bool _isSelected;
-        private bool _isUserConfigured;
         
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
         
@@ -918,7 +916,7 @@ public partial class UnifiedSettingsDialog : Window
         /// Initializes all fields from settings without triggering property setters' side effects.
         /// </summary>
         public void InitializeFromSettings(string domain, int maxThreads, int maxConcurrentDownloads,
-            int initialThreads, int minSegmentSizeKb, bool adaptiveLearning, bool isUserConfigured,
+            int initialThreads, int minSegmentSizeKb, bool adaptiveLearning,
             int successCount, int failureCount, string notes, int index)
         {
             _domain = domain;
@@ -927,7 +925,6 @@ public partial class UnifiedSettingsDialog : Window
             _initialThreads = initialThreads;
             _minSegmentSizeKb = minSegmentSizeKb;
             _adaptiveLearning = adaptiveLearning;
-            _isUserConfigured = isUserConfigured;
             _successCount = successCount;
             _failureCount = failureCount;
             _notes = notes;
@@ -944,7 +941,7 @@ public partial class UnifiedSettingsDialog : Window
         public int MaxThreads
         {
             get => _maxThreads;
-            set { _maxThreads = Math.Max(0, value); IsUserConfigured = true; OnPropertyChanged(nameof(MaxThreads)); }
+            set { _maxThreads = Math.Max(0, value); OnPropertyChanged(nameof(MaxThreads)); }
         }
         
         /// <summary>Max concurrent downloads from this domain. 0 = unlimited.</summary>
@@ -988,12 +985,6 @@ public partial class UnifiedSettingsDialog : Window
         {
             get => _notes;
             set { _notes = value ?? ""; OnPropertyChanged(nameof(Notes)); }
-        }
-        
-        public bool IsUserConfigured
-        {
-            get => _isUserConfigured;
-            set { _isUserConfigured = value; }
         }
         
         public int Index
