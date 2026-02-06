@@ -254,41 +254,67 @@ public partial class MainWindow : Window
 
     #region Settings
 
-    private void LoadSettings()
+    /// <summary>
+    /// Loads settings and applies them to UI controls.
+    /// When restoreWindowLayout is false (e.g. after Preferences dialog), skips
+    /// window position/size, sorting, filters, search text, and splitter positions
+    /// since those reflect the user's current session state, not Preferences changes.
+    /// </summary>
+    private void LoadSettings(bool restoreWindowLayout = true)
     {
         var settings = _settings.Settings;
         
-        // Window position and size
-        if (settings.WindowX >= 0 && settings.WindowY >= 0)
+        if (restoreWindowLayout)
         {
-            Position = new PixelPoint(settings.WindowX, settings.WindowY);
-        }
-        if (settings.WindowWidth > 0 && settings.WindowHeight > 0)
-        {
-            Width = settings.WindowWidth;
-            Height = settings.WindowHeight;
-        }
-        if (settings.WindowMaximized)
-        {
-            WindowState = WindowState.Maximized;
+            // Window position and size - only on initial load
+            if (settings.WindowX >= 0 && settings.WindowY >= 0)
+            {
+                Position = new PixelPoint(settings.WindowX, settings.WindowY);
+            }
+            if (settings.WindowWidth > 0 && settings.WindowHeight > 0)
+            {
+                Width = settings.WindowWidth;
+                Height = settings.WindowHeight;
+            }
+            if (settings.WindowMaximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+            
+            // Sorting - only on initial load
+            _sortColumnIndex = settings.SortColumnIndex;
+            _sortAscending = settings.SortAscending;
+            
+            // Filters - only on initial load (user changes these live during session)
+            if (HideEmptyCheckBox != null) HideEmptyCheckBox.IsChecked = settings.HideEmpty;
+            if (HideBotOnlyCheckBox != null) HideBotOnlyCheckBox.IsChecked = settings.TreatBotOnlyAsEmpty;
+            if (HideFullCheckBox != null) HideFullCheckBox.IsChecked = settings.HideFull;
+            if (HidePasswordedCheckBox != null) HidePasswordedCheckBox.IsChecked = settings.HidePassworded;
+            if (GameModeComboBox != null && settings.GameModeFilterIndex >= 0 && settings.GameModeFilterIndex < GameModes.Count)
+            {
+                GameModeComboBox.SelectedIndex = settings.GameModeFilterIndex;
+            }
+            if (SearchBox != null) SearchBox.Text = settings.SearchText ?? "";
+            
+            // Splitter positions - only on initial load
+            var mainGrid = MainContentGrid;
+            if (mainGrid != null && mainGrid.RowDefinitions.Count >= 3 && settings.MainSplitterDistance > 0)
+            {
+                mainGrid.RowDefinitions[0].Height = new GridLength(settings.MainSplitterDistance, GridUnitType.Pixel);
+                mainGrid.RowDefinitions[2].Height = new GridLength(settings.DetailsSplitterDistance > 0 ? settings.DetailsSplitterDistance : 250, GridUnitType.Pixel);
+            }
+            
+            // Log panel height - only restore if log panel is visible
+            if (settings.ShowLogPanel && settings.LogSplitterDistance > 0 && mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
+            {
+                mainGrid.RowDefinitions[4].Height = new GridLength(settings.LogSplitterDistance, GridUnitType.Pixel);
+            }
+            
+            // Log panel visibility - do this AFTER splitter restore so it can override row 0 sizing
+            SetLogPanelVisible(settings.ShowLogPanel);
         }
         
-        // Sorting
-        _sortColumnIndex = settings.SortColumnIndex;
-        _sortAscending = settings.SortAscending;
-        
-        // Filters
-        if (HideEmptyCheckBox != null) HideEmptyCheckBox.IsChecked = settings.HideEmpty;
-        if (HideBotOnlyCheckBox != null) HideBotOnlyCheckBox.IsChecked = settings.TreatBotOnlyAsEmpty;
-        if (HideFullCheckBox != null) HideFullCheckBox.IsChecked = settings.HideFull;
-        if (HidePasswordedCheckBox != null) HidePasswordedCheckBox.IsChecked = settings.HidePassworded;
-        if (GameModeComboBox != null && settings.GameModeFilterIndex >= 0 && settings.GameModeFilterIndex < GameModes.Count)
-        {
-            GameModeComboBox.SelectedIndex = settings.GameModeFilterIndex;
-        }
-        if (SearchBox != null) SearchBox.Text = settings.SearchText ?? "";
-        
-        // View menu check states
+        // View menu check states - always refresh these
         UpdateMenuCheckMark(ShowLogPanelMenuItem, settings.ShowLogPanel);
         UpdateMenuCheckMark(VerboseLoggingMenuItem, settings.VerboseLogging);
         UpdateMenuCheckMark(ShowFavoritesColumnMenuItem, settings.ShowFavoritesColumn);
@@ -301,23 +327,6 @@ public partial class MainWindow : Window
         
         // Apply verbose logging to logger
         _logger.VerboseMode = settings.VerboseLogging;
-        
-        // Splitter positions - restore row/column sizes from settings FIRST
-        var mainGrid = MainContentGrid;
-        if (mainGrid != null && mainGrid.RowDefinitions.Count >= 3 && settings.MainSplitterDistance > 0)
-        {
-            mainGrid.RowDefinitions[0].Height = new GridLength(settings.MainSplitterDistance, GridUnitType.Pixel);
-            mainGrid.RowDefinitions[2].Height = new GridLength(settings.DetailsSplitterDistance > 0 ? settings.DetailsSplitterDistance : 250, GridUnitType.Pixel);
-        }
-        
-        // Log panel height - only restore if log panel is visible
-        if (settings.ShowLogPanel && settings.LogSplitterDistance > 0 && mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
-        {
-            mainGrid.RowDefinitions[4].Height = new GridLength(settings.LogSplitterDistance, GridUnitType.Pixel);
-        }
-        
-        // Log panel visibility - do this AFTER splitter restore so it can override row 0 sizing
-        SetLogPanelVisible(settings.ShowLogPanel);
         
         // Auto-refresh timer
         UpdateAutoRefreshTimer();
@@ -974,10 +983,10 @@ public partial class MainWindow : Window
         
         await dialog.ShowDialog(this);
         
-        // Reload settings after dialog closes
+        // Reload settings after dialog closes (skip window layout restoration)
         if (dialog.SettingsChanged)
         {
-            LoadSettings();
+            LoadSettings(restoreWindowLayout: false);
             _wadManager.RefreshCache();
             UpdateRowHeights();
             UpdateServerList();
@@ -1542,6 +1551,13 @@ public partial class MainWindow : Window
             {
                 var settingsDialog = new UnifiedSettingsDialog();
                 await settingsDialog.ShowDialog(this);
+                if (settingsDialog.SettingsChanged)
+                {
+                    LoadSettings(restoreWindowLayout: false);
+                    _wadManager.RefreshCache();
+                    UpdateRowHeights();
+                    UpdateServerList();
+                }
             }
             return;
         }
