@@ -291,9 +291,13 @@ public partial class MainWindow : Window
         // View menu check states
         UpdateMenuCheckMark(ShowLogPanelMenuItem, settings.ShowLogPanel);
         UpdateMenuCheckMark(VerboseLoggingMenuItem, settings.VerboseLogging);
+        UpdateMenuCheckMark(ShowFavoritesColumnMenuItem, settings.ShowFavoritesColumn);
         UpdateMenuCheckMark(RefreshOnLaunchMenuItem, settings.RefreshOnLaunch);
         UpdateMenuCheckMark(AutoRefreshMenuItem, settings.AutoRefresh);
         UpdateMenuCheckMark(AutoRefreshFavoritesOnlyMenuItem, settings.AutoRefreshFavoritesOnly);
+        
+        // Apply visible state for favorites column
+        UpdateFavoritesColumnVisibility(settings.ShowFavoritesColumn);
         
         // Apply verbose logging to logger
         _logger.VerboseMode = settings.VerboseLogging;
@@ -889,32 +893,39 @@ public partial class MainWindow : Window
         _logger.VerboseMode = _settings.Settings.VerboseLogging;
         _settings.Save();
     }
-
-    private void ShowEmptyMenuItem_Click(object? sender, RoutedEventArgs e)
+    
+    private void ShowFavoritesColumnMenuItem_Click(object? sender, RoutedEventArgs e)
     {
-        if (HideEmptyCheckBox != null) HideEmptyCheckBox.IsChecked = false;
-        UpdateServerList();
-    }
-
-    private void ShowFullMenuItem_Click(object? sender, RoutedEventArgs e)
-    {
-        if (HideFullCheckBox != null) HideFullCheckBox.IsChecked = false;
-        UpdateServerList();
-    }
-
-    private void ShowPasswordedMenuItem_Click(object? sender, RoutedEventArgs e)
-    {
-        if (HidePasswordedCheckBox != null) HidePasswordedCheckBox.IsChecked = false;
-        UpdateServerList();
-    }
-
-    private void FavoritesOnlyMenuItem_Click(object? sender, RoutedEventArgs e)
-    {
-        if (FavoritesOnlyCheckBox != null)
-            FavoritesOnlyCheckBox.IsChecked = !FavoritesOnlyCheckBox.IsChecked;
-        UpdateServerList();
+        _settings.Settings.ShowFavoritesColumn = !_settings.Settings.ShowFavoritesColumn;
+        UpdateMenuCheckMark(ShowFavoritesColumnMenuItem, _settings.Settings.ShowFavoritesColumn);
+        UpdateFavoritesColumnVisibility(_settings.Settings.ShowFavoritesColumn);
+        _settings.Save();
     }
     
+    private void UpdateRowHeights()
+    {
+        foreach (var serverVm in Servers)
+        {
+            serverVm.NotifyRowHeightChanged();
+        }
+    }
+    
+    private void UpdateFavoritesColumnVisibility(bool visible)
+    {
+        // Update header column visibility
+        var headerColumn = this.FindControl<TextBlock>("FavoritesHeaderColumn");
+        if (headerColumn != null)
+        {
+            headerColumn.IsVisible = visible;
+        }
+        
+        // Notify all server view models that the column visibility changed
+        foreach (var serverVm in Servers)
+        {
+            serverVm.NotifyFavoritesColumnChanged();
+        }
+    }
+
     private void RefreshOnLaunchMenuItem_Click(object? sender, RoutedEventArgs e)
     {
         _settings.Settings.RefreshOnLaunch = !_settings.Settings.RefreshOnLaunch;
@@ -951,7 +962,16 @@ public partial class MainWindow : Window
 
     private async void PreferencesMenuItem_Click(object? sender, RoutedEventArgs e)
     {
+        var previousRowHeight = _settings.Settings.ServerListRowHeight;
         var dialog = new UnifiedSettingsDialog();
+        
+        // Live preview for row height changes
+        dialog.RowHeightPreviewChanged += (_, newHeight) =>
+        {
+            _settings.Settings.ServerListRowHeight = newHeight;
+            UpdateRowHeights();
+        };
+        
         await dialog.ShowDialog(this);
         
         // Reload settings after dialog closes
@@ -959,7 +979,14 @@ public partial class MainWindow : Window
         {
             LoadSettings();
             _wadManager.RefreshCache();
+            UpdateRowHeights();
             UpdateServerList();
+        }
+        else
+        {
+            // Revert live preview if user cancelled
+            _settings.Settings.ServerListRowHeight = previousRowHeight;
+            UpdateRowHeights();
         }
     }
 
@@ -2698,7 +2725,19 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     public ServerInfo Server => _server;
     public string FavoriteIcon => _isFavorite ? "\u2605" : "\u2606"; // Filled/empty star
     public IBrush FavoriteColor => _isFavorite ? Brushes.Gold : Brushes.Gray;
+    public bool ShowFavoritesColumn => SettingsService.Instance.Settings.ShowFavoritesColumn;
     public bool IsPassworded => _server.IsPassworded;
+    public int RowHeight => SettingsService.Instance.Settings.ServerListRowHeight;
+    
+    public void NotifyFavoritesColumnChanged()
+    {
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(ShowFavoritesColumn)));
+    }
+    
+    public void NotifyRowHeightChanged()
+    {
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(RowHeight)));
+    }
     public string Name => DoomColorCodes.StripColorCodes(_server.Name);
     public string PlayersDisplay => _server.BotCount > 0 
         ? $"{_server.HumanPlayerCount}+{_server.BotCount}/{_server.MaxPlayers}"

@@ -38,11 +38,7 @@
                     <MenuItem Header="_Verbose Logging" x:Name="VerboseLoggingMenuItem" Click="VerboseLoggingMenuItem_Click" />
                 </MenuItem>
                 <Separator />
-                <MenuItem Header="_Show Empty Servers" x:Name="ShowEmptyMenuItem" Click="ShowEmptyMenuItem_Click" />
-                <MenuItem Header="Show _Full Servers" x:Name="ShowFullMenuItem" Click="ShowFullMenuItem_Click" />
-                <MenuItem Header="Show _Passworded Servers" x:Name="ShowPasswordedMenuItem" Click="ShowPasswordedMenuItem_Click" />
-                <Separator />
-                <MenuItem Header="_Favorites Only" x:Name="FavoritesOnlyMenuItem" Click="FavoritesOnlyMenuItem_Click" />
+                <MenuItem Header="Show _Favorites Column" x:Name="ShowFavoritesColumnMenuItem" Click="ShowFavoritesColumnMenuItem_Click" />
             </MenuItem>
             <MenuItem Header="_Settings">
                 <MenuItem Header="_Refresh on Launch" x:Name="RefreshOnLaunchMenuItem" Click="RefreshOnLaunchMenuItem_Click" />
@@ -113,8 +109,8 @@
                 <!-- Column Headers (Clickable for sorting) -->
                 <Border DockPanel.Dock="Top" Background="{DynamicResource SecondaryBackgroundBrush}" 
                         BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0">
-                    <Grid ColumnDefinitions="30,24,*,80,60,100,80,100,140">
-                        <TextBlock Grid.Column="0" Text="" Padding="4,4" />
+                    <Grid x:Name="HeaderGrid" ColumnDefinitions="Auto,24,*,80,60,100,80,100,140">
+                        <TextBlock x:Name="FavoritesHeaderColumn" Grid.Column="0" Text="" Padding="4,4" Width="30" />
                         <TextBlock Grid.Column="1" Text="" Padding="4,4" />
                         <Button Grid.Column="2" Content="Server Name" Click="SortByName_Click" 
                                 Classes="headerButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" />
@@ -157,7 +153,8 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border x:Name="RowBorder" Padding="0,2" Cursor="Hand"
+                                <Border x:Name="RowBorder" Padding="0" Cursor="Hand"
+                                        Height="{ReflectionBinding RowHeight}"
                                         PointerPressed="ServerRow_PointerPressed"
                                         PointerEntered="ServerRow_PointerEntered"
                                         PointerExited="ServerRow_PointerExited"
@@ -169,13 +166,14 @@
                                             <Binding Path="RowBackground" />
                                         </MultiBinding>
                                     </Border.Background>
-                                    <Grid ColumnDefinitions="30,24,*,80,60,100,80,100,140">
+                                    <Grid ColumnDefinitions="Auto,24,*,80,60,100,80,100,140">
                                         <!-- Clickable favorite star -->
                                         <Button Grid.Column="0" Click="FavoriteButton_Click"
                                                 Background="Transparent" BorderThickness="0" Padding="0"
                                                 HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                                                 HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                                Cursor="Hand">
+                                                Cursor="Hand" IsVisible="{ReflectionBinding ShowFavoritesColumn}"
+                                                Width="30">
                                             <TextBlock Text="{ReflectionBinding FavoriteIcon}" 
                                                        Foreground="{ReflectionBinding FavoriteColor}" FontSize="14" />
                                         </Button>

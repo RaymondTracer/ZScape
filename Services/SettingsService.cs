@@ -423,6 +423,9 @@ public class AppSettings
     /// <summary>Whether to show only favorite servers.</summary>
     public bool ShowFavoritesOnly { get; set; }
     
+    /// <summary>Row height in pixels for the server list. Range: 18-60.</summary>
+    public int ServerListRowHeight { get; set; } = 26;
+    
     // Server Alerts
     /// <summary>Enable alerts when favorite servers come online with players.</summary>
     public bool EnableFavoriteServerAlerts { get; set; }
