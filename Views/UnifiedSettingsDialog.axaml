@@ -77,7 +77,7 @@
                             
                             <TextBlock Text="Display Options" FontWeight="Bold"/>
                             <CheckBox x:Name="ColorizePlayerNamesCheckBox" 
-                                      Content="Colorize player names using Doom color codes"/>
+                                      Content="Colourize player names"/>
                             
                             <StackPanel Spacing="3">
                                 <TextBlock Text="Server List Row Height (pixels):"/>
