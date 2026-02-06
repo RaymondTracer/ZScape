@@ -79,6 +79,16 @@
                             <CheckBox x:Name="ColorizePlayerNamesCheckBox" 
                                       Content="Colorize player names using Doom color codes"/>
                             
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="Server List Row Height (pixels):"/>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <controls:NumericSpinner x:Name="RowHeightNumeric" 
+                                                   Minimum="18" Maximum="60" Width="70"/>
+                                    <TextBlock Text="(18-60, default 26)" 
+                                               VerticalAlignment="Center" Foreground="Gray"/>
+                                </StackPanel>
+                            </StackPanel>
+                            
                             <Separator Margin="0,10"/>
                             
                             <TextBlock Text="Screenshot Consolidation" FontWeight="Bold"/>

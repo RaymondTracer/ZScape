@@ -30,6 +30,7 @@ public partial class UnifiedSettingsDialog : Window
     private bool _updatingIntervalControls;
 
     public bool SettingsChanged { get; private set; }
+    public event EventHandler<int>? RowHeightPreviewChanged;
 
     public UnifiedSettingsDialog()
     {
@@ -40,6 +41,9 @@ public partial class UnifiedSettingsDialog : Window
         WadPathsListBox.SelectionChanged += WadPathsListBox_SelectionChanged;
         WadDownloadPathTextBox.TextChanged += WadDownloadPathTextBox_TextChanged;
         ZandronumPathTextBox.TextChanged += ZandronumPathTextBox_TextChanged;
+        
+        // Live preview for row height changes
+        RowHeightNumeric.ValueChanged += (_, newValue) => RowHeightPreviewChanged?.Invoke(this, newValue);
         
         // Sync update interval preset and manual controls
         UpdateIntervalPresets.SelectionChanged += UpdateIntervalPresets_SelectionChanged;
@@ -133,6 +137,7 @@ public partial class UnifiedSettingsDialog : Window
         ZandronumTestingPathTextBox.Text = Settings.ZandronumTestingPath;
         HashConcurrencyNumeric.Value = Settings.HashVerificationConcurrency;
         ColorizePlayerNamesCheckBox.IsChecked = Settings.ColorizePlayerNames;
+        RowHeightNumeric.Value = Settings.ServerListRowHeight;
         ScreenshotMonitorCheckBox.IsChecked = Settings.EnableScreenshotMonitoring;
         ScreenshotPathTextBox.Text = Settings.ScreenshotConsolidationPath;
 
@@ -362,6 +367,7 @@ public partial class UnifiedSettingsDialog : Window
         Settings.ZandronumTestingPath = ZandronumTestingPathTextBox.Text ?? "";
         Settings.HashVerificationConcurrency = HashConcurrencyNumeric.Value;
         Settings.ColorizePlayerNames = ColorizePlayerNamesCheckBox.IsChecked ?? true;
+        Settings.ServerListRowHeight = RowHeightNumeric.Value;
         Settings.EnableScreenshotMonitoring = ScreenshotMonitorCheckBox.IsChecked ?? false;
         Settings.ScreenshotConsolidationPath = ScreenshotPathTextBox.Text ?? "";
 

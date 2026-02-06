@@ -16,6 +16,7 @@ public class ServerBrowserService : IDisposable
     private readonly MasterServerClient _masterClient = new();
     private readonly ConcurrentDictionary<string, ServerInfo> _servers = new();
     private readonly Ip2CountryService _ip2CountryService;
+    private List<IPEndPoint> _lastKnownEndpoints = [];
     private CancellationTokenSource? _refreshCts;
     private bool _disposed;
 
@@ -60,9 +61,39 @@ public class ServerBrowserService : IDisposable
         {
             _logger.Info("Starting server refresh...");
 
+            // Cache last known endpoints before clearing so we can fall back if master fails
+            if (_servers.Count > 0)
+            {
+                _lastKnownEndpoints = _servers.Values
+                    .Where(s => s.EndPoint != null)
+                    .Select(s => s.EndPoint!)
+                    .ToList();
+            }
+            
+            // Clear all server data for a clean slate
+            _servers.Clear();
+
             // Get server list from master
-            var masterEndpoints = await _masterClient.GetServerListAsync(_refreshCts.Token);
-            _logger.Info($"Received {masterEndpoints.Count} servers from master");
+            List<IPEndPoint> masterEndpoints;
+            try
+            {
+                masterEndpoints = await _masterClient.GetServerListAsync(_refreshCts.Token);
+                _logger.Info($"Received {masterEndpoints.Count} servers from master");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Master server failed - fall back to last known endpoints
+                if (_lastKnownEndpoints.Count > 0)
+                {
+                    _logger.Warning($"Master server query failed: {ex.Message}");
+                    _logger.Info($"Falling back to {_lastKnownEndpoints.Count} previously known servers");
+                    masterEndpoints = new List<IPEndPoint>(_lastKnownEndpoints);
+                }
+                else
+                {
+                    throw; // No fallback available, propagate the error
+                }
+            }
 
             // Get manual servers (always probe these regardless of master list)
             var manualEndpoints = await GetManualServerEndpointsAsync();
@@ -88,43 +119,16 @@ public class ServerBrowserService : IDisposable
                     endpoints.Add(ep);
             }
 
-            // Create set of manual server addresses for checking
-            var manualAddresses = new HashSet<string>(manualEndpoints.Select(e => e.ToString()));
-            
-            // Mark old servers that are no longer in master list as potentially stale
-            // But don't remove them - they may just be temporarily missing
-            // They'll be removed after consecutive failures during queries
-            var existingKeys = _servers.Keys.ToHashSet();
-            foreach (var key in existingKeys)
-            {
-                if (!allEndpoints.Contains(key))
-                {
-                    // Server not in master list - keep it but it won't be queried
-                    // unless it's a manual server
-                    if (!manualAddresses.Contains(key))
-                    {
-                        _servers.TryRemove(key, out _);
-                    }
-                }
-            }
-
-            // Initialize server entries and mark existing servers as pending refresh
+            // Initialize fresh server entries for querying
             foreach (var endpoint in endpoints)
             {
                 var key = endpoint.ToString();
-                if (_servers.TryGetValue(key, out var existingServer))
-                {
-                    // Mark existing server as pending refresh - data may be stale
-                    existingServer.IsRefreshPending = true;
-                }
-                else
-                {
-                    _servers[key] = new ServerInfo { EndPoint = endpoint, IsRefreshPending = true };
-                }
+                _servers[key] = new ServerInfo { EndPoint = endpoint, IsRefreshPending = true };
             }
 
             // Sort endpoints: favorites first, then manual servers, then rest
             var favorites = _settings.Settings.FavoriteServers;
+            var manualAddresses = new HashSet<string>(manualEndpoints.Select(e => e.ToString()));
             
             endpoints = endpoints
                 .OrderByDescending(e => favorites.Contains(e.ToString()))  // Favorites first
