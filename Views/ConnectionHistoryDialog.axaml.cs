@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -7,6 +8,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using ZScape.Controls;
 using ZScape.Models;
 using ZScape.Services;
 
@@ -24,7 +26,6 @@ public partial class ConnectionHistoryDialog : Window
 
     public ObservableCollection<HistoryEntryViewModel> HistoryEntries { get; } = [];
     
-    private HistoryEntryViewModel? _selectedEntry;
     private ServerBrowserService? _serverBrowserService;
 
     public ConnectionHistoryDialog()
@@ -32,13 +33,53 @@ public partial class ConnectionHistoryDialog : Window
         InitializeComponent();
         DataContext = this;
         
+        // Configure the list view columns
+        HistoryListView.AlternatingRowColors = true;
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Header = "Server Name", Width = 180, MinWidth = 80,
+            BindingPath = "DisplayServerName",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CellPadding = new Thickness(8, 0)
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Header = "Address", Width = 140, MinWidth = 80,
+            BindingPath = "DisplayAddress",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CellPadding = new Thickness(5, 0)
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Header = "Last Played", Width = 90, MinWidth = 60,
+            BindingPath = "LastPlayedDisplay",
+            CellPadding = new Thickness(5, 0)
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Header = "Count", Width = 55, MinWidth = 40,
+            BindingPath = "ConnectionCount",
+            CellPadding = new Thickness(5, 0)
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Header = "Mode", IsStar = true, MinWidth = 60,
+            BindingPath = "GameMode",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CellPadding = new Thickness(5, 0)
+        });
+        HistoryListView.Build(ListViewOverflowMode.AutoScroll);
+
+        // Wire up row events
+        HistoryListView.RowDoubleTapped += OnHistoryRowDoubleTapped;
+
         // Handle Escape key
         KeyDown += OnDialogKeyDown;
         
         Loaded += (_, _) =>
         {
             LoadHistory();
-            HistoryItemsControl.ItemsSource = HistoryEntries;
+            HistoryListView.ItemsSource = HistoryEntries;
             MaxEntriesNumeric.Value = SettingsService.Instance.Settings.MaxHistoryEntries;
             MaxEntriesNumeric.ValueChanged += MaxEntriesNumeric_ValueChanged;
             
@@ -182,49 +223,13 @@ public partial class ConnectionHistoryDialog : Window
         }
     }
     
-    private void SelectEntry(HistoryEntryViewModel? entry)
-    {
-        // Deselect previous
-        if (_selectedEntry != null)
-            _selectedEntry.IsSelected = false;
-        
-        // Select new
-        _selectedEntry = entry;
-        if (_selectedEntry != null)
-            _selectedEntry.IsSelected = true;
-    }
-
-    private HistoryEntryViewModel? GetSelectedEntry() => _selectedEntry;
+    private HistoryEntryViewModel? GetSelectedEntry() => HistoryListView.SelectedItem as HistoryEntryViewModel;
     
-    private void HistoryRow_PointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnHistoryRowDoubleTapped(object? sender, ListViewRowEventArgs e)
     {
-        if (sender is Border border && border.DataContext is HistoryEntryViewModel vm)
-        {
-            SelectEntry(vm);
-        }
-    }
-    
-    private void HistoryRow_DoubleTapped(object? sender, TappedEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is HistoryEntryViewModel vm)
+        if (e.DataContext is HistoryEntryViewModel vm)
         {
             ReconnectRequested?.Invoke(this, vm.Entry);
-        }
-    }
-    
-    private void HistoryRow_PointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is HistoryEntryViewModel vm)
-        {
-            vm.IsHovered = true;
-        }
-    }
-    
-    private void HistoryRow_PointerExited(object? sender, PointerEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is HistoryEntryViewModel vm)
-        {
-            vm.IsHovered = false;
         }
     }
 
@@ -260,7 +265,7 @@ public partial class ConnectionHistoryDialog : Window
                 history.RemoveAt(index);
                 SettingsService.Instance.SaveHistory();
                 HistoryEntries.RemoveAt(index);
-                _selectedEntry = null;
+                HistoryListView.ClearSelection();
                 
                 // Update indices for remaining items
                 for (int i = 0; i < HistoryEntries.Count; i++)
@@ -320,7 +325,7 @@ public partial class ConnectionHistoryDialog : Window
         {
             SettingsService.Instance.ClearConnectionHistory();
             HistoryEntries.Clear();
-            _selectedEntry = null;
+            HistoryListView.ClearSelection();
         }
     }
 
@@ -348,17 +353,10 @@ public partial class ConnectionHistoryDialog : Window
 /// </summary>
 public class HistoryEntryViewModel : INotifyPropertyChanged
 {
-    private static readonly IBrush EvenRowBrush = new SolidColorBrush(Color.Parse("#1E1E1E"));
-    private static readonly IBrush OddRowBrush = new SolidColorBrush(Color.Parse("#252526"));
-    private static readonly IBrush SelectedBrush = new SolidColorBrush(Color.Parse("#094771"));
-    private static readonly IBrush HoverBrush = new SolidColorBrush(Color.Parse("#2A2D2E"));
-    
     private const string OfflineIndicator = "<Offline>";
     private const string RefreshingIndicator = "<Refreshing>";
     private const string UnknownIndicator = "<Unknown>";
     
-    private bool _isSelected;
-    private bool _isHovered;
     private int _index;
     private string? _displayServerName;
     private string? _displayAddress;
@@ -401,49 +399,7 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
     public int Index
     {
         get => _index;
-        set
-        {
-            _index = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowBackground)));
-        }
-    }
-    
-    public bool IsSelected
-    {
-        get => _isSelected;
-        set
-        {
-            if (_isSelected != value)
-            {
-                _isSelected = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowBackground)));
-            }
-        }
-    }
-    
-    public bool IsHovered
-    {
-        get => _isHovered;
-        set
-        {
-            if (_isHovered != value)
-            {
-                _isHovered = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsHovered)));
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowBackground)));
-            }
-        }
-    }
-    
-    public IBrush RowBackground
-    {
-        get
-        {
-            if (_isSelected) return SelectedBrush;
-            if (_isHovered) return HoverBrush;
-            return _index % 2 == 0 ? EvenRowBrush : OddRowBrush;
-        }
+        set => _index = value;
     }
     
     /// <summary>

@@ -36,8 +36,6 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _serverListUpdateTimer = new();
     
     private ServerInfo? _selectedServer;
-    private string? _selectedServerAddress; // For selection preservation
-    private bool _suppressSelectionEvents; // Prevent selection flicker during updates
     private int _sortColumnIndex = 3; // Default to Players column
     private bool _sortAscending = false;
     private bool _isInitializing = true;
@@ -56,12 +54,8 @@ public partial class MainWindow : Window
     private readonly object _logLock = new();
     
     // Custom control references (initialized after InitializeComponent)
-    private ScrollViewer? _serverScrollViewer;
-    private ItemsControl? _serverItemsControl;
     private LogPanelControl? _logControl;
-    
-    // Selection background converter for custom server list
-    public static readonly SelectionBackgroundMultiConverter SelectionBackgroundConverter = new();
+    private MenuItem? ToggleFavoriteMenuItem;
     
     // Observable collections for data binding
     public ObservableCollection<ServerViewModel> Servers { get; private set; } = [];
@@ -136,33 +130,15 @@ public partial class MainWindow : Window
         // Write debug to file 
         var debugPath = Path.Combine(AppContext.BaseDirectory, "debug.log");
         
-        // Find and store references to controls
-        _serverScrollViewer = this.FindControl<ScrollViewer>("ServerScrollViewer");
-        _serverItemsControl = this.FindControl<ItemsControl>("ServerItemsControl");
+        // Initialize the server list view with columns
+        SetupServerListView();
+        
         _logControl = this.FindControl<LogPanelControl>("LogControl");
         var playersGrid = this.FindControl<ItemsControl>("PlayersGrid");
         var wadsList = this.FindControl<ItemsControl>("WadsList");
         var gameModeCombo = this.FindControl<PersistentComboBox>("GameModeComboBox");
         
-        File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] ServerItemsControl={_serverItemsControl != null}, LogControl={_logControl != null}\n");
-        
-        if (_serverItemsControl != null) 
-        {
-            _serverItemsControl.ItemsSource = Servers;
-            
-            // Wire up middle-click on scroll viewer and scroll handler to clear hover states
-            if (_serverScrollViewer != null)
-            {
-                _serverScrollViewer.PointerPressed += ServerScrollViewer_PointerPressed;
-                _serverScrollViewer.ScrollChanged += ServerScrollViewer_ScrollChanged;
-            }
-            
-            File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] ServerItemsControl initialized\n");
-        }
-        else
-        {
-            File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] ERROR: ServerItemsControl NOT FOUND\n");
-        }
+        File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] ServerListView initialized, LogControl={_logControl != null}\n");
         
         if (playersGrid != null) playersGrid.ItemsSource = Players;
         if (wadsList != null) wadsList.ItemsSource = Wads;
@@ -182,6 +158,173 @@ public partial class MainWindow : Window
             gameModeCombo.ItemsSource = GameModes;
             gameModeCombo.SelectedIndex = 0;
         }
+    }
+
+    private void SetupServerListView()
+    {
+        // Semantic row base colours (full=red tint, empty=dim, passworded=yellow tint)
+        ServerListView.RowBaseBackgroundPath = "RowBackground";
+        ServerListView.RowHeightPath = "RowHeight";
+
+        // Column 0: Favorites star (fixed, toggleable)
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "", Width = 30, IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var btn = new Button
+                {
+                    Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(0),
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
+                    HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                    VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+                    Width = 30
+                };
+                btn.Bind(Button.IsVisibleProperty, new Avalonia.Data.Binding("ShowFavoritesColumn"));
+                var tb = new TextBlock { FontSize = 14 };
+                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("FavoriteIcon"));
+                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("FavoriteColor"));
+                btn.Content = tb;
+                btn.Click += FavoriteButton_Click;
+                return btn;
+            }
+        });
+
+        // Column 1: Lock icon (fixed)
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "", Width = 24, IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var viewbox = new Viewbox
+                {
+                    Width = 14, Height = 14,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center
+                };
+                viewbox.Bind(Viewbox.IsVisibleProperty, new Avalonia.Data.Binding("IsPassworded"));
+                viewbox.Child = new Avalonia.Controls.Shapes.Path
+                {
+                    Fill = new SolidColorBrush(Avalonia.Media.Color.Parse("#FFCC00")),
+                    Data = Avalonia.Media.Geometry.Parse("M 12 2 C 9.79 2 8 3.79 8 6 L 8 8 L 6 8 C 4.9 8 4 8.9 4 10 L 4 20 C 4 21.1 4.9 22 6 22 L 18 22 C 19.1 22 20 21.1 20 20 L 20 10 C 20 8.9 19.1 8 18 8 L 16 8 L 16 6 C 16 3.79 14.21 2 12 2 Z M 10 6 C 10 4.9 10.9 4 12 4 C 13.1 4 14 4.9 14 6 L 14 8 L 10 8 Z M 12 17 C 10.9 17 10 16.1 10 15 C 10 13.9 10.9 13 12 13 C 13.1 13 14 13.9 14 15 C 14 16.1 13.1 17 12 17 Z")
+                };
+                return viewbox;
+            }
+        });
+
+        // Column 2: Server Name (star-sized, resizable)
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "Server Name", IsStar = true, MinWidth = 100,
+            BindingPath = "Name",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByName_Click
+        });
+
+        // Column 3: Players
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "Players", Width = 80, MinWidth = 40,
+            BindingPath = "PlayersDisplay",
+            SortClick = SortByPlayers_Click
+        });
+
+        // Column 4: Ping
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "Ping", Width = 60, MinWidth = 35,
+            BindingPath = "Ping",
+            SortClick = SortByPing_Click
+        });
+
+        // Column 5: Map
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "Map", Width = 100, MinWidth = 50,
+            BindingPath = "Map",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByMap_Click
+        });
+
+        // Column 6: Mode
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "Mode", Width = 80, MinWidth = 40,
+            BindingPath = "GameModeDisplay",
+            SortClick = SortByMode_Click
+        });
+
+        // Column 7: IWAD
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "IWAD", Width = 100, MinWidth = 50,
+            BindingPath = "IWAD",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByIwad_Click
+        });
+
+        // Column 8: Address
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "Address", Width = 140, MinWidth = 80,
+            BindingPath = "AddressDisplay",
+            SortClick = SortByAddress_Click
+        });
+
+        ServerListView.Build(ListViewOverflowMode.AutoScroll);
+        ServerListView.ItemsSource = Servers;
+
+        // Set up context menu on the scroll viewer
+        var contextMenu = new ContextMenu();
+        contextMenu.Opening += ServerContextMenu_Opening;
+        
+        var connectItem = new MenuItem { Header = "_Connect", FontWeight = FontWeight.Bold };
+        connectItem.Click += ConnectMenuItem_Click;
+        contextMenu.Items.Add(connectItem);
+        
+        var downloadItem = new MenuItem { Header = "_Download WADs..." };
+        downloadItem.Click += DownloadWadsMenuItem_Click;
+        contextMenu.Items.Add(downloadItem);
+        
+        contextMenu.Items.Add(new Separator());
+        
+        var copyConnectItem = new MenuItem { Header = "Copy Connect C_ommand" };
+        copyConnectItem.Click += CopyConnectMenuItem_Click;
+        contextMenu.Items.Add(copyConnectItem);
+        
+        var copyAddressItem = new MenuItem { Header = "Copy _Address" };
+        copyAddressItem.Click += CopyAddressMenuItem_Click;
+        contextMenu.Items.Add(copyAddressItem);
+        
+        contextMenu.Items.Add(new Separator());
+        
+        var refreshItem = new MenuItem { Header = "_Refresh Server" };
+        refreshItem.Click += RefreshServerMenuItem_Click;
+        contextMenu.Items.Add(refreshItem);
+        
+        ToggleFavoriteMenuItem = new MenuItem { Header = "_Add to Favorites" };
+        ToggleFavoriteMenuItem.Click += ToggleFavoriteMenuItem_Click;
+        contextMenu.Items.Add(ToggleFavoriteMenuItem);
+        
+        contextMenu.Items.Add(new Separator());
+        
+        var addServerItem = new MenuItem { Header = "_Add Server..." };
+        addServerItem.Click += AddServerMenuItem_Click;
+        contextMenu.Items.Add(addServerItem);
+        
+        ServerListView.ContextMenu = contextMenu;
+
+        // Wire up row events
+        ServerListView.RowPressed += OnServerRowPressed;
+        ServerListView.RowDoubleTapped += OnServerRowDoubleTapped;
+        ServerListView.SelectionChanged += OnServerSelectionChanged;
+
+        // Wire up scroll viewer events for middle-click
+        ServerListView.ScrollViewer.PointerPressed += ServerScrollViewer_PointerPressed;
     }
 
     #region Event Subscriptions
@@ -438,12 +581,6 @@ public partial class MainWindow : Window
 
     private void UpdateServerList()
     {
-        // Clear all hover states to prevent stale highlights during list updates
-        foreach (var server in Servers)
-        {
-            server.IsHovered = false;
-        }
-        
         // Preserve current selection BEFORE any changes
         string? savedAddress = _selectedServer != null 
             ? $"{_selectedServer.Address}:{_selectedServer.Port}" 
@@ -499,10 +636,6 @@ public partial class MainWindow : Window
             {
                 var data = newServerMap[address];
                 var vm = new ServerViewModel(data.Server, data.IsFavorite, data.IsManual);
-                if (address == savedAddress)
-                {
-                    vm.IsSelected = true;
-                }
                 Servers.Add(vm);
             }
         }
@@ -529,15 +662,16 @@ public partial class MainWindow : Window
             }
         }
         
-        // Restore selection state
+        // Restore selection state via built-in highlighting
         if (savedAddress != null)
         {
-            foreach (var vm in Servers)
+            var restoredVm = Servers.FirstOrDefault(vm => vm.AddressDisplay == savedAddress);
+            if (restoredVm != null)
             {
-                vm.IsSelected = vm.AddressDisplay == savedAddress;
+                ServerListView.SelectItem(restoredVm);
+                _selectedServer = _browserService.Servers.FirstOrDefault(s => 
+                    $"{s.Address}:{s.Port}" == savedAddress);
             }
-            _selectedServer = _browserService.Servers.FirstOrDefault(s => 
-                $"{s.Address}:{s.Port}" == savedAddress);
         }
         
         UpdateStatusBar();
@@ -629,10 +763,10 @@ public partial class MainWindow : Window
         return _sortColumnIndex switch
         {
             2 => (_sortAscending ? servers.OrderBy(s => s.Name) : servers.OrderByDescending(s => s.Name)).ToList(),
-            // Sort by players: prioritize human players, then total players as tiebreaker
+            // Sort by players: prioritize human players, then spectators as tiebreaker, then total
             3 => _sortAscending 
-                ? servers.OrderBy(s => s.HumanPlayerCount).ThenBy(s => s.CurrentPlayers).ToList()
-                : servers.OrderByDescending(s => s.HumanPlayerCount).ThenByDescending(s => s.CurrentPlayers).ToList(),
+                ? servers.OrderBy(s => s.HumanPlayerCount).ThenBy(s => s.SpectatorCount).ThenBy(s => s.CurrentPlayers).ToList()
+                : servers.OrderByDescending(s => s.HumanPlayerCount).ThenByDescending(s => s.SpectatorCount).ThenByDescending(s => s.CurrentPlayers).ToList(),
             4 => (_sortAscending ? servers.OrderBy(s => s.Ping) : servers.OrderByDescending(s => s.Ping)).ToList(),
             5 => (_sortAscending ? servers.OrderBy(s => s.Map) : servers.OrderByDescending(s => s.Map)).ToList(),
             6 => (_sortAscending ? servers.OrderBy(s => s.GameMode.Name) : servers.OrderByDescending(s => s.GameMode.Name)).ToList(),
@@ -921,12 +1055,8 @@ public partial class MainWindow : Window
     
     private void UpdateFavoritesColumnVisibility(bool visible)
     {
-        // Update header column visibility
-        var headerColumn = this.FindControl<TextBlock>("FavoritesHeaderColumn");
-        if (headerColumn != null)
-        {
-            headerColumn.IsVisible = visible;
-        }
+        // Toggle the favorites column visibility (logical column 0)
+        ServerListView.SetColumnVisible(0, visible);
         
         // Notify all server view models that the column visibility changed
         foreach (var serverVm in Servers)
@@ -1272,30 +1402,23 @@ public partial class MainWindow : Window
     #region Event Handlers - Server List
 
     /// <summary>
-    /// Handle row click - select the server.
+    /// Handle row click - middle-button skip is handled separately.
+    /// Selection is managed by the built-in highlighting; this just handles
+    /// any additional per-click logic.
     /// </summary>
-    private void ServerRow_PointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnServerRowPressed(object? sender, ListViewRowPointerEventArgs e)
     {
-        if (sender is Border border && border.DataContext is ServerViewModel vm)
+        // Middle-click is handled by ServerScrollViewer_PointerPressed
+    }
+    
+    /// <summary>
+    /// Fired when the built-in selection changes. Updates the backing _selectedServer
+    /// and refreshes detail panels.
+    /// </summary>
+    private void OnServerSelectionChanged(object? sender, EventArgs e)
+    {
+        if (ServerListView.SelectedItem is ServerViewModel vm)
         {
-            var point = e.GetCurrentPoint(border);
-            
-            // Skip if middle-button (handled by scroll viewer)
-            if (point.Properties.IsMiddleButtonPressed)
-            {
-                return;
-            }
-            
-            // Deselect all others
-            foreach (var server in Servers)
-            {
-                server.IsSelected = false;
-            }
-            
-            // Select this one
-            vm.IsSelected = true;
-            
-            // Update backing field
             _selectedServer = _browserService.Servers.FirstOrDefault(s => 
                 $"{s.Address}:{s.Port}" == vm.AddressDisplay);
             
@@ -1306,14 +1429,18 @@ public partial class MainWindow : Window
                 DisplayPlayerList(_selectedServer);
             }
         }
+        else
+        {
+            _selectedServer = null;
+        }
     }
     
     /// <summary>
     /// Handle row double-click - launch the server.
     /// </summary>
-    private void ServerRow_DoubleTapped(object? sender, TappedEventArgs e)
+    private void OnServerRowDoubleTapped(object? sender, ListViewRowEventArgs e)
     {
-        if (sender is Border border && border.DataContext is ServerViewModel vm)
+        if (e.DataContext is ServerViewModel vm)
         {
             var server = _browserService.Servers.FirstOrDefault(s => 
                 $"{s.Address}:{s.Port}" == vm.AddressDisplay);
@@ -1326,48 +1453,11 @@ public partial class MainWindow : Window
     }
     
     /// <summary>
-    /// Handle hover enter - highlight the row.
-    /// </summary>
-    private void ServerRow_PointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is ServerViewModel vm)
-        {
-            vm.IsHovered = true;
-        }
-    }
-    
-    /// <summary>
-    /// Handle hover exit - remove highlight.
-    /// </summary>
-    private void ServerRow_PointerExited(object? sender, PointerEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is ServerViewModel vm)
-        {
-            vm.IsHovered = false;
-        }
-    }
-    
-    /// <summary>
-    /// Handle scroll - clear all hover states to avoid stale highlights.
-    /// </summary>
-    private void ServerScrollViewer_ScrollChanged(object? sender, ScrollChangedEventArgs e)
-    {
-        // Clear all hover states when scrolling to avoid visual artifacts
-        foreach (var server in Servers)
-        {
-            if (server.IsHovered)
-            {
-                server.IsHovered = false;
-            }
-        }
-    }
-    
-    /// <summary>
     /// Handle middle-click on scroll viewer for server refresh.
     /// </summary>
     private void ServerScrollViewer_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        var point = e.GetCurrentPoint(_serverScrollViewer);
+        var point = e.GetCurrentPoint(ServerListView.ScrollViewer);
         if (point.Properties.IsMiddleButtonPressed)
         {
             // Find the row under the pointer
@@ -2519,23 +2609,8 @@ public partial class MainWindow : Window
             var vm = Servers.FirstOrDefault(s => s.AddressDisplay == address);
             if (vm != null)
             {
-                // Deselect all and select this one
-                foreach (var server in Servers)
-                {
-                    server.IsSelected = false;
-                }
-                vm.IsSelected = true;
-                
-                // Update _selectedServer and display details
-                _selectedServer = _browserService.Servers.FirstOrDefault(s => 
-                    $"{s.Address}:{s.Port}" == vm.AddressDisplay);
-                
-                if (_selectedServer != null)
-                {
-                    DisplayServerDetails(_selectedServer);
-                    DisplayWadList(_selectedServer);
-                    DisplayPlayerList(_selectedServer);
-                }
+                // Select via built-in highlighting (also fires SelectionChanged)
+                ServerListView.SelectItem(vm);
             }
         });
     }
@@ -2661,8 +2736,6 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     private ServerInfo _server;
     private bool _isFavorite;
     private bool _isManual;
-    private bool _isSelected;
-    private bool _isHovered;
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
@@ -2712,32 +2785,6 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
         }
     }
 
-    public bool IsSelected
-    {
-        get => _isSelected;
-        set
-        {
-            if (_isSelected != value)
-            {
-                _isSelected = value;
-                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsSelected)));
-            }
-        }
-    }
-    
-    public bool IsHovered
-    {
-        get => _isHovered;
-        set
-        {
-            if (_isHovered != value)
-            {
-                _isHovered = value;
-                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsHovered)));
-            }
-        }
-    }
-
     public ServerInfo Server => _server;
     public string FavoriteIcon => _isFavorite ? "\u2605" : "\u2606"; // Filled/empty star
     public IBrush FavoriteColor => _isFavorite ? Brushes.Gold : Brushes.Gray;
@@ -2755,9 +2802,23 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(RowHeight)));
     }
     public string Name => DoomColorCodes.StripColorCodes(_server.Name);
-    public string PlayersDisplay => _server.BotCount > 0 
-        ? $"{_server.HumanPlayerCount}+{_server.BotCount}/{_server.MaxPlayers}"
-        : $"{_server.CurrentPlayers}/{_server.MaxPlayers}";
+    public string PlayersDisplay
+    {
+        get
+        {
+            var active = _server.HumanPlayerCount;
+            var bots = _server.BotCount;
+            var specs = _server.SpectatorCount;
+            
+            if (bots > 0 && specs > 0)
+                return $"{active}+{bots}b+{specs}s/{_server.MaxPlayers}";
+            if (bots > 0)
+                return $"{active}+{bots}b/{_server.MaxPlayers}";
+            if (specs > 0)
+                return $"{active}+{specs}s/{_server.MaxPlayers}";
+            return $"{active}/{_server.MaxPlayers}";
+        }
+    }
     public int Ping => _server.Ping;
     public string Map => _server.Map;
     public string GameModeDisplay => _server.GameMode.ShortName;
@@ -2891,41 +2952,3 @@ public class LogEntryViewModel
     }
 }
 
-/// <summary>
-/// Multi-value converter for server row selection/hover background.
-/// Combines IsSelected, IsHovered, and RowBackground.
-/// </summary>
-public class SelectionBackgroundMultiConverter : Avalonia.Data.Converters.IMultiValueConverter
-{
-    private static readonly IBrush SelectedBrush = new SolidColorBrush(Color.FromRgb(0, 80, 160));
-    private static readonly IBrush HoverBrush = new SolidColorBrush(Color.FromRgb(55, 55, 65));
-    
-    public object? Convert(IList<object?> values, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
-    {
-        // Expects: IsSelected, IsHovered, RowBackground
-        if (values.Count >= 3)
-        {
-            bool isSelected = values[0] is bool sel && sel;
-            bool isHovered = values[1] is bool hov && hov;
-            IBrush rowBackground = values[2] as IBrush ?? Brushes.Transparent;
-            
-            if (isSelected)
-            {
-                return SelectedBrush;
-            }
-            if (isHovered)
-            {
-                return HoverBrush;
-            }
-            return rowBackground;
-        }
-        
-        // Fallback for 2 values (old format)
-        if (values.Count >= 2 && values[0] is bool isSelectedOld && values[1] is IBrush rowBg)
-        {
-            return isSelectedOld ? SelectedBrush : rowBg;
-        }
-        
-        return Brushes.Transparent;
-    }
-}

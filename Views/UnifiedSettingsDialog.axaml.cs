@@ -1,6 +1,10 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using System;
@@ -9,6 +13,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using ZScape.Controls;
 using ZScape.Services;
 using ZScape.Utilities;
 
@@ -25,7 +30,6 @@ public partial class UnifiedSettingsDialog : Window
     private ObservableCollection<string> _wadPaths = new();
     private ObservableCollection<string> _downloadSites = new();
     private ObservableCollection<DomainThreadDisplay> _domainConfigs = new();
-    private DomainThreadDisplay? _selectedDomain;
     private string _lastValidDownloadPath = string.Empty;
     private bool _updatingIntervalControls;
 
@@ -53,6 +57,7 @@ public partial class UnifiedSettingsDialog : Window
         // Handle Escape/Enter keys
         KeyDown += OnDialogKeyDown;
         
+        SetupDomainListView();
         LoadSettings();
     }
     
@@ -72,6 +77,154 @@ public partial class UnifiedSettingsDialog : Window
                 e.Handled = true;
             }
         }
+    }
+
+    private void SetupDomainListView()
+    {
+        DomainListView.AlternatingRowColors = true;
+        DomainListView.RowHeight = 28;
+        DomainListView.SuppressHandCursor = true;
+
+        // Domain name (editable text)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "Domain",
+            Width = 140,
+            MinWidth = 80,
+            IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBox { Margin = new Thickness(4, 0) };
+                tb.Classes.Add("editCell");
+                tb.Bind(TextBox.TextProperty, new Binding("Domain") { Mode = BindingMode.TwoWay });
+                return tb;
+            }
+        });
+
+        // Threads (editable number)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "Threads",
+            Width = 55,
+            MinWidth = 40,
+            IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBox();
+                tb.Classes.Add("editCellNum");
+                tb.Bind(TextBox.TextProperty, new Binding("MaxThreads") { Mode = BindingMode.TwoWay });
+                return tb;
+            }
+        });
+
+        // DL Lim (editable number)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "DL Lim",
+            Width = 50,
+            MinWidth = 35,
+            IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBox();
+                tb.Classes.Add("editCellNum");
+                tb.Bind(TextBox.TextProperty, new Binding("MaxConcurrentDownloads") { Mode = BindingMode.TwoWay });
+                return tb;
+            }
+        });
+
+        // Initial (editable number)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "Initial",
+            Width = 50,
+            MinWidth = 35,
+            IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBox();
+                tb.Classes.Add("editCellNum");
+                tb.Bind(TextBox.TextProperty, new Binding("InitialThreads") { Mode = BindingMode.TwoWay });
+                return tb;
+            }
+        });
+
+        // Seg KB (editable number)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "Seg KB",
+            Width = 55,
+            MinWidth = 40,
+            IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBox();
+                tb.Classes.Add("editCellNum");
+                tb.Bind(TextBox.TextProperty, new Binding("MinSegmentSizeKb") { Mode = BindingMode.TwoWay });
+                return tb;
+            }
+        });
+
+        // Adaptive (checkbox)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "Adaptive",
+            Width = 55,
+            MinWidth = 40,
+            IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var cb = new CheckBox
+                {
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                cb.Bind(CheckBox.IsCheckedProperty, new Binding("AdaptiveLearning") { Mode = BindingMode.TwoWay });
+                return cb;
+            }
+        });
+
+        // OK count (read-only)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "OK",
+            BindingPath = "SuccessCount",
+            Width = 40,
+            MinWidth = 30,
+            IsFixedWidth = true,
+            ContentAlignment = HorizontalAlignment.Center,
+            Foreground = new SolidColorBrush(Color.Parse("#888"))
+        });
+
+        // Fail count (read-only)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "Fail",
+            BindingPath = "FailureCount",
+            Width = 40,
+            MinWidth = 30,
+            IsFixedWidth = true,
+            ContentAlignment = HorizontalAlignment.Center,
+            Foreground = new SolidColorBrush(Color.Parse("#888"))
+        });
+
+        // Notes (editable text, star-sized)
+        DomainListView.AddColumn(new ListViewColumn
+        {
+            Header = "Notes",
+            IsStar = true,
+            MinWidth = 60,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBox { Margin = new Thickness(2, 0, 4, 0) };
+                tb.Classes.Add("editCell");
+                tb.Bind(TextBox.TextProperty, new Binding("Notes") { Mode = BindingMode.TwoWay });
+                return tb;
+            }
+        });
+
+        DomainListView.RowGotFocus += DomainListView_RowGotFocus;
+        DomainListView.Build(ListViewOverflowMode.AutoScroll);
     }
 
     private void CategoryList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -242,7 +395,7 @@ public partial class UnifiedSettingsDialog : Window
             );
             _domainConfigs.Add(display);
         }
-        DomainListControl.ItemsSource = _domainConfigs;
+        DomainListView.ItemsSource = _domainConfigs;
     }
 
     private void LoadUpdateInterval()
@@ -776,10 +929,10 @@ public partial class UnifiedSettingsDialog : Window
 
     private void RemoveDomain_Click(object? sender, RoutedEventArgs e)
     {
-        if (_selectedDomain != null)
+        if (DomainListView.SelectedItem is DomainThreadDisplay selected)
         {
-            _domainConfigs.Remove(_selectedDomain);
-            _selectedDomain = null;
+            _domainConfigs.Remove(selected);
+            DomainListView.ClearSelection();
             // Update indices
             for (int i = 0; i < _domainConfigs.Count; i++)
             {
@@ -791,35 +944,16 @@ public partial class UnifiedSettingsDialog : Window
     private void ResetDomains_Click(object? sender, RoutedEventArgs e)
     {
         _domainConfigs.Clear();
-        _selectedDomain = null;
+        DomainListView.ClearSelection();
     }
 
-    private void DomainRow_PointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is DomainThreadDisplay domain)
-        {
-            SelectDomainRow(domain);
-        }
-    }
-
-    private void DomainRow_GotFocus(object? sender, Avalonia.Input.GotFocusEventArgs e)
+    private void DomainListView_RowGotFocus(object? sender, ListViewRowEventArgs e)
     {
         // When any child control (TextBox, CheckBox) gets focus, select the row
-        if (sender is Border border && border.DataContext is DomainThreadDisplay domain)
+        if (e.DataContext is DomainThreadDisplay domain)
         {
-            SelectDomainRow(domain);
+            DomainListView.SelectItem(domain);
         }
-    }
-
-    private void SelectDomainRow(DomainThreadDisplay domain)
-    {
-        // Deselect previous
-        if (_selectedDomain != null)
-            _selectedDomain.IsSelected = false;
-        
-        // Select new
-        _selectedDomain = domain;
-        _selectedDomain.IsSelected = true;
     }
 
     private async void CheckNowButton_Click(object? sender, RoutedEventArgs e)
@@ -900,10 +1034,6 @@ public partial class UnifiedSettingsDialog : Window
 
     private class DomainThreadDisplay : System.ComponentModel.INotifyPropertyChanged
     {
-        private static readonly IBrush EvenRowBrush = new SolidColorBrush(Color.Parse("#1E1E1E"));
-        private static readonly IBrush OddRowBrush = new SolidColorBrush(Color.Parse("#252526"));
-        private static readonly IBrush SelectedBrush = new SolidColorBrush(Color.Parse("#094771"));
-        
         private string _domain = "";
         private int _maxThreads;
         private int _maxConcurrentDownloads;
@@ -914,7 +1044,6 @@ public partial class UnifiedSettingsDialog : Window
         private int _failureCount;
         private string _notes = "";
         private int _index;
-        private bool _isSelected;
         
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
         
@@ -996,16 +1125,8 @@ public partial class UnifiedSettingsDialog : Window
         public int Index
         {
             get => _index;
-            set { _index = value; OnPropertyChanged(nameof(Index)); OnPropertyChanged(nameof(RowBackground)); }
+            set { _index = value; OnPropertyChanged(nameof(Index)); }
         }
-        
-        public bool IsSelected
-        {
-            get => _isSelected;
-            set { _isSelected = value; OnPropertyChanged(nameof(IsSelected)); OnPropertyChanged(nameof(RowBackground)); }
-        }
-        
-        public IBrush RowBackground => IsSelected ? SelectedBrush : (Index % 2 == 0 ? EvenRowBrush : OddRowBrush);
         
         private void OnPropertyChanged(string propertyName)
         {

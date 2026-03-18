@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -5,25 +6,20 @@ using Avalonia.Media;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using ZScape.Controls;
 using ZScape.Services;
 
 namespace ZScape.Views;
 
 /// <summary>
 /// View-model for a single WAD file row in the browser list.
-/// Implements INotifyPropertyChanged so selection updates reflect in the UI.
 /// </summary>
-public class WadFileEntry : INotifyPropertyChanged
+public class WadFileEntry
 {
-    private bool _isSelected;
-    private bool _isHovered;
-
     public string Name { get; set; } = "";
     public string Extension { get; set; } = "";
     public string FullPath { get; set; } = "";
@@ -31,36 +27,6 @@ public class WadFileEntry : INotifyPropertyChanged
     public DateTime Modified { get; set; }
 
     public string NameWithExtension => Name + Extension;
-
-    public bool IsSelected
-    {
-        get => _isSelected;
-        set
-        {
-            if (_isSelected == value) return;
-            _isSelected = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(RowBackground));
-        }
-    }
-
-    public bool IsHovered
-    {
-        get => _isHovered;
-        set
-        {
-            if (_isHovered == value) return;
-            _isHovered = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(RowBackground));
-        }
-    }
-
-    public IBrush RowBackground => _isSelected
-        ? new SolidColorBrush(Color.FromArgb(60, 0, 120, 215))
-        : _isHovered
-            ? new SolidColorBrush(Color.FromArgb(30, 255, 255, 255))
-            : Brushes.Transparent;
 
     public string SizeDisplay => FormatSize(Size);
     public string ModifiedDisplay => Modified.ToString("yyyy-MM-dd HH:mm");
@@ -72,10 +38,6 @@ public class WadFileEntry : INotifyPropertyChanged
         if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024.0):N1} MB";
         return $"{bytes / (1024.0 * 1024.0 * 1024.0):N2} GB";
     }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-    protected void OnPropertyChanged([CallerMemberName] string? name = null)
-        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
 public partial class WadBrowserDialog : Window
@@ -83,7 +45,6 @@ public partial class WadBrowserDialog : Window
     private readonly SettingsService _settings;
     private readonly List<WadFileEntry> _allWads = new();
     private ObservableCollection<WadFileEntry> _filteredWads = new();
-    private readonly HashSet<string> _selectedWads = new();
     private bool _isScanning;
 
     // Sorting state
@@ -91,13 +52,48 @@ public partial class WadBrowserDialog : Window
     private bool _sortAscending = true;
 
     // For shift-click range selection
-    private int _lastClickedIndex = -1;
+    // (Handled by built-in multi-select in ResizableListView)
 
     public WadBrowserDialog()
     {
         InitializeComponent();
         _settings = SettingsService.Instance;
-        WadItemsControl.ItemsSource = _filteredWads;
+
+        // Configure the list view columns
+        WadListView.SelectionMode = ListViewSelectionMode.Multi;
+        WadListView.AddColumn(new ListViewColumn
+        {
+            Header = "Name", Width = 250, MinWidth = 80,
+            BindingPath = "NameWithExtension",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CellPadding = new Thickness(6, 0),
+            SortClick = SortByName_Click
+        });
+        WadListView.AddColumn(new ListViewColumn
+        {
+            Header = "Size", Width = 80, MinWidth = 50,
+            BindingPath = "SizeDisplay",
+            SortClick = SortBySize_Click
+        });
+        WadListView.AddColumn(new ListViewColumn
+        {
+            Header = "Modified", Width = 130, MinWidth = 80,
+            BindingPath = "ModifiedDisplay",
+            SortClick = SortByModified_Click
+        });
+        WadListView.AddColumn(new ListViewColumn
+        {
+            Header = "Path", IsStar = true, MinWidth = 80,
+            BindingPath = "FullPath",
+            Foreground = Brushes.Gray,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByPath_Click
+        });
+        WadListView.Build(ListViewOverflowMode.AutoScroll);
+        WadListView.ItemsSource = _filteredWads;
+
+        // Wire up row events
+        WadListView.RowDoubleTapped += OnWadRowDoubleTapped;
 
         // Handle Escape key
         KeyDown += OnDialogKeyDown;
@@ -124,7 +120,7 @@ public partial class WadBrowserDialog : Window
         StatusLabel.Text = "Scanning WAD folders...";
         _allWads.Clear();
         _filteredWads.Clear();
-        _selectedWads.Clear();
+        WadListView.ClearSelection();
 
         await Task.Run(() =>
         {
@@ -205,8 +201,6 @@ public partial class WadBrowserDialog : Window
         _filteredWads.Clear();
         foreach (var wad in results)
         {
-            // Restore selection state
-            wad.IsSelected = _selectedWads.Contains(wad.FullPath);
             _filteredWads.Add(wad);
         }
     }
@@ -237,70 +231,9 @@ public partial class WadBrowserDialog : Window
 
     #region Row Interaction
 
-    private void WadRow_PointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnWadRowDoubleTapped(object? sender, ListViewRowEventArgs e)
     {
-        if (sender is not Border border || border.DataContext is not WadFileEntry entry) return;
-
-        var point = e.GetCurrentPoint(border);
-        if (!point.Properties.IsLeftButtonPressed) return;
-
-        var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        var clickedIndex = _filteredWads.IndexOf(entry);
-
-        if (ctrl)
-        {
-            // Toggle selection
-            entry.IsSelected = !entry.IsSelected;
-            if (entry.IsSelected)
-                _selectedWads.Add(entry.FullPath);
-            else
-                _selectedWads.Remove(entry.FullPath);
-            _lastClickedIndex = clickedIndex;
-        }
-        else if (shift && _lastClickedIndex >= 0)
-        {
-            // Range selection
-            var start = Math.Min(_lastClickedIndex, clickedIndex);
-            var end = Math.Max(_lastClickedIndex, clickedIndex);
-
-            // Clear current selection
-            foreach (var w in _filteredWads) w.IsSelected = false;
-            _selectedWads.Clear();
-
-            for (var i = start; i <= end && i < _filteredWads.Count; i++)
-            {
-                _filteredWads[i].IsSelected = true;
-                _selectedWads.Add(_filteredWads[i].FullPath);
-            }
-        }
-        else
-        {
-            // Single select - clear others
-            foreach (var w in _filteredWads) w.IsSelected = false;
-            _selectedWads.Clear();
-
-            entry.IsSelected = true;
-            _selectedWads.Add(entry.FullPath);
-            _lastClickedIndex = clickedIndex;
-        }
-    }
-
-    private void WadRow_PointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is WadFileEntry entry)
-            entry.IsHovered = true;
-    }
-
-    private void WadRow_PointerExited(object? sender, PointerEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is WadFileEntry entry)
-            entry.IsHovered = false;
-    }
-
-    private void WadRow_DoubleTapped(object? sender, TappedEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is WadFileEntry wad)
+        if (e.DataContext is WadFileEntry wad)
         {
             var folder = Path.GetDirectoryName(wad.FullPath);
             if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
@@ -342,7 +275,7 @@ public partial class WadBrowserDialog : Window
 
     private void OpenFolderButton_Click(object? sender, RoutedEventArgs e)
     {
-        var selected = _filteredWads.FirstOrDefault(w => w.IsSelected);
+        var selected = WadListView.SelectedItem as WadFileEntry;
         if (selected == null) return;
 
         var folder = Path.GetDirectoryName(selected.FullPath);
@@ -369,7 +302,7 @@ public partial class WadBrowserDialog : Window
 
     private async void DeleteSelected_Click(object? sender, RoutedEventArgs e)
     {
-        var selected = _filteredWads.Where(w => w.IsSelected).ToList();
+        var selected = WadListView.SelectedItems.OfType<WadFileEntry>().ToList();
         if (selected.Count == 0) return;
 
         var msgBox = new Window
@@ -426,11 +359,12 @@ public partial class WadBrowserDialog : Window
                 File.Delete(wad.FullPath);
                 _allWads.Remove(wad);
                 _filteredWads.Remove(wad);
-                _selectedWads.Remove(wad.FullPath);
                 deleted++;
             }
             catch { }
         }
+
+        WadListView.ClearSelection();
 
         StatusLabel.Text = $"Deleted {deleted} file(s)";
         UpdateStats();
