@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
         x:Class="ZScape.Views.TestingVersionManagerDialog"
         x:CompileBindings="False"
         Title="Testing Version Manager"
@@ -16,24 +17,8 @@
             <TextBlock x:Name="TotalSizeLabel" Text="Total: --" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </StackPanel>
         
-        <!-- DataGrid -->
-        <DataGrid Grid.Row="1" x:Name="VersionDataGrid"
-                  Margin="0,5"
-                  AutoGenerateColumns="False"
-                  IsReadOnly="True"
-                  SelectionMode="Extended"
-                  CanUserReorderColumns="False"
-                  CanUserResizeColumns="True"
-                  GridLinesVisibility="Horizontal"
-                  LoadingRow="VersionDataGrid_LoadingRow">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Version" Binding="{Binding VersionName}" Width="200"/>
-                <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}" Width="100"/>
-                <DataGridTextColumn Header="Files" Binding="{Binding FileCount}" Width="80"/>
-                <DataGridTextColumn Header="Screenshots" Binding="{Binding ScreenshotDisplay}" Width="80"/>
-                <DataGridTextColumn Header="Path" Binding="{Binding Path}" Width="200"/>
-            </DataGrid.Columns>
-        </DataGrid>
+        <!-- Version List -->
+        <controls:ResizableListView Grid.Row="1" x:Name="VersionListView" Margin="0,5" />
         
         <!-- Bottom bar -->
         <Grid Grid.Row="2" ColumnDefinitions="*,100,80,20,80">

@@ -1,14 +1,19 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using ZScape.Controls;
 using ZScape.Services;
 using ZScape.Utilities;
 
@@ -28,20 +33,144 @@ public partial class TestingVersionManagerDialog : Window
         InitializeComponent();
         DataContext = this;
 
-        // Handle Escape/Enter keys
         KeyDown += OnDialogKeyDown;
+
+        SetupVersionListView();
 
         Loaded += async (_, _) =>
         {
-            VersionDataGrid.ItemsSource = Versions;
-            VersionDataGrid.SelectionChanged += VersionDataGrid_SelectionChanged;
             await ScanVersionsAsync();
         };
     }
-    
-    private void OnDialogKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+
+    private void SetupVersionListView()
     {
-        if (e.Key == Avalonia.Input.Key.Escape)
+        VersionListView.SelectionMode = ListViewSelectionMode.Multi;
+        VersionListView.SelectionChanged += (_, _) => UpdateButtonStates();
+
+        VersionListView.AddColumn(new ListViewColumn
+        {
+            Header = "Version",
+            BindingPath = "VersionName",
+            Width = 200,
+            MinWidth = 80,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBlock
+                {
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Padding = new Avalonia.Thickness(4, 0)
+                };
+                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("VersionName"));
+                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("RowForeground"));
+                return tb;
+            }
+        });
+
+        VersionListView.AddColumn(new ListViewColumn
+        {
+            Header = "Size",
+            BindingPath = "SizeDisplay",
+            Width = 100,
+            MinWidth = 50,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBlock
+                {
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Padding = new Avalonia.Thickness(4, 0)
+                };
+                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("SizeDisplay"));
+                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("RowForeground"));
+                return tb;
+            }
+        });
+
+        VersionListView.AddColumn(new ListViewColumn
+        {
+            Header = "Files",
+            BindingPath = "FileCount",
+            Width = 80,
+            MinWidth = 40,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBlock
+                {
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Padding = new Avalonia.Thickness(4, 0)
+                };
+                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("FileCount"));
+                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("RowForeground"));
+                return tb;
+            }
+        });
+
+        VersionListView.AddColumn(new ListViewColumn
+        {
+            Header = "Screenshots",
+            BindingPath = "ScreenshotDisplay",
+            Width = 80,
+            MinWidth = 40,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBlock
+                {
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Padding = new Avalonia.Thickness(4, 0)
+                };
+                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("ScreenshotDisplay"));
+                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("RowForeground"));
+                return tb;
+            }
+        });
+
+        VersionListView.AddColumn(new ListViewColumn
+        {
+            Header = "Path",
+            Width = 200,
+            IsStar = true,
+            MinWidth = 80,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CellContentFactory = () =>
+            {
+                var tb = new TextBlock
+                {
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Padding = new Avalonia.Thickness(4, 0)
+                };
+                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("Path"));
+                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("RowForeground"));
+                return tb;
+            }
+        });
+
+        VersionListView.RowDoubleTapped += VersionListView_RowDoubleTapped;
+
+        VersionListView.Build(ListViewOverflowMode.AutoScroll);
+        VersionListView.ItemsSource = Versions;
+    }
+
+    private void VersionListView_RowDoubleTapped(object? sender, ListViewRowEventArgs e)
+    {
+        if (e.DataContext is TestingVersionInfo info)
+        {
+            OpenFolder(info.Path);
+        }
+    }
+
+    private void UpdateButtonStates()
+    {
+        var selectedCount = VersionListView.SelectedItems.Count;
+        DeleteButton.IsEnabled = selectedCount > 0;
+        OpenFolderButton.IsEnabled = selectedCount == 1;
+    }
+    
+    private void OnDialogKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
         {
             Close();
             e.Handled = true;
@@ -55,7 +184,9 @@ public partial class TestingVersionManagerDialog : Window
 
     private async Task ScanVersionsAsync()
     {
+        VersionListView.ClearSelection();
         Versions.Clear();
+        UpdateButtonStates();
 
         var testingRoot = GetTestingRootPath();
         if (string.IsNullOrEmpty(testingRoot) || !Directory.Exists(testingRoot))
@@ -82,10 +213,8 @@ public partial class TestingVersionManagerDialog : Window
                         : new[] { "zandronum", "zandronum.x86_64" };
                     var hasExe = exeNames.Any(name => File.Exists(System.IO.Path.Combine(dir, name)));
 
-                    // Calculate directory size and file count
                     var (size, fileCount) = GetDirectoryInfo(dir);
 
-                    // Count screenshots
                     int screenshotCount = 0;
                     try
                     {
@@ -101,7 +230,7 @@ public partial class TestingVersionManagerDialog : Window
                         FileCount = fileCount,
                         ScreenshotCount = screenshotCount,
                         HasExecutable = hasExe,
-                        RowForeground = hasExe ? Brushes.White : new SolidColorBrush(Color.FromRgb(255, 165, 0)) // Orange for incomplete
+                        RowForeground = hasExe ? Brushes.White : new SolidColorBrush(Color.FromRgb(255, 165, 0))
                     };
 
                     totalSize += size;
@@ -151,26 +280,12 @@ public partial class TestingVersionManagerDialog : Window
         return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
     }
 
-    private void VersionDataGrid_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        var count = VersionDataGrid.SelectedItems?.Count ?? 0;
-        DeleteButton.IsEnabled = count > 0;
-        OpenFolderButton.IsEnabled = count == 1;
-    }
-    
-    private void VersionDataGrid_LoadingRow(object? sender, DataGridRowEventArgs e)
-    {
-        if (e.Row.DataContext is TestingVersionInfo info)
-        {
-            e.Row.Foreground = info.RowForeground;
-        }
-    }
-
     private void OpenFolderButton_Click(object? sender, RoutedEventArgs e)
     {
-        if (VersionDataGrid.SelectedItem is TestingVersionInfo info)
+        var selected = VersionListView.SelectedItems.OfType<TestingVersionInfo>().FirstOrDefault();
+        if (selected != null)
         {
-            OpenFolder(info.Path);
+            OpenFolder(selected.Path);
         }
     }
 
@@ -195,8 +310,8 @@ public partial class TestingVersionManagerDialog : Window
 
     private async void DeleteButton_Click(object? sender, RoutedEventArgs e)
     {
-        var selectedItems = VersionDataGrid.SelectedItems?.Cast<TestingVersionInfo>().ToList();
-        if (selectedItems == null || selectedItems.Count == 0) return;
+        var selectedItems = VersionListView.SelectedItems.OfType<TestingVersionInfo>().ToList();
+        if (selectedItems.Count == 0) return;
 
         var totalSize = selectedItems.Sum(v => v.Size);
         var message = selectedItems.Count == 1
@@ -262,7 +377,7 @@ public partial class TestingVersionManagerDialog : Window
         var text = new TextBlock
         {
             Text = message,
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
             TextWrapping = TextWrapping.Wrap
         };
         Grid.SetRow(text, 0);
@@ -270,8 +385,8 @@ public partial class TestingVersionManagerDialog : Window
 
         var buttonPanel = new StackPanel
         {
-            Orientation = Avalonia.Layout.Orientation.Horizontal,
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
             Spacing = 10
         };
         Grid.SetRow(buttonPanel, 1);
@@ -295,15 +410,22 @@ public partial class TestingVersionManagerDialog : Window
 /// <summary>
 /// View model for testing version entries.
 /// </summary>
-public class TestingVersionInfo
+public class TestingVersionInfo : INotifyPropertyChanged
 {
+    private IBrush _rowForeground = Brushes.White;
+
     public string VersionName { get; set; } = "";
     public string Path { get; set; } = "";
     public long Size { get; set; }
     public int FileCount { get; set; }
     public int ScreenshotCount { get; set; }
     public bool HasExecutable { get; set; }
-    public IBrush RowForeground { get; set; } = Brushes.White;
+
+    public IBrush RowForeground
+    {
+        get => _rowForeground;
+        set { _rowForeground = value; OnPropertyChanged(); }
+    }
 
     public string SizeDisplay => FormatFileSize(Size);
     public string ScreenshotDisplay => ScreenshotCount > 0 ? ScreenshotCount.ToString() : "-";
@@ -315,4 +437,8 @@ public class TestingVersionInfo
         if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
         return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
     }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    protected void OnPropertyChanged([CallerMemberName] string? name = null)
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
