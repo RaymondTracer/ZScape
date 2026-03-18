@@ -428,6 +428,20 @@ public partial class MainWindow : Window
             _sortColumnIndex = settings.SortColumnIndex;
             _sortAscending = settings.SortAscending;
             
+            // Column widths - restore saved widths for non-fixed columns
+            if (settings.ColumnWidths.Count > 0)
+            {
+                for (int i = 0; i < ServerListView.Columns.Count; i++)
+                {
+                    var col = ServerListView.Columns[i];
+                    if (col.IsFixedWidth || string.IsNullOrEmpty(col.Header)) continue;
+                    if (settings.ColumnWidths.TryGetValue(col.Header, out int savedWidth) && savedWidth > 0)
+                    {
+                        ServerListView.SetColumnWidth(i, new GridLength(savedWidth));
+                    }
+                }
+            }
+            
             // Filters - only on initial load (user changes these live during session)
             if (HideEmptyCheckBox != null) HideEmptyCheckBox.IsChecked = settings.HideEmpty;
             if (HideBotOnlyCheckBox != null) HideBotOnlyCheckBox.IsChecked = settings.TreatBotOnlyAsEmpty;
@@ -538,6 +552,21 @@ public partial class MainWindow : Window
         // Sorting
         settings.SortColumnIndex = _sortColumnIndex;
         settings.SortAscending = _sortAscending;
+        
+        // Column widths
+        settings.ColumnWidths.Clear();
+        for (int i = 0; i < ServerListView.Columns.Count; i++)
+        {
+            var col = ServerListView.Columns[i];
+            if (col.IsFixedWidth || string.IsNullOrEmpty(col.Header)) continue;
+            int gridCol = ServerListView.GetGridColumnIndex(i);
+            if (gridCol >= 0 && gridCol < ServerListView.HeaderGrid.ColumnDefinitions.Count)
+            {
+                int actualWidth = (int)ServerListView.HeaderGrid.ColumnDefinitions[gridCol].ActualWidth;
+                if (actualWidth > 0)
+                    settings.ColumnWidths[col.Header] = actualWidth;
+            }
+        }
         
         // Filters
         settings.HideEmpty = HideEmptyCheckBox?.IsChecked ?? false;
@@ -1298,12 +1327,22 @@ public partial class MainWindow : Window
     {
         if (_selectedServer == null) return;
         
-        var connectCommand = $"+connect {_selectedServer.Address}:{_selectedServer.Port}";
+        var fullCommand = GameLauncher.Instance.GetFullConnectCommand(_selectedServer);
+        string connectCommand;
+        if (!string.IsNullOrEmpty(fullCommand))
+        {
+            connectCommand = fullCommand;
+        }
+        else
+        {
+            connectCommand = $"+connect {_selectedServer.Address}:{_selectedServer.Port}";
+        }
+        
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
         if (clipboard != null)
         {
             await clipboard.SetTextAsync(connectCommand);
-            _logger.Info($"Copied connect command to clipboard: {connectCommand}");
+            _logger.Info($"Copied connect command to clipboard ({connectCommand.Length} chars)");
         }
     }
     

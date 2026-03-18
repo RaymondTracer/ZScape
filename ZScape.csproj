@@ -27,25 +27,7 @@
     <PackageReference Include="SharpCompress" Version="0.44.5" />
   </ItemGroup>
 
-  <!-- Exclude old WinForms UI files during Avalonia migration -->
-  <ItemGroup>
-    <Compile Remove="MainForm.cs" />
-    <Compile Remove="MainForm.Designer.cs" />
-    <Compile Remove="UI\AddServerDialog.cs" />
-    <Compile Remove="UI\ConnectionHistoryDialog.cs" />
-    <Compile Remove="UI\DarkTheme.cs" />
-    <Compile Remove="UI\FetchWadsDialog.cs" />
-    <Compile Remove="UI\FirstTimeSetupDialog.cs" />
-    <Compile Remove="UI\PlayerListControl.cs" />
-    <Compile Remove="UI\ServerFilterDialog.cs" />
-    <Compile Remove="UI\TestingVersionManagerDialog.cs" />
-    <Compile Remove="UI\UnifiedSettingsDialog.cs" />
-    <Compile Remove="UI\WadBrowserDialog.cs" />
-    <Compile Remove="UI\WadDownloadDialog.cs" />
-    <Compile Remove="UI\UIHelpers.cs" />
-    <Compile Remove="UI\UpdateProgressDialog.cs" />
-    <Compile Remove="Utilities\DarkModeHelper.cs" />
-  </ItemGroup>
+
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**"/>
