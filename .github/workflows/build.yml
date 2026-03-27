@@ -48,8 +48,8 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
-    - name: Publish
-      run: dotnet publish -c Release -r win-x64 --self-contained false -o ./publish
+    - name: Publish (strip version suffix for release)
+      run: dotnet publish -c Release -r win-x64 --self-contained false -o ./publish -p:VersionSuffix=
 
     - name: Zip release
       run: Compress-Archive -Path ./publish/* -DestinationPath ZScape-${{ github.ref_name }}-win-x64.zip

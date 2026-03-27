@@ -62,9 +62,20 @@ public class UpdateService
         
         _updateDirectory = Path.Combine(AppContext.BaseDirectory, "updates");
         
-        // Get current version from assembly
-        var version = Assembly.GetExecutingAssembly().GetName().Version;
-        _currentVersion = version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "1.0.0";
+        // Get current version from assembly (InformationalVersion preserves semver suffix like -indev)
+        var infoVersion = Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (infoVersion != null)
+        {
+            // Strip the +commitHash metadata that .NET SDK appends
+            var plusIndex = infoVersion.IndexOf('+');
+            _currentVersion = plusIndex >= 0 ? infoVersion[..plusIndex] : infoVersion;
+        }
+        else
+        {
+            var version = Assembly.GetExecutingAssembly().GetName().Version;
+            _currentVersion = version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "2.0.0";
+        }
     }
     
     /// <summary>
@@ -436,17 +447,32 @@ chmod +x ""{Path.Combine(appDirectory, appName)}""
         }
     }
     
+    private static string StripSuffix(string version)
+    {
+        var dashIndex = version.IndexOf('-');
+        return dashIndex >= 0 ? version[..dashIndex] : version;
+    }
+    
     private bool IsNewerVersion(string? tagName)
     {
         if (string.IsNullOrEmpty(tagName))
             return false;
         
         var latestVersionStr = tagName.TrimStart('v');
+        var currentBase = StripSuffix(_currentVersion);
+        var latestBase = StripSuffix(latestVersionStr);
         
-        if (Version.TryParse(latestVersionStr, out var latestVersion) && 
-            Version.TryParse(_currentVersion, out var currentVersion))
+        if (Version.TryParse(latestBase, out var latestVersion) && 
+            Version.TryParse(currentBase, out var currentVersion))
         {
-            return latestVersion > currentVersion;
+            if (latestVersion > currentVersion)
+                return true;
+            
+            // Same base version but we're running a pre-release (e.g. 2.0.0-indev) -- the release is newer
+            if (latestVersion == currentVersion && _currentVersion.Contains('-'))
+                return true;
+            
+            return false;
         }
         
         // Fallback to string comparison
