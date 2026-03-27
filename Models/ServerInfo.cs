@@ -151,7 +151,7 @@ public class ServerInfo : INotifyPropertyChanged
     public bool HasBots => Players.Any(p => p.IsBot);
     public bool IsTesting => IsTestingServer;
     public int HumanPlayerCount => Players.Count(p => !p.IsBot && !p.IsSpectator);
-    public int SpectatorCount => Players.Count(p => p.IsSpectator);
+    public int SpectatorCount => Players.Count(p => p.IsSpectator && !p.IsBot);
     public int BotCount => Players.Count(p => p.IsBot);
 
     public string GetConnectCommand()
