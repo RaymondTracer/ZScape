@@ -494,7 +494,7 @@ public partial class WadDownloader : IDisposable
             // Check for %WadName% template URLs - direct download links
             if (site.Contains("%WadName%", StringComparison.OrdinalIgnoreCase))
             {
-                // Check each WAD with HEAD request - try multiple extensions if needed
+                // Check each WAD with HEAD request and GET fallback - try multiple extensions if needed
                 // Filter to tasks still searching or failed (can benefit from new sources)
                 var tasksToCheck = tasks.Where(t => 
                     t.Status == WadDownloadStatus.Searching || 
@@ -1616,16 +1616,43 @@ public partial class WadDownloader : IDisposable
             using var request = new HttpRequestMessage(HttpMethod.Head, uri);
             LogUrlAttempt("Range support probe", request.Method, url);
             using var response = await HttpClient.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
+            if (response.IsSuccessStatusCode)
+            {
+                if (response.Headers.AcceptRanges.Contains("bytes"))
+                {
+                    return true;
+                }
+
+                LogVerbose($"Range support probe missing Accept-Ranges, retrying with GET: {url}");
+            }
+            else
             {
                 LogUrlFailure("Range support probe", request.Method, url, response.StatusCode);
-                return false;
+                LogVerbose($"Range support probe falling back to GET: {url}");
             }
-            return response.Headers.AcceptRanges.Contains("bytes");
         }
         catch (Exception ex)
         {
             LogUrlFailure("Range support probe", HttpMethod.Head, url, ex, ct);
+            LogVerbose($"Range support probe falling back to GET after HEAD failure: {url}");
+        }
+
+        try
+        {
+            using var fallbackRequest = new HttpRequestMessage(HttpMethod.Get, uri);
+            LogUrlAttempt("Range support fallback", fallbackRequest.Method, url);
+            using var fallbackResponse = await HttpClient.SendAsync(fallbackRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!fallbackResponse.IsSuccessStatusCode)
+            {
+                LogUrlFailure("Range support fallback", fallbackRequest.Method, url, fallbackResponse.StatusCode);
+                return false;
+            }
+
+            return fallbackResponse.Headers.AcceptRanges.Contains("bytes");
+        }
+        catch (Exception ex)
+        {
+            LogUrlFailure("Range support fallback", HttpMethod.Get, url, ex, ct);
             return false;
         }
     }
@@ -1787,19 +1814,49 @@ public partial class WadDownloader : IDisposable
             using var request = new HttpRequestMessage(HttpMethod.Head, url);
             LogUrlAttempt("HEAD request", request.Method, url);
             using var response = await HttpClient.SendAsync(request, ct);
-            if (response.IsSuccessStatusCode && response.Content.Headers.ContentLength.HasValue)
+            if (response.IsSuccessStatusCode)
             {
-                return response.Content.Headers.ContentLength.Value;
-            }
+                if (response.Content.Headers.ContentLength.HasValue)
+                {
+                    return response.Content.Headers.ContentLength.Value;
+                }
 
-            if (!response.IsSuccessStatusCode)
+                LogVerbose($"HEAD request missing Content-Length, retrying with GET: {url}");
+            }
+            else
             {
                 LogUrlFailure("HEAD request", request.Method, url, response.StatusCode);
+                LogVerbose($"HEAD request falling back to GET: {url}");
             }
         }
         catch (Exception ex)
         {
             LogUrlFailure("HEAD request", HttpMethod.Head, url, ex, ct);
+            LogVerbose($"HEAD request falling back to GET after failure: {url}");
+        }
+
+        try
+        {
+            using var fallbackRequest = new HttpRequestMessage(HttpMethod.Get, url);
+            LogUrlAttempt("HEAD fallback", fallbackRequest.Method, url);
+            using var fallbackResponse = await HttpClient.SendAsync(fallbackRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (fallbackResponse.IsSuccessStatusCode && fallbackResponse.Content.Headers.ContentLength.HasValue)
+            {
+                return fallbackResponse.Content.Headers.ContentLength.Value;
+            }
+
+            if (!fallbackResponse.IsSuccessStatusCode)
+            {
+                LogUrlFailure("HEAD fallback", fallbackRequest.Method, url, fallbackResponse.StatusCode);
+            }
+            else
+            {
+                LogWarning($"HEAD fallback succeeded without Content-Length: GET {url}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogUrlFailure("HEAD fallback", HttpMethod.Get, url, ex, ct);
         }
         return 0;
     }
