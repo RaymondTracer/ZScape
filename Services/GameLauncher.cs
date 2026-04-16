@@ -133,6 +133,47 @@ public class GameLauncher
     }
 
     /// <summary>
+    /// Resolves missing WADs by activating locally archived copies that match the server hash.
+    /// Returns only the WADs that still need to be downloaded.
+    /// </summary>
+    public List<WadInfo> ResolveMissingWadsByHash(List<(string Name, string? Hash)> missingWads)
+    {
+        var needsDownload = new List<WadInfo>();
+        var wadManager = WadManager.Instance;
+
+        foreach (var (name, hash) in missingWads)
+        {
+            if (string.IsNullOrEmpty(hash))
+            {
+                needsDownload.Add(new WadInfo(name, hash));
+                continue;
+            }
+
+            var baseName = Path.GetFileNameWithoutExtension(name);
+            var extension = Path.GetExtension(name);
+            var matchingPath = wadManager.FindWadByHash(hash, baseName, extension);
+            if (string.IsNullOrEmpty(matchingPath))
+            {
+                needsDownload.Add(new WadInfo(name, hash));
+                continue;
+            }
+
+            var activatedPath = wadManager.ActivateArchivedWad(matchingPath, name);
+            if (activatedPath != null)
+            {
+                LoggingService.Instance.Info(
+                    $"Activated local WAD for {name}: {Path.GetFileName(matchingPath)} -> {Path.GetFileName(activatedPath)}");
+                continue;
+            }
+
+            LoggingService.Instance.Warning($"Found matching local WAD for {name} but failed to activate it: {matchingPath}");
+            needsDownload.Add(new WadInfo(name, hash));
+        }
+
+        return needsDownload;
+    }
+
+    /// <summary>
     /// Represents a WAD that has a hash mismatch.
     /// </summary>
     public class WadHashMismatch
@@ -396,9 +437,9 @@ public class GameLauncher
     /// </summary>
     /// <param name="mismatches">List of WAD hash mismatches to resolve.</param>
     /// <returns>List of WADs that need to be downloaded (no local version with matching hash).</returns>
-    public List<string> ResolveHashMismatches(List<WadHashMismatch> mismatches)
+    public List<WadInfo> ResolveHashMismatches(List<WadHashMismatch> mismatches)
     {
-        var needsDownload = new List<string>();
+        var needsDownload = new List<WadInfo>();
         var wadManager = WadManager.Instance;
         
         foreach (var mismatch in mismatches)
@@ -413,6 +454,7 @@ public class GameLauncher
                 if (archived == null)
                 {
                     LoggingService.Instance.Error($"Failed to archive {mismatch.WadName}");
+                    needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
                     continue;
                 }
                 
@@ -432,7 +474,7 @@ public class GameLauncher
                     catch (Exception ex)
                     {
                         LoggingService.Instance.Error($"Failed to copy matching version: {ex.Message}");
-                        needsDownload.Add(mismatch.WadName);
+                        needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
                     }
                 }
                 else
@@ -442,7 +484,7 @@ public class GameLauncher
                     if (activated == null)
                     {
                         LoggingService.Instance.Error($"Failed to activate archived version of {mismatch.WadName}");
-                        needsDownload.Add(mismatch.WadName);
+                        needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
                     }
                 }
             }
@@ -455,7 +497,12 @@ public class GameLauncher
                 {
                     LoggingService.Instance.Info($"Archived mismatched {mismatch.WadName} as {Path.GetFileName(archived)}");
                 }
-                needsDownload.Add(mismatch.WadName);
+                else
+                {
+                    LoggingService.Instance.Warning($"Failed to archive mismatched {mismatch.WadName} before download.");
+                }
+
+                needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
             }
         }
         

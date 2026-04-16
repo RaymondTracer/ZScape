@@ -61,7 +61,8 @@ public partial class WadDownloadDialog : Window
             {
                 Text = entry?.FullText ?? "",
                 FontFamily = new FontFamily("Consolas"),
-                FontSize = 12
+                FontSize = 12,
+                TextWrapping = TextWrapping.NoWrap
             };
             if (entry != null)
                 tb.Foreground = entry.TextColor;
@@ -157,6 +158,12 @@ public partial class WadDownloadDialog : Window
                 _failedCount++;
                 Log(WadDownloader.LogLevel.Error, $"{task.Wad.FileName}: {task.ErrorMessage}");
             }
+            else if (task.Status == WadDownloadStatus.AlreadyExists)
+            {
+                _completedCount++;
+                var sizeInfo = task.TotalBytes > 0 ? $" ({FormatUtils.FormatBytes(task.TotalBytes)})" : "";
+                Log(WadDownloader.LogLevel.Success, $"Already present: {task.Wad.FileName}{sizeInfo}");
+            }
             else if (task.Status == WadDownloadStatus.Cancelled)
             {
                 Log(WadDownloader.LogLevel.Warning, $"Cancelled: {task.Wad.FileName}");
@@ -227,7 +234,17 @@ public partial class WadDownloadDialog : Window
 
     private async void UpdateFinalStatus()
     {
+        _completedCount = _tasks.Count(t => t.Status is WadDownloadStatus.Completed or WadDownloadStatus.AlreadyExists);
+        _failedCount = _tasks.Count(t => t.Status == WadDownloadStatus.Failed);
+        var cancelledCount = _tasks.Count(t => t.Status == WadDownloadStatus.Cancelled);
+
+        OverallProgressBar.Value = Math.Min(_completedCount + _failedCount + cancelledCount, OverallProgressBar.Maximum);
         StatusLabel.Text = $"Complete: {_completedCount} downloaded, {_failedCount} failed";
+        if (cancelledCount > 0)
+        {
+            StatusLabel.Text += $", {cancelledCount} cancelled";
+        }
+
         CancelButton.IsEnabled = false;
         CloseButton.IsEnabled = true;
         CloseButton.Focus();
@@ -236,7 +253,10 @@ public partial class WadDownloadDialog : Window
         if (!_isServerJoinContext) return;
         
         var behavior = SettingsService.Instance.Settings.DownloadDialogBehavior;
-        var allSucceeded = _failedCount == 0;
+        var allSucceeded = _tasks.All(t => t.Status is WadDownloadStatus.Completed or WadDownloadStatus.AlreadyExists);
+
+        // Failures should remain visible so the user can inspect the in-dialog log.
+        if (!allSucceeded) return;
         
         switch (behavior)
         {
@@ -263,6 +283,7 @@ public partial class WadDownloadDialog : Window
                 break;
                 
             case DownloadDialogBehavior.AlwaysClose:
+                // Legacy setting: treat as immediate close on success only.
                 Close();
                 break;
         }
