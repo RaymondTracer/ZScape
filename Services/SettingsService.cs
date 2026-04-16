@@ -595,6 +595,6 @@ public enum DownloadDialogBehavior
     /// <summary>Auto-close on success after a brief delay to show results.</summary>
     CloseOnSuccessAfterDelay = 3,
     
-    /// <summary>Always auto-close regardless of success or failure.</summary>
+    /// <summary>Legacy value retained for settings compatibility; treated as CloseOnSuccess.</summary>
     AlwaysClose = 4
 }

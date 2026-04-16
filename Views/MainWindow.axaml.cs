@@ -31,9 +31,11 @@ public partial class MainWindow : Window
     private readonly NotificationService _notificationService = NotificationService.Instance;
     private readonly ScreenshotMonitorService _screenshotMonitor = ScreenshotMonitorService.Instance;
     private readonly DispatcherTimer _autoRefreshTimer = new();
+    private readonly DispatcherTimer _countdownTimer = new();
     private readonly DispatcherTimer _alertTimer = new();
     private readonly DispatcherTimer _logFlushTimer = new();
     private readonly DispatcherTimer _serverListUpdateTimer = new();
+    private DateTime _nextAutoRefreshTime;
 
     private ServerInfo? _selectedServer;
     private int _sortColumnIndex = 3; // Default to Players column
@@ -380,6 +382,10 @@ public partial class MainWindow : Window
         // Auto-refresh timer
         _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
 
+        // Countdown display timer (1-second tick)
+        _countdownTimer.Interval = TimeSpan.FromSeconds(1);
+        _countdownTimer.Tick += CountdownTimer_Tick;
+
         // Alert timer for background server monitoring
         _alertTimer.Interval = TimeSpan.FromSeconds(_settings.Settings.AlertCheckIntervalSeconds > 0
             ? _settings.Settings.AlertCheckIntervalSeconds : 60);
@@ -402,23 +408,45 @@ public partial class MainWindow : Window
     {
         if (_settings.Settings.AutoRefresh)
         {
+            _nextAutoRefreshTime = DateTime.UtcNow.Add(_autoRefreshTimer.Interval);
             _ = RefreshServersAsync();
+        }
+    }
+
+    private void CountdownTimer_Tick(object? sender, EventArgs e)
+    {
+        if (!_settings.Settings.AutoRefresh || _browserService.IsRefreshing)
+            return;
+
+        var remaining = _nextAutoRefreshTime - DateTime.UtcNow;
+        if (remaining.TotalSeconds < 0) remaining = TimeSpan.Zero;
+
+        if (StatusLabel != null)
+        {
+            var minutes = (int)remaining.TotalMinutes;
+            var seconds = remaining.Seconds;
+            StatusLabel.Text = $"Ready (next refresh in {minutes}:{seconds:D2})";
         }
     }
 
     private void UpdateAutoRefreshTimer()
     {
         _autoRefreshTimer.Stop();
+        _countdownTimer.Stop();
         if (_settings.Settings.AutoRefresh)
         {
             var intervalMinutes = _settings.Settings.AutoRefreshIntervalMinutes;
             if (intervalMinutes < 1) intervalMinutes = 5;
             _autoRefreshTimer.Interval = TimeSpan.FromMinutes(intervalMinutes);
             _autoRefreshTimer.Start();
+            _nextAutoRefreshTime = DateTime.UtcNow.AddMinutes(intervalMinutes);
+            _countdownTimer.Start();
             _logger.Info($"Auto-refresh enabled: every {intervalMinutes} minutes");
         }
         else
         {
+            if (StatusLabel != null && StatusLabel.Text?.StartsWith("Ready") == true)
+                StatusLabel.Text = "Ready";
             _logger.Info("Auto-refresh disabled");
         }
     }
@@ -640,11 +668,6 @@ public partial class MainWindow : Window
 
     private void UpdateServerList()
     {
-        // Preserve current selection BEFORE any changes
-        string? savedAddress = _selectedServer != null
-            ? $"{_selectedServer.Address}:{_selectedServer.Port}"
-            : null;
-
         var allServers = _browserService.Servers.ToList();
         var filtered = ApplyFilters(allServers);
         filtered = SortServers(filtered);
@@ -662,8 +685,6 @@ public partial class MainWindow : Window
 
         // Build expected order of addresses
         var expectedOrder = filtered.Select(s => $"{s.Address}:{s.Port}").ToList();
-
-        // Build position map for O(1) lookup
         var expectedPositions = new Dictionary<string, int>();
         for (int i = 0; i < expectedOrder.Count; i++)
         {
@@ -699,37 +720,23 @@ public partial class MainWindow : Window
             }
         }
 
-        // Efficient reordering: sort in-place based on expected positions (O(n log n))
-        var sortedList = Servers.OrderBy(vm =>
-            expectedPositions.TryGetValue(vm.AddressDisplay, out var pos) ? pos : int.MaxValue
-        ).ToList();
-
-        // Only update if order changed
-        bool orderChanged = false;
-        for (int i = 0; i < sortedList.Count && !orderChanged; i++)
+        // Reorder in-place using Move() to preserve selection and context menus.
+        // Unlike Clear()+re-add which fires a Reset event, Move() fires individual
+        // Move events that the UI handles without losing selection state.
+        for (int targetIndex = 0; targetIndex < expectedOrder.Count; targetIndex++)
         {
-            if (i >= Servers.Count || Servers[i].AddressDisplay != sortedList[i].AddressDisplay)
-                orderChanged = true;
-        }
+            var address = expectedOrder[targetIndex];
+            if (targetIndex < Servers.Count && Servers[targetIndex].AddressDisplay == address)
+                continue; // Already in correct position
 
-        if (orderChanged)
-        {
-            Servers.Clear();
-            foreach (var vm in sortedList)
+            // Find the item and move it
+            for (int currentIndex = targetIndex + 1; currentIndex < Servers.Count; currentIndex++)
             {
-                Servers.Add(vm);
-            }
-        }
-
-        // Restore selection state via built-in highlighting
-        if (savedAddress != null)
-        {
-            var restoredVm = Servers.FirstOrDefault(vm => vm.AddressDisplay == savedAddress);
-            if (restoredVm != null)
-            {
-                ServerListView.SelectItem(restoredVm);
-                _selectedServer = _browserService.Servers.FirstOrDefault(s =>
-                    $"{s.Address}:{s.Port}" == savedAddress);
+                if (Servers[currentIndex].AddressDisplay == address)
+                {
+                    Servers.Move(currentIndex, targetIndex);
+                    break;
+                }
             }
         }
 
@@ -1751,17 +1758,48 @@ public partial class MainWindow : Window
             }
         }
 
-        // Check for missing WADs
-        var (allFound, missingWads) = launcher.CheckRequiredWads(server);
-        if (!allFound)
+        var pendingWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
+        var serverWadSourceUrl = Uri.TryCreate(server.Website, UriKind.Absolute, out var serverWebsiteUri)
+            ? serverWebsiteUri.ToString()
+            : null;
+
+        void AddPendingWads(IEnumerable<WadInfo> wads)
         {
-            var wadList = string.Join("\n", missingWads.Take(10).Select(w => $"  - {w.Name}"));
-            if (missingWads.Count > 10)
-                wadList += $"\n  ... and {missingWads.Count - 10} more";
+            foreach (var wad in wads)
+            {
+                wad.ServerUrl ??= serverWadSourceUrl;
+                pendingWads[wad.FileName] = wad;
+            }
+        }
+
+        var (_, missingWads) = launcher.CheckRequiredWads(server);
+        AddPendingWads(launcher.ResolveMissingWadsByHash(missingWads));
+        _wadManager.RefreshCache();
+
+        var hasServerHashes = server.PWADs.Any(p => !string.IsNullOrEmpty(p.Hash));
+        if (hasServerHashes)
+        {
+            var hashMismatches = await VerifyWadHashesWithDialogAsync(server);
+            if (hashMismatches.Count > 0)
+            {
+                AddPendingWads(launcher.ResolveHashMismatches(hashMismatches));
+                _wadManager.RefreshCache();
+            }
+        }
+
+        var (_, remainingMissingWads) = launcher.CheckRequiredWads(server);
+        AddPendingWads(launcher.ResolveMissingWadsByHash(remainingMissingWads));
+
+        if (pendingWads.Count > 0)
+        {
+            var requiredWads = pendingWads.Values.OrderBy(w => w.FileName).ToList();
+            var wadList = string.Join("\n", requiredWads.Take(10).Select(w => $"  - {w.FileName}"));
+            if (requiredWads.Count > 10)
+                wadList += $"\n  ... and {requiredWads.Count - 10} more";
 
             var result = await ShowThreeButtonDialogAsync(
-                "Missing WADs",
-                $"The following WAD files are missing:\n\n{wadList}\n\nWould you like to download them?",
+                "Required WADs",
+                $"The following WAD files are missing or need the server version:\n\n{wadList}\n\nWould you like to download them?",
                 "Download", "Skip", "Cancel");
 
             if (result == "Cancel")
@@ -1769,61 +1807,30 @@ public partial class MainWindow : Window
 
             if (result == "Download")
             {
-                var wadInfos = missingWads.Select(w => new WadInfo(w.Name, w.Hash)).ToList();
                 var downloader = new WadDownloader(_settings.Settings.DownloadSites.Count > 0
                     ? _settings.Settings.DownloadSites
                     : null);
 
-                var downloadDialog = new WadDownloadDialog(wadInfos, _wadManager.DownloadPath, downloader, isServerJoinContext: true);
+                var downloadDialog = new WadDownloadDialog(requiredWads, _wadManager.DownloadPath, downloader, isServerJoinContext: true);
 
                 await downloadDialog.ShowDialog(this);
 
                 _wadManager.RefreshCache();
 
-                // Re-check after download
-                var (nowFound, stillMissing) = launcher.CheckRequiredWads(server);
-                if (!nowFound)
+                var (_, stillMissing) = launcher.CheckRequiredWads(server);
+                if (stillMissing.Count > 0)
                 {
                     _logger.Warning($"Still missing WADs: {string.Join(", ", stillMissing.Take(5).Select(w => w.Name))}");
                     return;
                 }
-            }
-        }
 
-        // Verify WAD hashes if server provides them
-        if (server.PWADs.Any(p => !string.IsNullOrEmpty(p.Hash)))
-        {
-            var hashMismatches = await VerifyWadHashesWithDialogAsync(server);
-
-            if (hashMismatches.Count > 0)
-            {
-                var mismatchList = string.Join("\n", hashMismatches.Take(5).Select(m => $"  - {m.WadName}"));
-                if (hashMismatches.Count > 5)
-                    mismatchList += $"\n  ... and {hashMismatches.Count - 5} more";
-
-                var result = await ShowThreeButtonDialogAsync(
-                    "WAD Version Mismatch",
-                    $"These WADs have different versions than the server expects:\n\n{mismatchList}\n\nProceed anyway?",
-                    "Resolve", "Skip", "Cancel");
-
-                if (result == "Cancel")
-                    return;
-
-                if (result == "Resolve")
+                if (hasServerHashes)
                 {
-                    var wadsToDownload = launcher.ResolveHashMismatches(hashMismatches);
-                    if (wadsToDownload.Count > 0)
+                    var remainingHashMismatches = await VerifyWadHashesWithDialogAsync(server);
+                    if (remainingHashMismatches.Count > 0)
                     {
-                        var wadInfoList = wadsToDownload.Select(w => new WadInfo(w)).ToList();
-                        var downloader = new WadDownloader(_settings.Settings.DownloadSites.Count > 0
-                            ? _settings.Settings.DownloadSites
-                            : null);
-
-                        var downloadDialog = new WadDownloadDialog(wadInfoList, _wadManager.DownloadPath, downloader, isServerJoinContext: true);
-
-                        await downloadDialog.ShowDialog(this);
-
-                        _wadManager.RefreshCache();
+                        _logger.Warning($"Still mismatched WADs: {string.Join(", ", remainingHashMismatches.Take(5).Select(w => w.WadName))}");
+                        return;
                     }
                 }
             }
@@ -2342,6 +2349,11 @@ public partial class MainWindow : Window
     private void ServerListUpdateTimer_Tick(object? sender, EventArgs e)
     {
         if (!_serverListNeedsUpdate) return;
+
+        // Defer updates while the context menu is open to avoid closing it
+        if (ServerListView.ContextMenu is ContextMenu ctx && ctx.IsOpen)
+            return;
+
         _serverListNeedsUpdate = false;
 
         UpdateServerList();
@@ -2435,6 +2447,7 @@ public partial class MainWindow : Window
         _logFlushTimer.Stop();
         _alertTimer.Stop();
         _autoRefreshTimer.Stop();
+        _countdownTimer.Stop();
         _screenshotMonitor.Dispose();
         _notificationService.Dispose();
         _browserService.CancelRefresh();

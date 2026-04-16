@@ -55,7 +55,7 @@
         
         <!-- Log panel -->
         <Border Grid.Row="3" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="2">
-            <ScrollViewer x:Name="LogScrollViewer" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="LogScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                 <ItemsControl x:Name="LogControl" FontFamily="Consolas" FontSize="12"/>
             </ScrollViewer>
         </Border>

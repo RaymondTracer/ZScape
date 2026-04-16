@@ -59,11 +59,6 @@ public partial class WadDownloader : IDisposable
     private static DateTime _idgamesIndexExpiry = DateTime.MinValue;
     
     /// <summary>
-    /// Browser-like User-Agent for services that block bot requests (idgames, DuckDuckGo).
-    /// </summary>
-    private const string BrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-    
-    /// <summary>
     /// Supported WAD file extensions to search for (uses centralized WadExtensions).
     /// </summary>
     private static string[] SupportedExtensions => Utilities.WadExtensions.AllSupportedExtensions;
@@ -182,6 +177,61 @@ public partial class WadDownloader : IDisposable
     private void LogWarning(string message) => Log(LogLevel.Warning, message);
     private void LogError(string message) => Log(LogLevel.Error, message);
     private void LogSuccess(string message) => Log(LogLevel.Success, message);
+
+    private void LogUrlAttempt(string operation, HttpMethod method, string url)
+    {
+        LogVerbose($"{operation}: {method} {url}");
+    }
+
+    private void LogUrlFailure(string operation, HttpMethod method, string url, HttpStatusCode statusCode)
+    {
+        var message = $"{operation} failed: {method} {url} -> HTTP {(int)statusCode} {statusCode}";
+        if ((int)statusCode >= 500)
+        {
+            LogError(message);
+            return;
+        }
+
+        LogWarning(message);
+    }
+
+    private void LogUrlFailure(string operation, HttpMethod method, string url, Exception ex, CancellationToken ct)
+    {
+        if (ex is OperationCanceledException && ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (ex is HttpRequestException httpEx && httpEx.StatusCode.HasValue)
+        {
+            LogUrlFailure(operation, method, url, httpEx.StatusCode.Value);
+            return;
+        }
+
+        var message = $"{operation} failed: {method} {url} -> {DescribeRequestFailure(ex, ct)}";
+        if (ex is OperationCanceledException)
+        {
+            LogWarning(message);
+            return;
+        }
+
+        LogError(message);
+    }
+
+    private static string DescribeRequestFailure(Exception ex, CancellationToken ct)
+    {
+        if (ex is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            return "request timed out";
+        }
+
+        if (ex.InnerException is System.Net.Sockets.SocketException socketEx)
+        {
+            return $"socket error {socketEx.SocketErrorCode}: {socketEx.Message}";
+        }
+
+        return ex.Message;
+    }
     
     /// <summary>
     /// Downloads multiple WADs with streaming - starts downloads immediately as URLs are found.
@@ -361,7 +411,7 @@ public partial class WadDownloader : IDisposable
     {
         try
         {
-            LogInfo($"Checking server: {new Uri(serverUrl).Host}");
+            LogInfo($"Checking server URL: {serverUrl}");
             
             // Parse server page once for all links
             var allLinks = await ParseAllWadLinksFromPage(serverUrl, ct);
@@ -386,7 +436,7 @@ public partial class WadDownloader : IDisposable
                     task.StatusMessage = $"Queued ({domain})";
                     ProgressUpdated?.Invoke(this, task);
                     
-                    LogSuccess($"Found {fileName} at {domain} ({FormatBytes(size)})");
+                    LogSuccess($"Found {fileName} at {url} ({FormatBytes(size)})");
                     await channel.WriteAsync((task, url, size, domain), ct);
                 }
                 else
@@ -397,7 +447,7 @@ public partial class WadDownloader : IDisposable
                         if (!task.AlternateUrls.Any(a => a.Url == url))
                         {
                             task.AlternateUrls.Add((url, size));
-                            LogVerbose($"Added alternate source for {fileName}: {domain}");
+                            LogVerbose($"Added alternate source for {fileName}: {url}");
                         }
                     }
                 }
@@ -439,6 +489,7 @@ public partial class WadDownloader : IDisposable
         {
             var siteUri = new Uri(site.Contains("%WadName%") ? site.Replace("%WadName%", "test") : site);
             var siteHost = siteUri.Host;
+            LogVerbose($"Searching site: {site}");
             
             // Check for %WadName% template URLs - direct download links
             if (site.Contains("%WadName%", StringComparison.OrdinalIgnoreCase))
@@ -478,7 +529,7 @@ public partial class WadDownloader : IDisposable
                             ProgressUpdated?.Invoke(this, task);
                             
                             var foundAs = filename != task.Wad.FileName ? $" (as {filename})" : "";
-                            LogSuccess($"Found {task.Wad.FileName}{foundAs} at {siteHost} ({FormatBytes(size)})");
+                            LogSuccess($"Found {task.Wad.FileName}{foundAs} at {url} ({FormatBytes(size)})");
                             await channel.WriteAsync((task, url, size, siteHost), ct);
                             break;
                         }
@@ -490,7 +541,7 @@ public partial class WadDownloader : IDisposable
                                 if (!task.AlternateUrls.Any(a => a.Url == url))
                                 {
                                     task.AlternateUrls.Add((url, size));
-                                    LogVerbose($"Added alternate source for {task.Wad.FileName}: {siteHost}");
+                                    LogVerbose($"Added alternate source for {task.Wad.FileName}: {url}");
                                 }
                             }
                             break;
@@ -503,7 +554,7 @@ public partial class WadDownloader : IDisposable
             else
             {
                 // Parse page for all WAD links
-                LogVerbose($"Parsing {siteHost}...");
+                LogVerbose($"Parsing site page: {site}");
                 var allLinks = await ParseAllWadLinksFromPage(site, ct);
                 
                 // Build lookup maps for tasks still searching or failed (can benefit from new sources)
@@ -546,7 +597,7 @@ public partial class WadDownloader : IDisposable
                         ProgressUpdated?.Invoke(this, task);
                         
                         var foundAs = !lowerName.Equals(taskKey, StringComparison.OrdinalIgnoreCase) ? $" (as {fileName})" : "";
-                        LogSuccess($"Found {task.Wad.FileName}{foundAs} at {siteHost} ({FormatBytes(size)})");
+                        LogSuccess($"Found {task.Wad.FileName}{foundAs} at {url} ({FormatBytes(size)})");
                         await channel.WriteAsync((task, url, size, siteHost), ct);
                     }
                     else
@@ -557,7 +608,7 @@ public partial class WadDownloader : IDisposable
                             if (!task.AlternateUrls.Any(a => a.Url == url))
                             {
                                 task.AlternateUrls.Add((url, size));
-                                LogVerbose($"Added alternate source for {fileName}: {siteHost}");
+                                LogVerbose($"Added alternate source for {fileName}: {url}");
                             }
                         }
                     }
@@ -679,7 +730,7 @@ public partial class WadDownloader : IDisposable
                         task.DownloadedFileName = Path.GetFileName(filePath); // Actual filename (usually .zip)
                         ProgressUpdated?.Invoke(this, task);
                         
-                        LogSuccess($"Found {task.Wad.FileName} on /idgames ({domain}, {FormatBytes(actualSize)})");
+                        LogSuccess($"Found {task.Wad.FileName} on /idgames at {workingUrl} ({FormatBytes(actualSize)})");
                         await channel.WriteAsync((task, workingUrl, actualSize, domain), ct);
                     }
                     else
@@ -690,7 +741,7 @@ public partial class WadDownloader : IDisposable
                             if (!task.AlternateUrls.Any(a => a.Url == workingUrl))
                             {
                                 task.AlternateUrls.Add((workingUrl, actualSize));
-                                LogVerbose($"Added /idgames alternate for {task.Wad.FileName}: {domain}");
+                                LogVerbose($"Added /idgames alternate for {task.Wad.FileName}: {workingUrl}");
                             }
                         }
                     }
@@ -752,7 +803,8 @@ public partial class WadDownloader : IDisposable
             LogVerbose("/idgames: downloading index...");
             
             using var request = new HttpRequestMessage(HttpMethod.Get, IdgamesIndexUrl);
-            request.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
+            request.Headers.TryAddWithoutValidation("User-Agent", AppConstants.AppInfo.WadDownloaderUserAgent);
+            LogUrlAttempt("/idgames index download", request.Method, IdgamesIndexUrl);
             
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(AppConstants.Timeouts.WebRequestTimeoutSeconds));
@@ -760,7 +812,7 @@ public partial class WadDownloader : IDisposable
             var response = await WebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             if (!response.IsSuccessStatusCode)
             {
-                LogVerbose($"/idgames index download failed: {response.StatusCode}");
+                LogUrlFailure("/idgames index download", request.Method, IdgamesIndexUrl, response.StatusCode);
                 return null;
             }
             
@@ -805,7 +857,7 @@ public partial class WadDownloader : IDisposable
         }
         catch (Exception ex)
         {
-            LogVerbose($"/idgames index error: {ex.Message}");
+            LogUrlFailure("/idgames index download", HttpMethod.Get, IdgamesIndexUrl, ex, ct);
             return null;
         }
         finally
@@ -861,14 +913,15 @@ public partial class WadDownloader : IDisposable
                     LogVerbose($"Web search: {searchQuery}");
                     
                     using var request = new HttpRequestMessage(HttpMethod.Get, searchUrl);
-                    request.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
+                    request.Headers.TryAddWithoutValidation("User-Agent", AppConstants.AppInfo.WadDownloaderUserAgent);
                     request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
                     request.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.5");
+                    LogUrlAttempt("Web search request", request.Method, searchUrl);
                     
                     var response = await WebClient.SendAsync(request, ct);
                     if (!response.IsSuccessStatusCode)
                     {
-                        LogVerbose($"Web search failed: {response.StatusCode}");
+                        LogUrlFailure("Web search request", request.Method, searchUrl, response.StatusCode);
                         continue;
                     }
                     
@@ -893,7 +946,7 @@ public partial class WadDownloader : IDisposable
                         
                         try
                         {
-                            LogVerbose($"Web search: crawling {new Uri(pageUrl).Host}...");
+                            LogVerbose($"Web search crawl target: {pageUrl}");
                             var downloadUrls = await CrawlPageForWadDownloads(pageUrl, task.Wad.FileName, ct);
                             
                             foreach (var url in downloadUrls)
@@ -917,7 +970,7 @@ public partial class WadDownloader : IDisposable
                                         task.StatusMessage = $"Queued (web search - {domain})";
                                         ProgressUpdated?.Invoke(this, task);
                                         
-                                        LogSuccess($"Found {task.Wad.FileName} via web search ({domain}, {FormatBytes(size)})");
+                                        LogSuccess($"Found {task.Wad.FileName} via web search at {url} ({FormatBytes(size)})");
                                         await channel.WriteAsync((task, url, size, domain), ct);
                                         break;
                                     }
@@ -1039,14 +1092,19 @@ public partial class WadDownloader : IDisposable
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, pageUrl);
-            request.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
+            request.Headers.TryAddWithoutValidation("User-Agent", AppConstants.AppInfo.WadDownloaderUserAgent);
             request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            LogUrlAttempt("Page crawl", request.Method, pageUrl);
             
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(AppConstants.Timeouts.PageCrawlTimeoutSeconds));
             
             var response = await WebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-            if (!response.IsSuccessStatusCode) return downloadUrls;
+            if (!response.IsSuccessStatusCode)
+            {
+                LogUrlFailure("Page crawl", request.Method, pageUrl, response.StatusCode);
+                return downloadUrls;
+            }
             
             // Check content type - only parse HTML
             var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
@@ -1119,7 +1177,10 @@ public partial class WadDownloader : IDisposable
                 catch { }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogUrlFailure("Page crawl", HttpMethod.Get, pageUrl, ex, ct);
+        }
         
         return downloadUrls;
     }
@@ -1139,9 +1200,13 @@ public partial class WadDownloader : IDisposable
         
         try
         {
-            var response = await HttpClient.GetAsync(pageUrl, ct);
+            LogUrlAttempt("Page parse request", HttpMethod.Get, pageUrl);
+            using var response = await HttpClient.GetAsync(pageUrl, ct);
             if (!response.IsSuccessStatusCode)
+            {
+                LogUrlFailure("Page parse request", HttpMethod.Get, pageUrl, response.StatusCode);
                 return results;
+            }
             
             var html = await response.Content.ReadAsStringAsync(ct);
             var baseUri = new Uri(pageUrl);
@@ -1185,7 +1250,7 @@ public partial class WadDownloader : IDisposable
         }
         catch (Exception ex)
         {
-            LogVerbose($"Parse error ({pageUrl}): {ex.Message}");
+            LogUrlFailure("Page parse request", HttpMethod.Get, pageUrl, ex, ct);
         }
         
         return results;
@@ -1243,7 +1308,7 @@ public partial class WadDownloader : IDisposable
                     // Try same source again if under retry limit
                     if (task.RetryCount <= WadDownloadTask.MaxRetriesPerSource)
                     {
-                        LogWarning($"Retrying {task.Wad.FileName} (attempt {task.RetryCount}/{WadDownloadTask.MaxRetriesPerSource})");
+                        LogWarning($"Retrying {task.Wad.FileName} from {url} (attempt {task.RetryCount}/{WadDownloadTask.MaxRetriesPerSource})");
                         task.BytesDownloaded = 0;
                         task.Status = WadDownloadStatus.Queued;
                         task.StatusMessage = $"Retry {task.RetryCount} ({domain})";
@@ -1260,7 +1325,7 @@ public partial class WadDownloader : IDisposable
                         task.RetryCount = 0;
                         
                         var altDomain = new Uri(altUrl).Host;
-                        LogWarning($"Trying alternate source for {task.Wad.FileName}: {altDomain}");
+                        LogWarning($"Trying alternate source for {task.Wad.FileName}: {altUrl}");
                         
                         task.BytesDownloaded = 0;
                         task.SourceUrl = altUrl;
@@ -1348,7 +1413,7 @@ public partial class WadDownloader : IDisposable
             task.StatusMessage = $"Downloading ({task.ThreadCount} threads)...";
             ProgressUpdated?.Invoke(this, task);
             
-            LogInfo($"Downloading {task.Wad.FileName} ({FormatBytes(task.TotalBytes)}) from {domain} [{task.ThreadCount} threads]");
+            LogInfo($"Downloading {task.Wad.FileName} from {task.SourceUrl} ({FormatBytes(task.TotalBytes)}, {task.ThreadCount} threads)");
             
             // Use the actual filename from the download (may differ from requested if found as different extension)
             var downloadFileName = task.DownloadedFileName ?? task.Wad.FileName;
@@ -1359,6 +1424,35 @@ public partial class WadDownloader : IDisposable
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
                 Directory.CreateDirectory(directory);
+            }
+
+            if (!string.IsNullOrEmpty(task.Wad.ExpectedHash) && File.Exists(outputPath))
+            {
+                var existingHash = await ComputeFileHashAsync(outputPath, ct);
+                if (string.Equals(existingHash, task.Wad.ExpectedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    var existingSize = 0L;
+                    try { existingSize = new FileInfo(outputPath).Length; } catch { }
+
+                    task.Status = WadDownloadStatus.AlreadyExists;
+                    task.StatusMessage = "Already exists";
+                    task.TotalBytes = existingSize;
+                    task.BytesDownloaded = existingSize;
+                    task.BytesPerSecond = 0;
+                    ProgressUpdated?.Invoke(this, task);
+
+                    LogSuccess($"Using existing file for {task.Wad.FileName}: {outputPath}");
+                    DownloadCompleted?.Invoke(this, task);
+                    return true;
+                }
+            }
+
+            if (!ArchiveExistingFile(outputPath, "download", out _))
+            {
+                task.Status = WadDownloadStatus.Failed;
+                task.StatusMessage = "Archive failed";
+                task.ErrorMessage = "Could not rename existing file before download";
+                return false;
             }
             
             // Check for range support
@@ -1377,32 +1471,6 @@ public partial class WadDownloader : IDisposable
                 await SingleThreadDownloadAsync(task, outputPath, ct);
             }
             
-            // Verify hash if expected hash is provided
-            if (!string.IsNullOrEmpty(task.Wad.ExpectedHash))
-            {
-                task.StatusMessage = "Verifying hash...";
-                ProgressUpdated?.Invoke(this, task);
-                
-                var actualHash = await ComputeFileHashAsync(outputPath, ct);
-                var expectedHash = task.Wad.ExpectedHash;
-                if (actualHash == null || !string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
-                {
-                    var actualTrunc = actualHash?[..Math.Min(12, actualHash.Length)] ?? "null";
-                    var expectedTrunc = expectedHash[..Math.Min(12, expectedHash.Length)];
-                    LogWarning($"Hash mismatch for {task.Wad.FileName}: expected={expectedTrunc}..., got={actualTrunc}...");
-                    
-                    // Delete the bad file
-                    try { File.Delete(outputPath); } catch { }
-                    
-                    task.Status = WadDownloadStatus.Failed;
-                    task.StatusMessage = "Hash mismatch";
-                    task.ErrorMessage = "Downloaded file hash does not match server expectation";
-                    return false; // Will trigger retry with alternate source
-                }
-                
-                LogVerbose($"Hash verified for {task.Wad.FileName}");
-            }
-            
             // Extract archive if needed and find the WAD file inside
             var finalPath = ExtractArchiveIfNeeded(task, downloadPath, outputPath);
             if (finalPath == null)
@@ -1411,6 +1479,38 @@ public partial class WadDownloader : IDisposable
                 task.StatusMessage = "Extraction failed";
                 task.ErrorMessage = "Could not find WAD in downloaded archive";
                 return false;
+            }
+
+            // Verify hash against the final usable file (after extraction when needed).
+            if (!string.IsNullOrEmpty(task.Wad.ExpectedHash))
+            {
+                task.StatusMessage = "Verifying hash...";
+                ProgressUpdated?.Invoke(this, task);
+
+                var actualHash = await ComputeFileHashAsync(finalPath, ct);
+                var expectedHash = task.Wad.ExpectedHash;
+                if (actualHash == null || !string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    var actualTrunc = actualHash?[..Math.Min(12, actualHash.Length)] ?? "null";
+                    var expectedTrunc = expectedHash[..Math.Min(12, expectedHash.Length)];
+                    LogWarning($"Hash mismatch for {task.Wad.FileName} from {task.SourceUrl}: expected={expectedTrunc}..., got={actualTrunc}...");
+
+                    try
+                    {
+                        if (File.Exists(finalPath))
+                        {
+                            File.Delete(finalPath);
+                        }
+                    }
+                    catch { }
+
+                    task.Status = WadDownloadStatus.Failed;
+                    task.StatusMessage = "Hash mismatch";
+                    task.ErrorMessage = "Downloaded file hash does not match server expectation";
+                    return false; // Will trigger retry with alternate source
+                }
+
+                LogVerbose($"Hash verified for {task.Wad.FileName}: {finalPath}");
             }
             
             sw.Stop();
@@ -1425,7 +1525,7 @@ public partial class WadDownloader : IDisposable
             ProgressUpdated?.Invoke(this, task);
             
             _domainConfig.UpdateThreadCount(domain, task.ThreadCount, wasSuccessful: true);
-            LogSuccess($"Downloaded {task.Wad.FileName} ({FormatBytes(task.TotalBytes)}) in {sw.Elapsed.TotalSeconds:F1}s ({FormatBytes((long)speed)}/s)");
+            LogSuccess($"Downloaded {task.Wad.FileName} from {task.SourceUrl} in {sw.Elapsed.TotalSeconds:F1}s ({FormatBytes((long)speed)}/s)");
             
             DownloadCompleted?.Invoke(this, task);
             return true;
@@ -1436,7 +1536,7 @@ public partial class WadDownloader : IDisposable
             task.Status = WadDownloadStatus.Failed;
             task.StatusMessage = "Too many connections";
             task.ErrorMessage = "Server rejected connections - threads reduced";
-            LogWarning($"Failed {task.Wad.FileName}: Too many connections, reducing threads");
+            LogWarning($"Failed {task.Wad.FileName} from {task.SourceUrl}: Too many connections, reducing threads");
             return false;
         }
         catch (OperationCanceledException)
@@ -1451,7 +1551,7 @@ public partial class WadDownloader : IDisposable
             task.Status = WadDownloadStatus.Failed;
             task.StatusMessage = "Failed";
             task.ErrorMessage = ex.Message;
-            LogError($"Failed {task.Wad.FileName}: {ex.Message}");
+            LogError($"Failed {task.Wad.FileName} from {task.SourceUrl}: {ex.Message}");
             return false;
         }
     }
@@ -1475,6 +1575,7 @@ public partial class WadDownloader : IDisposable
                 // Try making multiple concurrent HEAD requests
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(AppConstants.Timeouts.ConnectionTestTimeoutMs);
+                LogVerbose($"Thread probe batch: HEAD {testUrl} x{currentThreads}");
                 
                 var testTasks = Enumerable.Range(0, currentThreads)
                     .Select(async _ =>
@@ -1496,8 +1597,9 @@ public partial class WadDownloader : IDisposable
                     break;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                LogUrlFailure("Thread probe", HttpMethod.Head, testUrl, ex, ct);
                 break;
             }
         }
@@ -1508,14 +1610,22 @@ public partial class WadDownloader : IDisposable
     
     private async Task<bool> TestRangeRequestAsync(Uri uri, CancellationToken ct)
     {
+        var url = uri.ToString();
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Head, uri);
+            LogUrlAttempt("Range support probe", request.Method, url);
             using var response = await HttpClient.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                LogUrlFailure("Range support probe", request.Method, url, response.StatusCode);
+                return false;
+            }
             return response.Headers.AcceptRanges.Contains("bytes");
         }
-        catch
+        catch (Exception ex)
         {
+            LogUrlFailure("Range support probe", HttpMethod.Head, url, ex, ct);
             return false;
         }
     }
@@ -1618,16 +1728,27 @@ public partial class WadDownloader : IDisposable
             bool isConnectionLimit = ex.StatusCode == HttpStatusCode.TooManyRequests ||
                                     ex.StatusCode == HttpStatusCode.ServiceUnavailable ||
                                     ex.InnerException is System.Net.Sockets.SocketException;
+            var range = $"{start}-{end}";
+            if (ex.StatusCode.HasValue)
+            {
+                LogUrlFailure($"Segment download bytes={range}", HttpMethod.Get, uri.ToString(), ex.StatusCode.Value);
+            }
+            else
+            {
+                LogUrlFailure($"Segment download bytes={range}", HttpMethod.Get, uri.ToString(), ex, ct);
+            }
             failedSegments.Add((segmentIndex, isConnectionLimit));
         }
-        catch
+        catch (Exception ex)
         {
+            LogUrlFailure($"Segment download bytes={start}-{end}", HttpMethod.Get, uri.ToString(), ex, ct);
             failedSegments.Add((segmentIndex, false));
         }
     }
     
     private async Task SingleThreadDownloadAsync(WadDownloadTask task, string outputPath, CancellationToken ct)
     {
+        LogUrlAttempt("Download request", HttpMethod.Get, task.SourceUrl!);
         using var response = await HttpClient.GetAsync(task.SourceUrl, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
         
@@ -1664,13 +1785,22 @@ public partial class WadDownloader : IDisposable
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Head, url);
+            LogUrlAttempt("HEAD request", request.Method, url);
             using var response = await HttpClient.SendAsync(request, ct);
             if (response.IsSuccessStatusCode && response.Content.Headers.ContentLength.HasValue)
             {
                 return response.Content.Headers.ContentLength.Value;
             }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                LogUrlFailure("HEAD request", request.Method, url, response.StatusCode);
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogUrlFailure("HEAD request", HttpMethod.Head, url, ex, ct);
+        }
         return 0;
     }
     
@@ -1795,12 +1925,14 @@ public partial class WadDownloader : IDisposable
                 var outputPath = Path.Combine(downloadPath, outputFileName);
                 
                 // Extract the file
-                if (File.Exists(outputPath))
-                    File.Delete(outputPath);
+                if (!ArchiveExistingFile(outputPath, "extraction", out _))
+                {
+                    return null;
+                }
                 
                 matchingEntry.WriteToFile(outputPath, new ExtractionOptions { Overwrite = true });
                 
-                LogSuccess($"Extracted {outputFileName} from archive");
+                LogSuccess($"Extracted {outputFileName} from archive {archivePath}");
                 
                 // Clean up the archive
                 try { File.Delete(archivePath); } catch { }
@@ -1811,13 +1943,13 @@ public partial class WadDownloader : IDisposable
             {
                 // No WAD found in archive - list contents for debugging
                 var contents = string.Join(", ", entries.Take(5).Select(e => Path.GetFileName(e.Key ?? "")));
-                LogWarning($"No matching WAD found in archive. Contents: {contents}...");
+                LogWarning($"No matching WAD found in archive {archivePath}. Contents: {contents}...");
                 return null;
             }
         }
         catch (Exception ex)
         {
-            LogWarning($"Failed to extract archive: {ex.Message}");
+            LogWarning($"Failed to extract archive {archivePath}: {ex.Message}");
             return null;
         }
     }
@@ -1840,6 +1972,25 @@ public partial class WadDownloader : IDisposable
         {
             return null;
         }
+    }
+
+    private bool ArchiveExistingFile(string filePath, string operation, out string? archivedPath)
+    {
+        archivedPath = null;
+        if (!File.Exists(filePath))
+        {
+            return true;
+        }
+
+        archivedPath = WadManager.Instance.ArchiveWadWithHash(filePath);
+        if (archivedPath == null)
+        {
+            LogError($"Failed to archive existing file before {operation}: {filePath}");
+            return false;
+        }
+
+        LogWarning($"Archived existing file before {operation}: {filePath} -> {archivedPath}");
+        return true;
     }
     
     [GeneratedRegex(@"href\s*=\s*[""']([^""']+)[""']", RegexOptions.IgnoreCase)]

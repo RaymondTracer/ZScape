@@ -99,7 +99,7 @@ public static class AppConstants
         public const string UserAgent = "ZScape/1.0";
         
         /// <summary>
-        /// Full User-Agent string for WAD downloader.
+        /// Browser-like User-Agent for WAD downloads and web lookups.
         /// </summary>
         public const string WadDownloaderUserAgent = "ZScape/1.0 (WadDownloader)";
     }
@@ -201,17 +201,18 @@ public static class AppConstants
             (Services.DownloadDialogBehavior.StayOpen, "Stay Open"),
             (Services.DownloadDialogBehavior.CloseOnSuccess, "Close on Success"),
             (Services.DownloadDialogBehavior.CloseOnSuccessIfFocused, "Close on Success (if focused)"),
-            (Services.DownloadDialogBehavior.CloseOnSuccessAfterDelay, "Close on Success (after delay)"),
-            (Services.DownloadDialogBehavior.AlwaysClose, "Always Close")
+            (Services.DownloadDialogBehavior.CloseOnSuccessAfterDelay, "Close on Success (after delay)")
         ];
         
         public static string GetLabel(Services.DownloadDialogBehavior behavior) =>
-            Options.FirstOrDefault(o => o.Value == behavior).Label ?? behavior.ToString();
+            Options.FirstOrDefault(o => o.Value == behavior).Label ?? GetLabel(Services.DownloadDialogBehavior.CloseOnSuccess);
         
         public static Services.DownloadDialogBehavior GetValue(int index) =>
             index >= 0 && index < Options.Length ? Options[index].Value : Services.DownloadDialogBehavior.CloseOnSuccess;
         
         public static int GetIndex(Services.DownloadDialogBehavior behavior) =>
-            Array.FindIndex(Options, o => o.Value == behavior);
+            Array.FindIndex(Options, o => o.Value == behavior) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Services.DownloadDialogBehavior.CloseOnSuccess);
     }
 }
