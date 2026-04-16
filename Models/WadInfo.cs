@@ -121,7 +121,11 @@ public class WadDownloadTask
     {
         get
         {
-            if (TotalBytes <= 0) return StatusMessage;
+            if (TotalBytes <= 0)
+            {
+                return BytesDownloaded > 0 ? $"{FormatBytes(BytesDownloaded)} / ?" : StatusMessage;
+            }
+
             return $"{FormatBytes(BytesDownloaded)} / {FormatBytes(TotalBytes)} ({ProgressPercent:F1}%)";
         }
     }

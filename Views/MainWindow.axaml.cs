@@ -1797,15 +1797,17 @@ public partial class MainWindow : Window
             if (requiredWads.Count > 10)
                 wadList += $"\n  ... and {requiredWads.Count - 10} more";
 
-            var result = await ShowThreeButtonDialogAsync(
+            var shouldDownload = await ShowConfirmDialogAsync(
                 "Required WADs",
-                $"The following WAD files are missing or need the server version:\n\n{wadList}\n\nWould you like to download them?",
-                "Download", "Skip", "Cancel");
+                $"The following WAD files are missing or need the server version:\n\n{wadList}\n\nWould you like to download them?");
 
-            if (result == "Cancel")
+            if (!shouldDownload)
+            {
+                _logger.Info("Server join cancelled because required WAD download was declined.");
                 return;
+            }
 
-            if (result == "Download")
+            if (shouldDownload)
             {
                 var downloader = new WadDownloader(_settings.Settings.DownloadSites.Count > 0
                     ? _settings.Settings.DownloadSites
@@ -2233,54 +2235,6 @@ public partial class MainWindow : Window
         {
             if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { result = true; dialog.Close(); };
             if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
-        }
-
-        await dialog.ShowDialog(this);
-        return result;
-    }
-
-    private async Task<string> ShowThreeButtonDialogAsync(string title, string message, string button1, string button2, string button3)
-    {
-        var result = button3; // Default to cancel
-        var dialog = new Window
-        {
-            Title = title,
-            Width = 450,
-            Height = 200,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            CanResize = false,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 15,
-                Children =
-                {
-                    new ScrollViewer
-                    {
-                        MaxHeight = 100,
-                        Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }
-                    },
-                    new StackPanel
-                    {
-                        Orientation = Avalonia.Layout.Orientation.Horizontal,
-                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                        Spacing = 10,
-                        Children =
-                        {
-                            new Button { Content = button1, Width = 90 },
-                            new Button { Content = button2, Width = 90 },
-                            new Button { Content = button3, Width = 90 }
-                        }
-                    }
-                }
-            }
-        };
-
-        if (dialog.Content is StackPanel sp && sp.Children.LastOrDefault() is StackPanel buttons)
-        {
-            if (buttons.Children[0] is Button btn1) btn1.Click += (_, _) => { result = button1; dialog.Close(); };
-            if (buttons.Children[1] is Button btn2) btn2.Click += (_, _) => { result = button2; dialog.Close(); };
-            if (buttons.Children[2] is Button btn3) btn3.Click += (_, _) => { result = button3; dialog.Close(); };
         }
 
         await dialog.ShowDialog(this);
