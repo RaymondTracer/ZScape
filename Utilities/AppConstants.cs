@@ -99,7 +99,7 @@ public static class AppConstants
         public const string UserAgent = "ZScape/1.0";
         
         /// <summary>
-        /// Browser-like User-Agent for WAD downloads and web lookups.
+        /// User-Agent string for WAD downloads and related web lookups.
         /// </summary>
         public const string WadDownloaderUserAgent = "ZScape/1.0 (WadDownloader)";
     }
