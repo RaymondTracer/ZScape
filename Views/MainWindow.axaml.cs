@@ -1768,6 +1768,10 @@ public partial class MainWindow : Window
         var optionalPwadMode = _settings.Settings.OptionalPwadDownloadMode;
         var skippedOptionalPwads = GetSkippedOptionalPwadNames();
         var downloadSelectionConfirmed = false;
+        var hasOptionalServerHashes = server.PWADs.Any(p => p.IsOptional && !string.IsNullOrEmpty(p.Hash));
+        var optionalHashMismatchesByName = new Dictionary<string, GameLauncher.WadHashMismatch>(StringComparer.OrdinalIgnoreCase);
+        var optionalWadsExcludedFromLaunch = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var optionalHashStateChanged = false;
         var serverWadSourceUrl = Uri.TryCreate(server.Website, UriKind.Absolute, out var serverWebsiteUri)
             ? serverWebsiteUri.ToString()
             : null;
@@ -1787,6 +1791,26 @@ public partial class MainWindow : Window
 
         void AddOptionalCandidateWads(IEnumerable<WadInfo> wads) =>
             AddWadsToDictionary(optionalCandidateWads, wads, isOptional: true);
+
+        void ResolveSelectedOptionalHashMismatches(IEnumerable<WadInfo> selectedOptionalWads)
+        {
+            var selectedOptionalNames = selectedOptionalWads
+                .Select(wad => wad.FileName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var selectedMismatches = optionalHashMismatchesByName.Values
+                .Where(mismatch => selectedOptionalNames.Contains(mismatch.WadName))
+                .ToList();
+
+            if (selectedMismatches.Count == 0)
+            {
+                return;
+            }
+
+            AddPendingWads(launcher.ResolveHashMismatches(selectedMismatches), isOptional: true);
+            _wadManager.RefreshCache();
+            optionalHashStateChanged = true;
+        }
 
         var (_, missingWads) = launcher.CheckRequiredWads(server);
         AddPendingWads(launcher.ResolveMissingWadsByHash(missingWads));
@@ -1816,6 +1840,21 @@ public partial class MainWindow : Window
             AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(remainingOptionalWads));
         }
 
+        if (hasOptionalServerHashes)
+        {
+            var optionalHashMismatches = await VerifyOptionalWadHashesWithDialogAsync(server);
+            foreach (var mismatch in optionalHashMismatches)
+            {
+                optionalHashMismatchesByName[mismatch.WadName] = mismatch;
+                optionalWadsExcludedFromLaunch.Add(mismatch.WadName);
+            }
+
+            if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
+            {
+                AddOptionalCandidateWads(optionalHashMismatches.Select(mismatch => new WadInfo(mismatch.WadName, mismatch.ExpectedHash)));
+            }
+        }
+
         if (optionalCandidateWads.Count > 0)
         {
             if (optionalPwadMode == OptionalPwadDownloadMode.AlwaysDownload)
@@ -1823,7 +1862,13 @@ public partial class MainWindow : Window
                 var autoSelectedOptionalWads = optionalCandidateWads.Values
                     .Where(wad => !skippedOptionalPwads.Contains(wad.FileName))
                     .ToList();
-                AddPendingWads(autoSelectedOptionalWads, isOptional: true);
+
+                var autoSelectedMissingOptionalWads = autoSelectedOptionalWads
+                    .Where(wad => !optionalHashMismatchesByName.ContainsKey(wad.FileName))
+                    .ToList();
+
+                AddPendingWads(autoSelectedMissingOptionalWads, isOptional: true);
+                ResolveSelectedOptionalHashMismatches(autoSelectedOptionalWads);
             }
             else if (optionalPwadMode == OptionalPwadDownloadMode.AskEachTime)
             {
@@ -1839,7 +1884,13 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                AddPendingWads(selectionDialog.SelectedOptionalWads, isOptional: true);
+                var selectedOptionalWads = selectionDialog.SelectedOptionalWads;
+                var selectedMissingOptionalWads = selectedOptionalWads
+                    .Where(wad => !optionalHashMismatchesByName.ContainsKey(wad.FileName))
+                    .ToList();
+
+                AddPendingWads(selectedMissingOptionalWads, isOptional: true);
+                ResolveSelectedOptionalHashMismatches(selectedOptionalWads);
                 downloadSelectionConfirmed = true;
 
                 if (selectionDialog.RememberSkippedSelections)
@@ -1913,6 +1964,13 @@ public partial class MainWindow : Window
             }
         }
 
+        if (hasOptionalServerHashes && optionalHashStateChanged)
+        {
+            optionalWadsExcludedFromLaunch = (await VerifyOptionalWadHashesWithDialogAsync(server))
+                .Select(mismatch => mismatch.WadName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
         // Prompt for passwords if needed
         string? connectPassword = null;
         string? joinPassword = null;
@@ -1930,13 +1988,26 @@ public partial class MainWindow : Window
         }
 
         // Launch the game
-        if (launcher.LaunchGame(server, connectPassword, joinPassword))
+        if (launcher.LaunchGame(server, connectPassword, joinPassword, optionalWadsExcludedFromLaunch))
         {
             _logger.Success($"Launched connection to {server.Name}");
         }
     }
 
+    private Task<List<GameLauncher.WadHashMismatch>> VerifyOptionalWadHashesWithDialogAsync(ServerInfo server)
+    {
+        return VerifyWadHashesWithDialogAsync(server, "Verifying Optional PWAD Hashes", GameLauncher.Instance.VerifyOptionalWadHashesAsync);
+    }
+
     private async Task<List<GameLauncher.WadHashMismatch>> VerifyWadHashesWithDialogAsync(ServerInfo server)
+    {
+        return await VerifyWadHashesWithDialogAsync(server, "Verifying WAD Hashes", GameLauncher.Instance.VerifyWadHashesAsync);
+    }
+
+    private async Task<List<GameLauncher.WadHashMismatch>> VerifyWadHashesWithDialogAsync(
+        ServerInfo server,
+        string dialogTitle,
+        Func<ServerInfo, IProgress<GameLauncher.HashVerificationProgress>, CancellationToken, Task<List<GameLauncher.WadHashMismatch>>> verifyAsync)
     {
         var settings = SettingsService.Instance.Settings;
         var concurrency = settings.HashVerificationConcurrency;
@@ -1953,7 +2024,7 @@ public partial class MainWindow : Window
 
         var progressWindow = new Window
         {
-            Title = "Verifying WAD Hashes",
+            Title = dialogTitle,
             Width = 500,
             Height = isConcurrent ? dialogHeight : 180,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -2152,7 +2223,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                mismatches = await GameLauncher.Instance.VerifyWadHashesAsync(server, progress, cts.Token);
+                mismatches = await verifyAsync(server, progress, cts.Token);
             }
             catch (OperationCanceledException)
             {

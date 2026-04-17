@@ -195,7 +195,7 @@ Server List Row Colors:
    - Automatic WAD archiving with hash suffixes
    - idgames Archive integration
    - Web search fallback (DuckDuckGo)
-    - Optional WAD metadata from server responses is honored during join-time required-WAD checks, and missing optional PWADs can be auto-downloaded, skipped, or selected per join based on user settings
+    - Optional WAD metadata from server responses is honored during join-time required-WAD checks, and optional PWADs that are missing or hash-mismatched can be auto-downloaded, skipped, or selected per join based on user settings; unresolved optional mismatches are excluded from the launch command line
 
 6. **Connection & Update Features**
    - Connection history with recent servers
@@ -207,7 +207,7 @@ Server List Row Colors:
 - **MainWindow**: Primary Avalonia server browser interface
 - **UnifiedSettingsDialog**: Comprehensive settings configuration
 - **FirstTimeSetupDialog**: Initial setup wizard shown when settings.json doesn't exist
-- **OptionalWadSelectionDialog**: Join-time selection dialog for required and optional PWAD downloads
+- **OptionalWadSelectionDialog**: Join-time selection dialog for required PWAD downloads plus optional missing or hash-mismatched PWAD handling
 - **UpdateProgressDialog**: Progress dialog for update save-state operations before restart
 - **ServerFilterDialog**: Advanced server filtering options
 - **AddServerDialog**: Manually add servers by IP:Port
@@ -720,10 +720,11 @@ public enum OptionalPwadDownloadMode
 
 ### GameLauncher
 - Singleton (`GameLauncher.Instance`) handling Zandronum launches.
-- `LaunchGame(ServerInfo, connectPassword?, joinPassword?)`: Launches Zandronum with constructed arguments.
+- `LaunchGame(ServerInfo, connectPassword?, joinPassword?, excludedOptionalPwads?)`: Launches Zandronum with constructed arguments while allowing unresolved optional PWADs to be omitted from `-file`.
 - `CheckRequiredWads(ServerInfo)`: Returns missing WADs with expected hashes.
 - `CheckOptionalWads(ServerInfo)`: Returns missing optional WADs that can be offered for download without blocking joins.
-- `VerifyWadHashesAsync(ServerInfo, progress, cancellationToken)`: Concurrent hash verification with byte-level progress.
+- `VerifyWadHashesAsync(ServerInfo, progress, cancellationToken)`: Concurrent hash verification for required PWADs with byte-level progress.
+- `VerifyOptionalWadHashesAsync(ServerInfo, progress, cancellationToken)`: Concurrent hash verification for optional PWADs so mismatched optionals can follow the same selection policy as missing optional WADs.
 - `ResolveHashMismatches(List<WadHashMismatch>)`: Swaps WAD versions or prepares download list.
 - `DownloadTestingBuildAsync(ServerInfo)`: Downloads and extracts testing versions, copies config files.
 - `GetFullConnectCommand(ServerInfo)`: Returns full command line for clipboard.

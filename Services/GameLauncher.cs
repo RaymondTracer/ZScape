@@ -34,8 +34,13 @@ public class GameLauncher
     /// <param name="server">The server to connect to.</param>
     /// <param name="connectPassword">Optional connect password.</param>
     /// <param name="joinPassword">Optional join/in-game password.</param>
+    /// <param name="excludedOptionalPwads">Optional PWAD names to exclude from the launch command line.</param>
     /// <returns>True if launch succeeded, false otherwise.</returns>
-    public bool LaunchGame(ServerInfo server, string? connectPassword = null, string? joinPassword = null)
+    public bool LaunchGame(
+        ServerInfo server,
+        string? connectPassword = null,
+        string? joinPassword = null,
+        ISet<string>? excludedOptionalPwads = null)
     {
         var settings = SettingsService.Instance.Settings;
         
@@ -60,7 +65,7 @@ public class GameLauncher
             return false;
         }
 
-        var args = BuildCommandLine(server, connectPassword, joinPassword);
+        var args = BuildCommandLine(server, connectPassword, joinPassword, excludedOptionalPwads);
         
         try
         {
@@ -235,14 +240,35 @@ public class GameLauncher
         IProgress<HashVerificationProgress>? progress,
         CancellationToken cancellationToken)
     {
+        return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, pwad => !pwad.IsOptional);
+    }
+
+    /// <summary>
+    /// Verifies local optional PWADs that advertise hashes.
+    /// Unresolved mismatches can be excluded from launch or offered for download.
+    /// </summary>
+    public async Task<List<WadHashMismatch>> VerifyOptionalWadHashesAsync(
+        ServerInfo server,
+        IProgress<HashVerificationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, pwad => pwad.IsOptional);
+    }
+
+    private async Task<List<WadHashMismatch>> VerifyWadHashesCoreAsync(
+        ServerInfo server,
+        IProgress<HashVerificationProgress>? progress,
+        CancellationToken cancellationToken,
+        Func<PWadInfo, bool> predicate)
+    {
         var mismatches = new System.Collections.Concurrent.ConcurrentBag<WadHashMismatch>();
         var exeFolder = GetExecutableFolder(server);
         var wadManager = WadManager.Instance;
         var settings = SettingsService.Instance.Settings;
         
-        // Verify only required PWADs that advertise hashes.
+        // Verify only the PWADs requested by the caller that advertise hashes.
         var pwadsWithHashes = server.PWADs
-            .Where(p => !p.IsOptional && !string.IsNullOrEmpty(p.Hash))
+            .Where(p => predicate(p) && !string.IsNullOrEmpty(p.Hash))
             .ToList();
         var totalFiles = pwadsWithHashes.Count;
         
@@ -872,7 +898,11 @@ public class GameLauncher
         return versions;
     }
 
-    private string BuildCommandLine(ServerInfo server, string? connectPassword, string? joinPassword)
+    private string BuildCommandLine(
+        ServerInfo server,
+        string? connectPassword,
+        string? joinPassword,
+        ISet<string>? excludedOptionalPwads = null)
     {
         var args = new List<string>();
         var exeFolder = GetExecutableFolder(server);
@@ -894,6 +924,11 @@ public class GameLauncher
         var pwadPaths = new List<string>();
         foreach (var pwad in server.PWADs)
         {
+            if (pwad.IsOptional && excludedOptionalPwads?.Contains(pwad.Name) == true)
+            {
+                continue;
+            }
+
             var path = FindWadWithExeFolder(pwad.Name, exeFolder);
             if (!string.IsNullOrEmpty(path))
             {
