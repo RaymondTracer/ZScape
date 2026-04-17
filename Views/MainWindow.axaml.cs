@@ -1781,7 +1781,7 @@ public partial class MainWindow : Window
         AddPendingWads(launcher.ResolveMissingWadsByHash(missingWads));
         _wadManager.RefreshCache();
 
-        var hasServerHashes = server.PWADs.Any(p => !string.IsNullOrEmpty(p.Hash));
+        var hasServerHashes = server.PWADs.Any(p => !p.IsOptional && !string.IsNullOrEmpty(p.Hash));
         if (hasServerHashes)
         {
             var hashMismatches = await VerifyWadHashesWithDialogAsync(server);

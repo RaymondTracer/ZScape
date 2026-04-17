@@ -26,18 +26,7 @@ This audit covered the full workspace for:
 
 ## High-Confidence Findings
 
-### 1. Optional WADs are treated as required when joining servers
-
-Severity: High
-
-The protocol parser marks optional PWADs via `PWadInfo.IsOptional`, but the join-time WAD validation path checks every PWAD as mandatory. This can cause unnecessary download prompts or failed joins for servers that advertise optional content.
-
-Relevant files:
-
-- `Protocol/ServerQueryClient.cs`
-- `Services/GameLauncher.cs`
-
-### 2. Testing-build WAD discovery does not line up with testing executable folders
+### 1. Testing-build WAD discovery does not line up with testing executable folders
 
 Severity: High
 
@@ -49,7 +38,7 @@ Relevant files:
 - `Services/GameLauncher.cs`
 - `Services/WadManager.cs`
 
-### 3. Auto-refresh favorites-only is exposed but not honored by the timer
+### 2. Auto-refresh favorites-only is exposed but not honored by the timer
 
 Severity: Medium
 
@@ -60,7 +49,7 @@ Relevant files:
 - `Views/MainWindow.axaml.cs`
 - `Services/ServerBrowserService.cs`
 
-### 4. Favorite/manual server alerts are still a stub
+### 3. Favorite/manual server alerts are still a stub
 
 Severity: Medium
 
@@ -71,7 +60,7 @@ Relevant files:
 - `Views/MainWindow.axaml.cs`
 - `Services/NotificationService.cs`
 
-### 5. Hexdump diagnostics are only partially wired
+### 4. Hexdump diagnostics are only partially wired
 
 Severity: Medium
 
@@ -85,7 +74,7 @@ Relevant files:
 - `Protocol/MasterServerClient.cs`
 - `Protocol/ServerQueryClient.cs`
 
-### 6. Updater asset selection is Windows-specific despite multi-runtime targeting
+### 5. Updater asset selection is Windows-specific despite multi-runtime targeting
 
 Severity: Medium
 
@@ -96,7 +85,7 @@ Relevant files:
 - `ZScape.csproj`
 - `Services/UpdateService.cs`
 
-### 7. IP geolocation currently uses HTTP endpoints
+### 6. IP geolocation currently uses HTTP endpoints
 
 Severity: Medium
 
@@ -108,7 +97,7 @@ Relevant files:
 
 ## Overlooked or Dead Code
 
-### 8. `AppSettings.ShowFavoritesOnly` is currently unused
+### 7. `AppSettings.ShowFavoritesOnly` is currently unused
 
 Severity: Low
 
@@ -119,7 +108,7 @@ Relevant files:
 - `Services/SettingsService.cs`
 - `Views/MainWindow.axaml.cs`
 
-### 9. `AppSettings.VerboseMode` appears to be legacy state
+### 8. `AppSettings.VerboseMode` appears to be legacy state
 
 Severity: Low
 
@@ -132,7 +121,7 @@ Relevant files:
 
 ## Suspicious Areas Requiring Runtime Validation
 
-### 10. Master server packet parsing looks suspicious
+### 9. Master server packet parsing looks suspicious
 
 Confidence: Medium
 
@@ -146,8 +135,7 @@ Relevant files:
 
 ## Recommended Fix Order
 
-1. Fix optional-WAD handling during join.
-2. Fix testing-build WAD discovery/search priority.
-3. Wire auto-refresh favorites-only to `RefreshFavoritesAsync()`.
-4. Finish notification delivery or explicitly degrade the feature in UI/docs.
-5. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
+1. Fix testing-build WAD discovery/search priority.
+2. Wire auto-refresh favorites-only to `RefreshFavoritesAsync()`.
+3. Finish notification delivery or explicitly degrade the feature in UI/docs.
+4. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
