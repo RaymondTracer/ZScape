@@ -43,7 +43,6 @@ Unless noted otherwise, the feature descriptions below describe intended product
 - **Auto-refresh favorites only** is **Partial**: the setting and `ServerBrowserService.RefreshFavoritesAsync()` exist, but the current timer still invokes a full refresh.
 - **Verbose hex dumps** are **Partial**: `LoggingService.ShowHexDumps` and protocol call sites exist, but the current main-window wiring only applies verbose logging.
 - **Cross-platform update asset selection** is **Partial**: the project targets Windows, Linux, and macOS, but the current download path expects Windows `win-x64` zip releases.
-- **Testing-version WAD discovery** is **Partial**: testing executables are resolved per server, but the global WAD cache currently prioritizes the stable executable folder configured in main-window settings.
 
 ---
 

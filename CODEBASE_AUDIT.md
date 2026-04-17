@@ -26,19 +26,7 @@ This audit covered the full workspace for:
 
 ## High-Confidence Findings
 
-### 1. Testing-build WAD discovery does not line up with testing executable folders
-
-Severity: High
-
-`MainWindow` only registers the stable executable folder with `WadManager`, while testing-server launch checks are version-specific. `GameLauncher` computes a testing executable folder but ultimately calls back into `WadManager.FindWad()` without using that folder directly. This can make WADs that are present next to a testing executable appear missing.
-
-Relevant files:
-
-- `Views/MainWindow.axaml.cs`
-- `Services/GameLauncher.cs`
-- `Services/WadManager.cs`
-
-### 2. Auto-refresh favorites-only is exposed but not honored by the timer
+### 1. Auto-refresh favorites-only is exposed but not honored by the timer
 
 Severity: Medium
 
@@ -49,7 +37,7 @@ Relevant files:
 - `Views/MainWindow.axaml.cs`
 - `Services/ServerBrowserService.cs`
 
-### 3. Favorite/manual server alerts are still a stub
+### 2. Favorite/manual server alerts are still a stub
 
 Severity: Medium
 
@@ -60,7 +48,7 @@ Relevant files:
 - `Views/MainWindow.axaml.cs`
 - `Services/NotificationService.cs`
 
-### 4. Hexdump diagnostics are only partially wired
+### 3. Hexdump diagnostics are only partially wired
 
 Severity: Medium
 
@@ -74,7 +62,7 @@ Relevant files:
 - `Protocol/MasterServerClient.cs`
 - `Protocol/ServerQueryClient.cs`
 
-### 5. Updater asset selection is Windows-specific despite multi-runtime targeting
+### 4. Updater asset selection is Windows-specific despite multi-runtime targeting
 
 Severity: Medium
 
@@ -85,7 +73,7 @@ Relevant files:
 - `ZScape.csproj`
 - `Services/UpdateService.cs`
 
-### 6. IP geolocation currently uses HTTP endpoints
+### 5. IP geolocation currently uses HTTP endpoints
 
 Severity: Medium
 
@@ -97,7 +85,7 @@ Relevant files:
 
 ## Overlooked or Dead Code
 
-### 7. `AppSettings.ShowFavoritesOnly` is currently unused
+### 6. `AppSettings.ShowFavoritesOnly` is currently unused
 
 Severity: Low
 
@@ -108,7 +96,7 @@ Relevant files:
 - `Services/SettingsService.cs`
 - `Views/MainWindow.axaml.cs`
 
-### 8. `AppSettings.VerboseMode` appears to be legacy state
+### 7. `AppSettings.VerboseMode` appears to be legacy state
 
 Severity: Low
 
@@ -121,7 +109,7 @@ Relevant files:
 
 ## Suspicious Areas Requiring Runtime Validation
 
-### 9. Master server packet parsing looks suspicious
+### 8. Master server packet parsing looks suspicious
 
 Confidence: Medium
 
@@ -135,7 +123,6 @@ Relevant files:
 
 ## Recommended Fix Order
 
-1. Fix testing-build WAD discovery/search priority.
-2. Wire auto-refresh favorites-only to `RefreshFavoritesAsync()`.
-3. Finish notification delivery or explicitly degrade the feature in UI/docs.
-4. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
+1. Wire auto-refresh favorites-only to `RefreshFavoritesAsync()`.
+2. Finish notification delivery or explicitly degrade the feature in UI/docs.
+3. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
