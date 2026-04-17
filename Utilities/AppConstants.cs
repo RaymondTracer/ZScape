@@ -239,4 +239,31 @@ public static class AppConstants
                 ? index
                 : Array.FindIndex(Options, o => o.Value == Services.OptionalPwadDownloadMode.AskEachTime);
     }
+
+    /// <summary>
+    /// Display labels for TextMatchMode enum values.
+    /// </summary>
+    public static class TextMatchModeLabels
+    {
+        public static readonly (Models.TextMatchMode Value, string Label)[] Options =
+        [
+            (Models.TextMatchMode.Contains, "Contains"),
+            (Models.TextMatchMode.Exact, "Exact"),
+            (Models.TextMatchMode.StartsWith, "Starts with"),
+            (Models.TextMatchMode.EndsWith, "Ends with"),
+            (Models.TextMatchMode.Wildcard, "Wildcard (*, ?)"),
+            (Models.TextMatchMode.Regex, "Regex")
+        ];
+
+        public static string GetLabel(Models.TextMatchMode mode) =>
+            Options.FirstOrDefault(o => o.Value == mode).Label ?? GetLabel(Models.TextMatchMode.Contains);
+
+        public static Models.TextMatchMode GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Models.TextMatchMode.Contains;
+
+        public static int GetIndex(Models.TextMatchMode mode) =>
+            Array.FindIndex(Options, o => o.Value == mode) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Models.TextMatchMode.Contains);
+    }
 }

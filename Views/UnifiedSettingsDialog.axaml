@@ -108,56 +108,84 @@
                 
                 <!-- Favorites Tab -->
                 <TabItem Header="Favorites">
-                    <Grid RowDefinitions="*,*,Auto">
-                        <!-- Favorites section -->
-                        <Grid Grid.Row="0" RowDefinitions="Auto,*" ColumnDefinitions="*,100" Margin="5">
-                            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Favorite Servers" FontWeight="Bold"/>
-                            <ListBox Grid.Row="1" Grid.Column="0" x:Name="FavoritesListBox" 
-                                     SelectionMode="Single" Margin="0,5,10,0"/>
-                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,5,0,0">
-                                <Button Content="Remove" Width="90" Click="RemoveFavorite_Click"/>
-                                <Button Content="Clear All" Width="90" Click="ClearFavorites_Click"/>
-                            </StackPanel>
-                        </Grid>
-                        
-                        <!-- Manual servers section -->
-                        <Grid Grid.Row="1" RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,100" Margin="5">
-                            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Manually Added Servers" FontWeight="Bold"/>
-                            <ListBox Grid.Row="1" Grid.Column="0" x:Name="ManualServersListBox" 
-                                     SelectionMode="Single" Margin="0,5,10,0"/>
-                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,5,0,0">
-                                <Button Content="Add..." Width="90" Click="AddManualServer_Click"/>
-                                <Button Content="Remove" Width="90" Click="RemoveManualServer_Click"/>
-                            </StackPanel>
-                            <TextBlock Grid.Row="2" Grid.ColumnSpan="2" 
-                                       Text="Manual servers are queried first and never removed from the list."
-                                       Foreground="Gray" FontSize="11"/>
-                        </Grid>
-                        
-                        <!-- Alert settings -->
-                        <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" 
-                                BorderThickness="1" CornerRadius="3" Padding="10" Margin="5">
-                            <StackPanel Spacing="5">
-                                <TextBlock Text="Server Alerts" FontWeight="Bold"/>
-                                <CheckBox x:Name="EnableFavoriteAlertsCheckBox" 
-                                          Content="Alert when favorite servers come online with players"/>
-                                <CheckBox x:Name="EnableManualAlertsCheckBox" 
-                                          Content="Alert when manually added servers come online with players"/>
-                                <CheckBox x:Name="ShowFavoritesColumnCheckBox" 
-                                          Content="Show favorites column in server list"/>
-                                <StackPanel Orientation="Horizontal" Spacing="10">
-                                    <TextBlock Text="Minimum players:" VerticalAlignment="Center"/>
-                                    <controls:NumericSpinner x:Name="AlertMinPlayersNumeric" 
-                                                   Minimum="0" Maximum="64" Width="70"/>
+                    <ScrollViewer>
+                        <StackPanel Margin="5" Spacing="12">
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10">
+                                <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,100">
+                                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Favorite Addresses" FontWeight="Bold"/>
+                                    <ListBox Grid.Row="1" Grid.Column="0" x:Name="FavoritesListBox" SelectionMode="Single" Margin="0,5,10,0"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,5,0,0">
+                                        <Button Content="Remove" Width="90" Click="RemoveFavorite_Click"/>
+                                        <Button Content="Clear All" Width="90" Click="ClearFavorites_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
+                                               Text="These are explicit IP:Port favorites controlled by the star button in the server list."
+                                               Foreground="Gray" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                </Grid>
+                            </Border>
+
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10">
+                                <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,100">
+                                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Favorite Name Rules" FontWeight="Bold"/>
+                                    <ListBox Grid.Row="1" Grid.Column="0" x:Name="FavoriteNameRulesListBox" SelectionMode="Single" Margin="0,5,10,0"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,5,0,0">
+                                        <Button Content="Add..." Width="90" Click="AddFavoriteNameRule_Click"/>
+                                        <Button x:Name="EditFavoriteNameRuleButton" Content="Edit" Width="90" IsEnabled="False" Click="EditFavoriteNameRule_Click"/>
+                                        <Button x:Name="RemoveFavoriteNameRuleButton" Content="Remove" Width="90" IsEnabled="False" Click="RemoveFavoriteNameRule_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
+                                               Text="Matching servers count as favorites for filtering, sorting, alerts, and favorites refresh without pinning a specific address."
+                                               Foreground="Gray" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                </Grid>
+                            </Border>
+
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10">
+                                <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,100">
+                                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Hidden Server Rules" FontWeight="Bold"/>
+                                    <ListBox Grid.Row="1" Grid.Column="0" x:Name="HiddenServerRulesListBox" SelectionMode="Single" Margin="0,5,10,0"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,5,0,0">
+                                        <Button Content="Add..." Width="90" Click="AddHiddenServerRule_Click"/>
+                                        <Button x:Name="EditHiddenServerRuleButton" Content="Edit" Width="90" IsEnabled="False" Click="EditHiddenServerRule_Click"/>
+                                        <Button x:Name="RemoveHiddenServerRuleButton" Content="Remove" Width="90" IsEnabled="False" Click="RemoveHiddenServerRule_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
+                                               Text="Hidden rules remove matching servers from the main list before other filters are applied."
+                                               Foreground="Gray" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                </Grid>
+                            </Border>
+
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10">
+                                <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,100">
+                                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Manually Added Servers" FontWeight="Bold"/>
+                                    <ListBox Grid.Row="1" Grid.Column="0" x:Name="ManualServersListBox" SelectionMode="Single" Margin="0,5,10,0"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="5" Margin="0,5,0,0">
+                                        <Button Content="Add..." Width="90" Click="AddManualServer_Click"/>
+                                        <Button Content="Remove" Width="90" Click="RemoveManualServer_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
+                                               Text="Manual servers are queried first and never removed from the list."
+                                               Foreground="Gray" FontSize="11" Margin="0,8,0,0"/>
+                                </Grid>
+                            </Border>
+
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Text="Server Alerts" FontWeight="Bold"/>
+                                    <CheckBox x:Name="EnableFavoriteAlertsCheckBox" Content="Alert when favorite servers come online with players"/>
+                                    <CheckBox x:Name="EnableManualAlertsCheckBox" Content="Alert when manually added servers come online with players"/>
+                                    <CheckBox x:Name="ShowFavoritesColumnCheckBox" Content="Show favorites column in server list"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="Minimum players:" VerticalAlignment="Center"/>
+                                        <controls:NumericSpinner x:Name="AlertMinPlayersNumeric" Minimum="0" Maximum="64" Width="70"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="Check interval (seconds):" VerticalAlignment="Center"/>
+                                        <controls:NumericSpinner x:Name="AlertIntervalNumeric" Minimum="30" Maximum="600" Width="70"/>
+                                    </StackPanel>
                                 </StackPanel>
-                                <StackPanel Orientation="Horizontal" Spacing="10">
-                                    <TextBlock Text="Check interval (seconds):" VerticalAlignment="Center"/>
-                                    <controls:NumericSpinner x:Name="AlertIntervalNumeric" 
-                                                   Minimum="30" Maximum="600" Width="70"/>
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
-                    </Grid>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
                 </TabItem>
                 
                 <!-- WAD Paths Tab -->

@@ -819,16 +819,19 @@ public partial class MainWindow : Window
         var allServers = _browserService.Servers.ToList();
         var filtered = ApplyFilters(allServers);
         filtered = SortServers(filtered);
+        var manualAddresses = _settings.Settings.ManualServers
+            .Select(m => m.FullAddress)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         // Build map of new server data by address for efficient lookup
-        var newServerMap = new Dictionary<string, (ServerInfo Server, bool IsFavorite, bool IsManual)>();
+        var newServerMap = new Dictionary<string, (ServerInfo Server, FavoriteMatchResult FavoriteMatch, bool IsManual)>();
         for (int i = 0; i < filtered.Count; i++)
         {
             var server = filtered[i];
-            var address = $"{server.Address}:{server.Port}";
-            var isFavorite = _settings.Settings.FavoriteServers.Contains(address);
-            var isManual = _settings.Settings.ManualServers.Any(m => m.FullAddress == address);
-            newServerMap[address] = (server, isFavorite, isManual);
+            var address = ServerRuleUtility.GetServerAddress(server);
+            var favoriteMatch = GetFavoriteMatch(server);
+            var isManual = manualAddresses.Contains(address);
+            newServerMap[address] = (server, favoriteMatch, isManual);
         }
 
         // Build expected order of addresses
@@ -847,7 +850,7 @@ public partial class MainWindow : Window
             if (newServerMap.TryGetValue(vm.AddressDisplay, out var data))
             {
                 // Update existing item in-place
-                vm.UpdateFrom(data.Server, data.IsFavorite, data.IsManual);
+                vm.UpdateFrom(data.Server, data.FavoriteMatch, data.IsManual);
                 existingAddresses.Add(vm.AddressDisplay);
             }
             else
@@ -863,7 +866,7 @@ public partial class MainWindow : Window
             if (!existingAddresses.Contains(address))
             {
                 var data = newServerMap[address];
-                var vm = new ServerViewModel(data.Server, data.IsFavorite, data.IsManual);
+                var vm = new ServerViewModel(data.Server, data.FavoriteMatch, data.IsManual);
                 Servers.Add(vm);
             }
         }
@@ -906,6 +909,9 @@ public partial class MainWindow : Window
             // Hide offline servers
             if (!s.IsOnline) return false;
 
+            // Hidden name rules apply globally before other filters.
+            if (IsServerHiddenByRule(s)) return false;
+
             // Hide empty
             if (hideEmpty && s.CurrentPlayers == 0) return false;
 
@@ -921,8 +927,7 @@ public partial class MainWindow : Window
             // Favorites only
             if (favoritesOnly)
             {
-                var address = $"{s.Address}:{s.Port}";
-                if (!_settings.Settings.FavoriteServers.Contains(address))
+                if (!GetFavoriteMatch(s).IsFavorite)
                     return false;
             }
 
@@ -937,8 +942,7 @@ public partial class MainWindow : Window
             // Search filter
             if (!string.IsNullOrEmpty(searchText))
             {
-                var searchLower = searchText.ToLowerInvariant();
-                if (!s.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
+                if (!ServerRuleUtility.GetComparableServerName(s).Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
                     !s.Map.Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
                     !s.Address.Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
                     !s.IWAD.Contains(searchText, StringComparison.OrdinalIgnoreCase))
@@ -956,9 +960,13 @@ public partial class MainWindow : Window
     private System.Collections.Generic.List<ServerInfo> SortServers(System.Collections.Generic.List<ServerInfo> servers)
     {
         // First, separate pinned (favorites/manual) from regular servers
-        var pinnedAddresses = new HashSet<string>(
-            _settings.Settings.FavoriteServers
-                .Concat(_settings.Settings.ManualServers.Select(m => m.FullAddress)));
+        var manualAddresses = _settings.Settings.ManualServers
+            .Select(m => m.FullAddress)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pinnedAddresses = servers
+            .Where(s => GetFavoriteMatch(s).IsFavorite || manualAddresses.Contains(ServerRuleUtility.GetServerAddress(s)))
+            .Select(ServerRuleUtility.GetServerAddress)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var pinned = servers.Where(s => pinnedAddresses.Contains($"{s.Address}:{s.Port}")).ToList();
         var regular = servers.Where(s => !pinnedAddresses.Contains($"{s.Address}:{s.Port}")).ToList();
@@ -988,6 +996,33 @@ public partial class MainWindow : Window
             8 => (_sortAscending ? servers.OrderBy(s => $"{s.Address}:{s.Port}") : servers.OrderByDescending(s => $"{s.Address}:{s.Port}")).ToList(),
             _ => servers
         };
+    }
+
+    private FavoriteMatchResult GetFavoriteMatch(ServerInfo server)
+    {
+        return ServerRuleUtility.GetFavoriteMatch(_settings.Settings, server);
+    }
+
+    private bool IsServerHiddenByRule(ServerInfo server)
+    {
+        return ServerRuleUtility.IsHiddenByRule(_settings.Settings, server);
+    }
+
+    private void ToggleExplicitFavorite(string address)
+    {
+        if (_settings.Settings.FavoriteServers.Contains(address))
+        {
+            _settings.Settings.FavoriteServers.Remove(address);
+            _logger.Info($"Removed explicit favorite: {address}");
+        }
+        else
+        {
+            _settings.Settings.FavoriteServers.Add(address);
+            _logger.Info($"Added explicit favorite: {address}");
+        }
+
+        _settings.Save();
+        UpdateServerList();
     }
 
     private void UpdateStatusBar()
@@ -1558,19 +1593,7 @@ public partial class MainWindow : Window
     {
         if (_selectedServer == null) return;
 
-        var address = $"{_selectedServer.Address}:{_selectedServer.Port}";
-        if (_settings.Settings.FavoriteServers.Contains(address))
-        {
-            _settings.Settings.FavoriteServers.Remove(address);
-            _logger.Info($"Removed from favorites: {address}");
-        }
-        else
-        {
-            _settings.Settings.FavoriteServers.Add(address);
-            _logger.Info($"Added to favorites: {address}");
-        }
-        _settings.Save();
-        UpdateServerList();
+        ToggleExplicitFavorite(ServerRuleUtility.GetServerAddress(_selectedServer));
     }
 
     private void FavoriteButton_Click(object? sender, RoutedEventArgs e)
@@ -1578,19 +1601,7 @@ public partial class MainWindow : Window
         // Get the ServerViewModel from the button's DataContext
         if (sender is Button button && button.DataContext is ServerViewModel vm)
         {
-            var address = vm.AddressDisplay;
-            if (_settings.Settings.FavoriteServers.Contains(address))
-            {
-                _settings.Settings.FavoriteServers.Remove(address);
-                _logger.Info($"Removed from favorites: {address}");
-            }
-            else
-            {
-                _settings.Settings.FavoriteServers.Add(address);
-                _logger.Info($"Added to favorites: {address}");
-            }
-            _settings.Save();
-            UpdateServerList();
+            ToggleExplicitFavorite(vm.AddressDisplay);
         }
     }
 
@@ -1804,9 +1815,12 @@ public partial class MainWindow : Window
         // Update the favorite menu item text based on current server state
         if (_selectedServer != null && ToggleFavoriteMenuItem != null)
         {
-            var address = $"{_selectedServer.Address}:{_selectedServer.Port}";
-            var isFavorite = _settings.Settings.FavoriteServers.Contains(address);
-            ToggleFavoriteMenuItem.Header = isFavorite ? "_Remove from Favorites" : "_Add to Favorites";
+            var favoriteMatch = GetFavoriteMatch(_selectedServer);
+            ToggleFavoriteMenuItem.Header = favoriteMatch.IsExplicitAddressFavorite
+                ? "_Remove from Favorites"
+                : favoriteMatch.IsRuleFavorite
+                    ? "_Add Address to Favorites"
+                    : "_Add to Favorites";
         }
     }
 
@@ -2939,10 +2953,11 @@ public partial class MainWindow : Window
 
         foreach (var server in _browserService.Servers.Where(s => s.IsOnline && s.IsQueried))
         {
-            var address = $"{server.Address}:{server.Port}";
+            var address = ServerRuleUtility.GetServerAddress(server);
             var hasMinPlayers = server.CurrentPlayers >= minPlayers;
 
-            var isFavorite = settings.FavoriteServers.Contains(address);
+            var favoriteMatch = GetFavoriteMatch(server);
+            var isFavorite = favoriteMatch.IsFavorite;
             var isManual = settings.ManualServers.Any(m => m.FullAddress == address);
 
             if (!isFavorite && !isManual)
@@ -3172,29 +3187,29 @@ internal class ServerAlertState
 public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
 {
     private ServerInfo _server;
-    private bool _isFavorite;
+    private FavoriteMatchResult _favoriteMatch;
     private bool _isManual;
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
-    public ServerViewModel(ServerInfo server, bool isFavorite, bool isManual = false)
+    public ServerViewModel(ServerInfo server, FavoriteMatchResult favoriteMatch, bool isManual = false)
     {
         _server = server;
-        _isFavorite = isFavorite;
+        _favoriteMatch = favoriteMatch;
         _isManual = isManual;
     }
 
     /// <summary>
     /// Update this view model in-place with new server data.
     /// </summary>
-    public void UpdateFrom(ServerInfo server, bool isFavorite, bool isManual)
+    public void UpdateFrom(ServerInfo server, FavoriteMatchResult favoriteMatch, bool isManual)
     {
         _server = server;
 
-        bool favoriteChanged = _isFavorite != isFavorite;
+        bool favoriteChanged = _favoriteMatch != favoriteMatch;
         bool manualChanged = _isManual != isManual;
 
-        _isFavorite = isFavorite;
+        _favoriteMatch = favoriteMatch;
         _isManual = isManual;
 
         // Notify all data-bound properties that may have changed
@@ -3224,8 +3239,13 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     }
 
     public ServerInfo Server => _server;
-    public string FavoriteIcon => _isFavorite ? "\u2605" : "\u2606"; // Filled/empty star
-    public IBrush FavoriteColor => _isFavorite ? Brushes.Gold : Brushes.Gray;
+    public string FavoriteIcon => _favoriteMatch.IsFavorite ? "\u2605" : "\u2606";
+    public IBrush FavoriteColor => _favoriteMatch.Kind switch
+    {
+        FavoriteMatchKind.ExplicitAddress => Brushes.Gold,
+        FavoriteMatchKind.NameRule => Brushes.LightSteelBlue,
+        _ => Brushes.Gray
+    };
     public bool ShowFavoritesColumn => SettingsService.Instance.Settings.ShowFavoritesColumn;
     public bool IsPassworded => _server.IsPassworded;
     public int RowHeight => SettingsService.Instance.Settings.ServerListRowHeight;
@@ -3264,9 +3284,9 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     public string AddressDisplay => $"{_server.Address}:{_server.Port}";
     public int CurrentPlayers => _server.CurrentPlayers;
     public int BotCount => _server.BotCount;
-    public bool IsFavorite => _isFavorite;
+    public bool IsFavorite => _favoriteMatch.IsFavorite;
     public bool IsManualServer => _isManual;
-    public bool IsPinned => _isFavorite || _isManual;
+    public bool IsPinned => _favoriteMatch.IsFavorite || _isManual;
 
     // Row coloring based on server state
     public IBrush RowBackground

@@ -150,14 +150,14 @@ Server List Row Colors:
    - Row highlighting for passworded/full servers
    - Double-click to connect (launches Zandronum)
    - Right-click context menu with copy, join, refresh options
-   - Favorite servers (star column, favorites-only mode)
+    - Favorite servers by explicit address plus server-name rules (star column, favorites-only mode)
    - Manual server addition (servers not from master list)
 
 2. **Filtering**
    - Comprehensive `ServerFilter` with presets
    - By game mode (include/exclude lists)
    - By player count (hide empty/full, min/max players, human-only count)
-   - By map name (wildcards and regex support)
+    - By server and map name using contains, exact, starts-with, ends-with, wildcard, or regex matching
    - By IWAD
    - By WAD requirements (require/include any/exclude)
     - By country (searchable include/exclude lists in Avalonia UI, with mutual exclusion)
@@ -178,6 +178,7 @@ Server List Row Colors:
 4. **Settings**
    - Unified settings dialog
     - Separate full and favorites auto-refresh intervals, with an option for favorites refresh to stay synced to the full refresh timer
+    - Favorite address list, favorite name rules, hidden server rules, and alert settings
    - Query concurrency and retry settings
     - WAD search paths, download folder, and download sites
     - Download concurrency, per-domain thread settings, download dialog behavior, and optional PWAD download policy with skipped-name list
@@ -409,11 +410,11 @@ public class ServerFilter
     public FilterMode PasswordedServers { get; set; }
     public bool ShowUnresponsive { get; set; }
     
-    // Text filters (wildcards and regex)
+    // Text filters
     public string ServerNameFilter { get; set; }
-    public bool ServerNameIsRegex { get; set; }
+    public TextMatchMode ServerNameMatchMode { get; set; }
     public string MapFilter { get; set; }
-    public bool MapIsRegex { get; set; }
+    public TextMatchMode MapMatchMode { get; set; }
     
     // Game mode filters
     public List<GameModeType> IncludeGameModes { get; set; }
@@ -445,6 +446,8 @@ public class ServerFilter
     public ServerFilter Clone();
     public string GetActiveFiltersDescription();
 }
+
+public enum TextMatchMode { Contains, Exact, StartsWith, EndsWith, Wildcard, Regex }
 ```
 
 ### WadDownloadTask
@@ -632,6 +635,8 @@ public class AppSettings
 
     // Favorites system
     public HashSet<string> FavoriteServers { get; set; } = [];
+    public List<TextMatchRule> FavoriteServerNameRules { get; set; } = [];
+    public List<TextMatchRule> HiddenServerNameRules { get; set; } = [];
     public List<ManualServerEntry> ManualServers { get; set; } = [];
     public bool ShowFavoritesColumn { get; set; } = true;
     public bool ShowFavoritesOnly { get; set; }   // Present in the model; current UI toggle is session-driven
@@ -697,6 +702,12 @@ public class DomainSettingsData
     public Dictionary<string, DomainSettings> Domains { get; set; } = new();
 }
 
+public class TextMatchRule
+{
+    public string Pattern { get; set; } = string.Empty;
+    public TextMatchMode Mode { get; set; } = TextMatchMode.Contains;
+}
+
 public enum OptionalPwadDownloadMode
 {
     AskEachTime = 0,
@@ -705,15 +716,15 @@ public enum OptionalPwadDownloadMode
 }
 ```
 
-`ConnectionHistoryData` and `DomainSettingsData` are persisted separately from `AppSettings`. `VerboseMode` and `ShowFavoritesOnly` remain in the settings model for compatibility and future wiring, even though the current Avalonia UI primarily uses `VerboseLogging` and an in-session favorites-only toggle.
+`ConnectionHistoryData` and `DomainSettingsData` are persisted separately from `AppSettings`. `VerboseMode` and `ShowFavoritesOnly` remain in the settings model for compatibility and future wiring, even though the current Avalonia UI primarily uses `VerboseLogging` and an in-session favorites-only toggle. Favorite rules and hidden server rules use the same `TextMatchRule` matcher that powers advanced server-name and map filters.
 
 ### ServerBrowserService
 - Orchestrates refresh: fetch endpoints from master, add/cleanup `ServerInfo` entries, and query servers using pipelined processing with configurable concurrency.
-- Supports manual servers and favorites (queried with priority).
+- Supports manual servers and favorites (queried with priority), including favorite servers discovered through server-name rules once they are known locally.
 - Uses `Channel<T>` for streaming query results to the UI as they arrive.
 - Implements retry logic per server with `ConsecutiveFailures` tracking.
 - `RefreshAsync()`: Full refresh from master server.
-- `RefreshFavoritesAsync()`: Refresh only favorite servers without master query. `MainWindow` can schedule it on its own interval or keep it synced to the full refresh timer.
+- `RefreshFavoritesAsync()`: Refresh only favorite servers without master query. `MainWindow` can schedule it on its own interval or keep it synced to the full refresh timer. Explicit address favorites always participate; rule-based favorites participate once the client has a known address for them.
 - Integrates `Ip2CountryService` to resolve countries for servers with XIP or empty country codes after querying.
 - Exposes server lists, summary counts (TotalServers, OnlineServers, TotalPlayers, TotalHumanPlayers, TotalBots) and filtering helper `GetFilteredServers(...)`.
 - Raises events: `ServerUpdated`, `RefreshStarted`, `RefreshProgress`, `RefreshCompleted`.
@@ -1197,6 +1208,8 @@ dotnet run --project ZScape.csproj
 - Country codes are normalized during filtering: alpha-3 codes (USA, DEU) convert to alpha-2 (US, DE). Unknown codes (XIP, XUN, O1, empty) normalize to "??".
 - Servers with "XIP" or empty country codes trigger automatic IP geolocation lookup via ip-api.com after querying. Failed lookups are marked as "??" to prevent retry.
 - Favorite-server auto-refresh can run on its own interval or reuse the full refresh timer, and the settings dialog keeps the two intervals synced when requested.
+- Favorite status can come from explicit address favorites or server-name rules; rule-based favorites use a distinct secondary favorite state in the UI while the star button still toggles explicit address favorites.
+- Hidden server rules apply before other list filters so persistent name-based hides remain in effect across sessions.
 - Server alert detection exists for favorite and manual servers; native desktop notification delivery is still partial and currently falls back to logging.
 - First-time setup wizard is shown automatically when `settings.json` doesn't exist; settings file is only created after completing setup.
 - Automatic updates check GitHub releases on configurable intervals (hours/days/weeks); the current download/install asset path still expects Windows `win-x64` zip releases.

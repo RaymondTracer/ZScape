@@ -57,24 +57,24 @@
             <TabItem Header="Text">
                 <StackPanel Margin="15" Spacing="15">
                     <StackPanel Spacing="3">
-                        <TextBlock Text="Server name contains:"/>
-                        <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="Server name pattern:"/>
+                        <Grid ColumnDefinitions="*,180">
                             <TextBox Grid.Column="0" x:Name="ServerNameTextBox"/>
-                            <CheckBox Grid.Column="1" x:Name="ServerNameRegexCheckBox" Content="Regex" Margin="10,0,0,0"/>
+                            <ComboBox Grid.Column="1" x:Name="ServerNameMatchModeComboBox" Margin="10,0,0,0"/>
                         </Grid>
                     </StackPanel>
                     <StackPanel Spacing="3">
-                        <TextBlock Text="Map name contains:"/>
-                        <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="Map name pattern:"/>
+                        <Grid ColumnDefinitions="*,180">
                             <TextBox Grid.Column="0" x:Name="MapTextBox"/>
-                            <CheckBox Grid.Column="1" x:Name="MapRegexCheckBox" Content="Regex" Margin="10,0,0,0"/>
+                            <ComboBox Grid.Column="1" x:Name="MapMatchModeComboBox" Margin="10,0,0,0"/>
                         </Grid>
                     </StackPanel>
                     <StackPanel Spacing="3">
                         <TextBlock Text="Version contains:"/>
                         <TextBox x:Name="VersionTextBox" Width="200" HorizontalAlignment="Left"/>
                     </StackPanel>
-                    <TextBlock Text="Tip: Use * for any characters, ? for single character.&#10;Enable Regex for advanced pattern matching."
+                    <TextBlock Text="Tip: Use Exact, Starts with, Ends with, Wildcard (*, ?), or Regex depending on how strict you want the match to be."
                                Foreground="Gray" FontSize="11"/>
                 </StackPanel>
             </TabItem>

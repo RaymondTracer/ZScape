@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using ZScape.Utilities;
 
 namespace ZScape.Models;
@@ -47,17 +46,45 @@ public class ServerFilter
 
     // === Text Filters ===
 
-    /// <summary>Filter by server name (supports wildcards * and ?).</summary>
+    /// <summary>Filter by visible server name.</summary>
     public string ServerNameFilter { get; set; } = string.Empty;
 
-    /// <summary>Whether server name filter uses regex.</summary>
-    public bool ServerNameIsRegex { get; set; }
+    /// <summary>How the server name filter should be matched.</summary>
+    public TextMatchMode ServerNameMatchMode { get; set; } = TextMatchMode.Contains;
 
-    /// <summary>Filter by map name (supports wildcards * and ?).</summary>
+    /// <summary>Legacy compatibility flag for old settings files that only stored regex state.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ServerNameIsRegex
+    {
+        get => ServerNameMatchMode == TextMatchMode.Regex;
+        set
+        {
+            if (value)
+            {
+                ServerNameMatchMode = TextMatchMode.Regex;
+            }
+        }
+    }
+
+    /// <summary>Filter by map name.</summary>
     public string MapFilter { get; set; } = string.Empty;
 
-    /// <summary>Whether map filter uses regex.</summary>
-    public bool MapIsRegex { get; set; }
+    /// <summary>How the map filter should be matched.</summary>
+    public TextMatchMode MapMatchMode { get; set; } = TextMatchMode.Contains;
+
+    /// <summary>Legacy compatibility flag for old settings files that only stored regex state.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MapIsRegex
+    {
+        get => MapMatchMode == TextMatchMode.Regex;
+        set
+        {
+            if (value)
+            {
+                MapMatchMode = TextMatchMode.Regex;
+            }
+        }
+    }
 
     // === Game Mode Filters ===
 
@@ -126,6 +153,8 @@ public class ServerFilter
     {
         if (!Enabled) return true;
 
+        var displayName = DoomColorCodes.StripColorCodes(server.Name ?? string.Empty);
+
         // Basic visibility
         if (!ShowEmpty && server.IsEmpty) return false;
         // Treat bot-only servers as empty (separate from ShowEmpty - hides when enabled)
@@ -141,26 +170,17 @@ public class ServerFilter
         if (TestingServers == FilterMode.ShowOnly && !server.IsTesting) return false;
         if (TestingServers == FilterMode.Hide && server.IsTesting) return false;
 
-        // Server name filter (quick search - searches name, map, and address)
+        // Visible server name filter
         if (!string.IsNullOrWhiteSpace(ServerNameFilter))
         {
-            var searchTerm = ServerNameFilter.Trim();
-            
-            // Use simple contains for quick search (like Doomseeker)
-            // This matches if any of: server name, map, or address contains the search term
-            bool matchesSearch = 
-                (!string.IsNullOrEmpty(server.Name) && server.Name.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(server.Map) && server.Map.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(server.Address) && server.Address.Contains(searchTerm, StringComparison.OrdinalIgnoreCase));
-            
-            if (!matchesSearch)
+            if (!TextMatchUtility.IsMatch(displayName, ServerNameFilter, ServerNameMatchMode))
                 return false;
         }
 
         // Map filter
         if (!string.IsNullOrWhiteSpace(MapFilter))
         {
-            if (!MatchesPattern(server.Map, MapFilter, MapIsRegex))
+            if (!TextMatchUtility.IsMatch(server.Map, MapFilter, MapMatchMode))
                 return false;
         }
 
@@ -259,39 +279,6 @@ public class ServerFilter
         return true;
     }
 
-    private static bool MatchesPattern(string text, string pattern, bool isRegex)
-    {
-        if (string.IsNullOrEmpty(text)) return false;
-
-        if (isRegex)
-        {
-            try
-            {
-                return Regex.IsMatch(text, pattern, RegexOptions.IgnoreCase);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-        else
-        {
-            // If pattern contains wildcards, use wildcard matching
-            if (pattern.Contains('*') || pattern.Contains('?'))
-            {
-                var regexPattern = "^" + Regex.Escape(pattern)
-                    .Replace("\\*", ".*")
-                    .Replace("\\?", ".") + "$";
-                return Regex.IsMatch(text, regexPattern, RegexOptions.IgnoreCase);
-            }
-            else
-            {
-                // Simple contains search for plain text (most common search box use case)
-                return text.Contains(pattern, StringComparison.OrdinalIgnoreCase);
-            }
-        }
-    }
-
     /// <summary>
     /// Creates a copy of this filter.
     /// </summary>
@@ -307,9 +294,9 @@ public class ServerFilter
             PasswordedServers = PasswordedServers,
             ShowUnresponsive = ShowUnresponsive,
             ServerNameFilter = ServerNameFilter,
-            ServerNameIsRegex = ServerNameIsRegex,
+            ServerNameMatchMode = ServerNameMatchMode,
             MapFilter = MapFilter,
-            MapIsRegex = MapIsRegex,
+            MapMatchMode = MapMatchMode,
             IncludeGameModes = [.. IncludeGameModes],
             ExcludeGameModes = [.. ExcludeGameModes],
             RequireWads = [.. RequireWads],
@@ -341,8 +328,8 @@ public class ServerFilter
         if (!ShowFull) parts.Add("hiding full");
         if (PasswordedServers == FilterMode.Hide) parts.Add("hiding passworded");
         if (PasswordedServers == FilterMode.ShowOnly) parts.Add("passworded only");
-        if (!string.IsNullOrWhiteSpace(ServerNameFilter)) parts.Add($"name: {ServerNameFilter}");
-        if (!string.IsNullOrWhiteSpace(MapFilter)) parts.Add($"map: {MapFilter}");
+        if (!string.IsNullOrWhiteSpace(ServerNameFilter)) parts.Add($"name ({AppConstants.TextMatchModeLabels.GetLabel(ServerNameMatchMode)}): {ServerNameFilter}");
+        if (!string.IsNullOrWhiteSpace(MapFilter)) parts.Add($"map ({AppConstants.TextMatchModeLabels.GetLabel(MapMatchMode)}): {MapFilter}");
         if (IncludeGameModes.Count > 0) parts.Add($"modes: {string.Join(", ", IncludeGameModes)}");
         if (MinPlayers > 0) parts.Add($"min {MinPlayers} players");
         if (MinHumanPlayers > 0) parts.Add($"min {MinHumanPlayers} humans");

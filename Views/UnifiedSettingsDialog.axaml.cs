@@ -14,6 +14,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using ZScape.Controls;
+using ZScape.Models;
 using ZScape.Services;
 using ZScape.Utilities;
 
@@ -26,6 +27,8 @@ public partial class UnifiedSettingsDialog : Window
     private readonly SettingsService _settingsService;
     private AppSettings Settings => _settingsService.Settings;
     private ObservableCollection<string> _favorites = new();
+    private ObservableCollection<TextMatchRule> _favoriteNameRules = new();
+    private ObservableCollection<TextMatchRule> _hiddenServerRules = new();
     private ObservableCollection<string> _manualServers = new();
     private ObservableCollection<string> _wadPaths = new();
     private ObservableCollection<string> _downloadSites = new();
@@ -44,6 +47,8 @@ public partial class UnifiedSettingsDialog : Window
         _settingsService = SettingsService.Instance;
         
         CategoryList.SelectionChanged += CategoryList_SelectionChanged;
+        FavoriteNameRulesListBox.SelectionChanged += (_, _) => UpdateFavoriteRuleButtons();
+        HiddenServerRulesListBox.SelectionChanged += (_, _) => UpdateFavoriteRuleButtons();
         WadPathsListBox.SelectionChanged += WadPathsListBox_SelectionChanged;
         SkippedOptionalPwadsListBox.SelectionChanged += SkippedOptionalPwadsListBox_SelectionChanged;
         WadDownloadPathTextBox.TextChanged += WadDownloadPathTextBox_TextChanged;
@@ -306,8 +311,13 @@ public partial class UnifiedSettingsDialog : Window
         // Favorites
         _favorites = new ObservableCollection<string>(Settings.FavoriteServers);
         FavoritesListBox.ItemsSource = _favorites;
+        _favoriteNameRules = new ObservableCollection<TextMatchRule>(Settings.FavoriteServerNameRules.Select(rule => rule.Clone()));
+        FavoriteNameRulesListBox.ItemsSource = _favoriteNameRules;
+        _hiddenServerRules = new ObservableCollection<TextMatchRule>(Settings.HiddenServerNameRules.Select(rule => rule.Clone()));
+        HiddenServerRulesListBox.ItemsSource = _hiddenServerRules;
         _manualServers = new ObservableCollection<string>(Settings.ManualServers.Select(m => m.FullAddress));
         ManualServersListBox.ItemsSource = _manualServers;
+        UpdateFavoriteRuleButtons();
         
         EnableFavoriteAlertsCheckBox.IsChecked = Settings.EnableFavoriteServerAlerts;
         EnableManualAlertsCheckBox.IsChecked = Settings.EnableManualServerAlerts;
@@ -636,6 +646,8 @@ public partial class UnifiedSettingsDialog : Window
 
         // Favorites
         Settings.FavoriteServers = _favorites.ToHashSet();
+        Settings.FavoriteServerNameRules = NormalizeTextMatchRules(_favoriteNameRules);
+        Settings.HiddenServerNameRules = NormalizeTextMatchRules(_hiddenServerRules);
         Settings.ManualServers = _manualServers.Select(addr => {
             var parts = addr.Split(':');
             return new ManualServerEntry {
@@ -826,6 +838,80 @@ public partial class UnifiedSettingsDialog : Window
         }
     }
 
+    private async void AddFavoriteNameRule_Click(object? sender, RoutedEventArgs e)
+    {
+        var rule = await ShowTextMatchRuleDialogAsync("Add Favorite Name Rule");
+        if (rule != null)
+        {
+            _favoriteNameRules.Add(rule);
+        }
+    }
+
+    private async void EditFavoriteNameRule_Click(object? sender, RoutedEventArgs e)
+    {
+        if (FavoriteNameRulesListBox.SelectedItem is not TextMatchRule rule)
+        {
+            return;
+        }
+
+        var editedRule = await ShowTextMatchRuleDialogAsync("Edit Favorite Name Rule", rule);
+        if (editedRule == null)
+        {
+            return;
+        }
+
+        var index = _favoriteNameRules.IndexOf(rule);
+        if (index >= 0)
+        {
+            _favoriteNameRules[index] = editedRule;
+        }
+    }
+
+    private void RemoveFavoriteNameRule_Click(object? sender, RoutedEventArgs e)
+    {
+        if (FavoriteNameRulesListBox.SelectedItem is TextMatchRule rule)
+        {
+            _favoriteNameRules.Remove(rule);
+        }
+    }
+
+    private async void AddHiddenServerRule_Click(object? sender, RoutedEventArgs e)
+    {
+        var rule = await ShowTextMatchRuleDialogAsync("Add Hidden Server Rule");
+        if (rule != null)
+        {
+            _hiddenServerRules.Add(rule);
+        }
+    }
+
+    private async void EditHiddenServerRule_Click(object? sender, RoutedEventArgs e)
+    {
+        if (HiddenServerRulesListBox.SelectedItem is not TextMatchRule rule)
+        {
+            return;
+        }
+
+        var editedRule = await ShowTextMatchRuleDialogAsync("Edit Hidden Server Rule", rule);
+        if (editedRule == null)
+        {
+            return;
+        }
+
+        var index = _hiddenServerRules.IndexOf(rule);
+        if (index >= 0)
+        {
+            _hiddenServerRules[index] = editedRule;
+        }
+    }
+
+    private void RemoveHiddenServerRule_Click(object? sender, RoutedEventArgs e)
+    {
+        if (HiddenServerRulesListBox.SelectedItem is TextMatchRule rule)
+        {
+            _hiddenServerRules.Remove(rule);
+        }
+    }
+
     private void ClearFavorites_Click(object? sender, RoutedEventArgs e)
     {
         _favorites.Clear();
@@ -857,6 +943,50 @@ public partial class UnifiedSettingsDialog : Window
         {
             _manualServers.Remove(server);
         }
+    }
+
+    private void UpdateFavoriteRuleButtons()
+    {
+        EditFavoriteNameRuleButton.IsEnabled = FavoriteNameRulesListBox.SelectedItem is TextMatchRule;
+        RemoveFavoriteNameRuleButton.IsEnabled = FavoriteNameRulesListBox.SelectedItem is TextMatchRule;
+        EditHiddenServerRuleButton.IsEnabled = HiddenServerRulesListBox.SelectedItem is TextMatchRule;
+        RemoveHiddenServerRuleButton.IsEnabled = HiddenServerRulesListBox.SelectedItem is TextMatchRule;
+    }
+
+    private async Task<TextMatchRule?> ShowTextMatchRuleDialogAsync(string title, TextMatchRule? existingRule = null)
+    {
+        var dialog = new TextMatchRuleDialog(title, existingRule);
+        await dialog.ShowDialog(this);
+        return dialog.Confirmed ? dialog.Rule.Clone() : null;
+    }
+
+    private static List<TextMatchRule> NormalizeTextMatchRules(IEnumerable<TextMatchRule> rules)
+    {
+        var normalizedRules = new List<TextMatchRule>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rule in rules)
+        {
+            var pattern = rule.Pattern?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                continue;
+            }
+
+            var key = $"{rule.Mode}:{pattern}";
+            if (!seen.Add(key))
+            {
+                continue;
+            }
+
+            normalizedRules.Add(new TextMatchRule
+            {
+                Pattern = pattern,
+                Mode = rule.Mode
+            });
+        }
+
+        return normalizedRules;
     }
 
     private async void AddWadPath_Click(object? sender, RoutedEventArgs e)

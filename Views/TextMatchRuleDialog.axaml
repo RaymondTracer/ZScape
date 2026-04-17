@@ -1,0 +1,28 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ZScape.Views.TextMatchRuleDialog"
+        Title="Text Match Rule"
+        Width="430" Height="220"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False"
+        ExtendClientAreaToDecorationsHint="False">
+
+    <Grid Margin="15" RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="Auto,*">
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="Pattern:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <TextBox Grid.Row="0" Grid.Column="1" x:Name="PatternTextBox" Watermark="Enter a server name pattern"/>
+
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Match mode:" VerticalAlignment="Center" Margin="0,12,10,0"/>
+        <ComboBox Grid.Row="1" Grid.Column="1" x:Name="MatchModeComboBox" Margin="0,12,0,0"/>
+
+        <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
+                   Text="Use Contains for simple substring matching, Wildcard for * and ?, or Regex for advanced patterns."
+                   Foreground="Gray" TextWrapping="Wrap" Margin="0,16,0,0"/>
+
+        <Grid Grid.Row="3" Grid.ColumnSpan="2" ColumnDefinitions="*,Auto,10,Auto" Margin="0,16,0,0">
+            <TextBlock Grid.Column="0" x:Name="StatusLabel" Text="Enter a pattern" VerticalAlignment="Center" Foreground="Gray"/>
+            <Button Grid.Column="1" x:Name="OkButton" Content="OK" Width="80" Height="30" IsEnabled="False" Click="OkButton_Click"/>
+            <Button Grid.Column="3" Content="Cancel" Width="80" Height="30" Click="CancelButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

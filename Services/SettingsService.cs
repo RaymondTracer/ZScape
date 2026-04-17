@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Linq;
 using ZScape.Models;
 using ZScape.Utilities;
 
@@ -61,6 +62,7 @@ public class SettingsService
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonUtils.DefaultOptions);
                 if (loaded != null)
                 {
+                    NormalizeLoadedSettings(loaded);
                     _settings = loaded;
                 }
             }
@@ -73,6 +75,50 @@ public class SettingsService
         {
             _isLoading = false;
         }
+    }
+
+    private static void NormalizeLoadedSettings(AppSettings settings)
+    {
+        settings.CurrentFilter ??= new ServerFilter();
+        settings.FilterPresets ??= [];
+        settings.FavoriteServers ??= [];
+        settings.ManualServers ??= [];
+        settings.WadSearchPaths ??= [];
+        settings.DownloadSites ??= [];
+        settings.FavoriteServerNameRules = NormalizeRules(settings.FavoriteServerNameRules);
+        settings.HiddenServerNameRules = NormalizeRules(settings.HiddenServerNameRules);
+
+        NormalizeFilter(settings.CurrentFilter);
+        foreach (var preset in settings.FilterPresets)
+        {
+            NormalizeFilter(preset);
+        }
+    }
+
+    private static List<TextMatchRule> NormalizeRules(List<TextMatchRule>? rules)
+    {
+        return (rules ?? [])
+            .Where(rule => rule != null && !string.IsNullOrWhiteSpace(rule.Pattern))
+            .Select(rule => new TextMatchRule
+            {
+                Pattern = rule.Pattern.Trim(),
+                Mode = rule.Mode
+            })
+            .ToList();
+    }
+
+    private static void NormalizeFilter(ServerFilter filter)
+    {
+        filter.ServerNameFilter ??= string.Empty;
+        filter.MapFilter ??= string.Empty;
+        filter.RequireVersion ??= string.Empty;
+        filter.IncludeGameModes ??= [];
+        filter.ExcludeGameModes ??= [];
+        filter.RequireWads ??= [];
+        filter.IncludeAnyWads ??= [];
+        filter.ExcludeWads ??= [];
+        filter.IncludeCountries ??= [];
+        filter.ExcludeCountries ??= [];
     }
     
     /// <summary>
@@ -415,6 +461,12 @@ public class AppSettings
     // Favorites system
     /// <summary>Set of favorite server addresses (IP:Port format).</summary>
     public HashSet<string> FavoriteServers { get; set; } = [];
+
+    /// <summary>Server-name rules that mark servers as favorites without pinning them by address.</summary>
+    public List<TextMatchRule> FavoriteServerNameRules { get; set; } = [];
+
+    /// <summary>Server-name rules that hide matching servers from the main list.</summary>
+    public List<TextMatchRule> HiddenServerNameRules { get; set; } = [];
     
     /// <summary>Manually added server addresses for servers not from master list.</summary>
     public List<ManualServerEntry> ManualServers { get; set; } = [];
