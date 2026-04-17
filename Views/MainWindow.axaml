@@ -43,7 +43,7 @@
             <MenuItem Header="_Settings">
                 <MenuItem Header="_Refresh on Launch" x:Name="RefreshOnLaunchMenuItem" Click="RefreshOnLaunchMenuItem_Click" />
                 <MenuItem Header="_Auto-Refresh" x:Name="AutoRefreshMenuItem" Click="AutoRefreshMenuItem_Click" />
-                <MenuItem Header="Auto-Refresh _Favorites Only" x:Name="AutoRefreshFavoritesOnlyMenuItem" Click="AutoRefreshFavoritesOnlyMenuItem_Click" />
+                <MenuItem Header="Auto-Refresh _Favorites" x:Name="AutoRefreshFavoritesOnlyMenuItem" Click="AutoRefreshFavoritesOnlyMenuItem_Click" />
                 <Separator />
                 <MenuItem Header="_WAD Browser..." Click="WadBrowserMenuItem_Click" />
                 <MenuItem Header="_Testing Version Manager..." Click="TestingVersionsMenuItem_Click" />

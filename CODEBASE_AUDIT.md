@@ -26,18 +26,7 @@ This audit covered the full workspace for:
 
 ## High-Confidence Findings
 
-### 1. Auto-refresh favorites-only is exposed but not honored by the timer
-
-Severity: Medium
-
-The app persists and displays an `AutoRefreshFavoritesOnly` setting, and `ServerBrowserService` has a dedicated `RefreshFavoritesAsync()` path. The auto-refresh timer in `MainWindow`, however, always calls the full refresh path.
-
-Relevant files:
-
-- `Views/MainWindow.axaml.cs`
-- `Services/ServerBrowserService.cs`
-
-### 2. Favorite/manual server alerts are still a stub
+### 1. Favorite/manual server alerts are still a stub
 
 Severity: Medium
 
@@ -48,7 +37,7 @@ Relevant files:
 - `Views/MainWindow.axaml.cs`
 - `Services/NotificationService.cs`
 
-### 3. Hexdump diagnostics are only partially wired
+### 2. Hexdump diagnostics are only partially wired
 
 Severity: Medium
 
@@ -62,7 +51,7 @@ Relevant files:
 - `Protocol/MasterServerClient.cs`
 - `Protocol/ServerQueryClient.cs`
 
-### 4. Updater asset selection is Windows-specific despite multi-runtime targeting
+### 3. Updater asset selection is Windows-specific despite multi-runtime targeting
 
 Severity: Medium
 
@@ -73,7 +62,7 @@ Relevant files:
 - `ZScape.csproj`
 - `Services/UpdateService.cs`
 
-### 5. IP geolocation currently uses HTTP endpoints
+### 4. IP geolocation currently uses HTTP endpoints
 
 Severity: Medium
 
@@ -85,7 +74,7 @@ Relevant files:
 
 ## Overlooked or Dead Code
 
-### 6. `AppSettings.ShowFavoritesOnly` is currently unused
+### 5. `AppSettings.ShowFavoritesOnly` is currently unused
 
 Severity: Low
 
@@ -96,7 +85,7 @@ Relevant files:
 - `Services/SettingsService.cs`
 - `Views/MainWindow.axaml.cs`
 
-### 7. `AppSettings.VerboseMode` appears to be legacy state
+### 6. `AppSettings.VerboseMode` appears to be legacy state
 
 Severity: Low
 
@@ -109,7 +98,7 @@ Relevant files:
 
 ## Suspicious Areas Requiring Runtime Validation
 
-### 8. Master server packet parsing looks suspicious
+### 7. Master server packet parsing looks suspicious
 
 Confidence: Medium
 
@@ -123,6 +112,5 @@ Relevant files:
 
 ## Recommended Fix Order
 
-1. Wire auto-refresh favorites-only to `RefreshFavoritesAsync()`.
-2. Finish notification delivery or explicitly degrade the feature in UI/docs.
-3. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
+1. Finish notification delivery or explicitly degrade the feature in UI/docs.
+2. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.

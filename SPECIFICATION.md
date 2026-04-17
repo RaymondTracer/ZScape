@@ -40,7 +40,6 @@ Status language used in this document:
 
 Unless noted otherwise, the feature descriptions below describe intended product behavior. Known current gaps worth keeping in the specification:
 - **Native desktop notifications** are **Partial**: server alert detection exists, but `NotificationService` currently logs alerts instead of raising native notifications.
-- **Auto-refresh favorites only** is **Partial**: the setting and `ServerBrowserService.RefreshFavoritesAsync()` exist, but the current timer still invokes a full refresh.
 - **Verbose hex dumps** are **Partial**: `LoggingService.ShowHexDumps` and protocol call sites exist, but the current main-window wiring only applies verbose logging.
 - **Cross-platform update asset selection** is **Partial**: the project targets Windows, Linux, and macOS, but the current download path expects Windows `win-x64` zip releases.
 
@@ -178,7 +177,7 @@ Server List Row Colors:
 
 4. **Settings**
    - Unified settings dialog
-    - Auto-refresh interval and favorites-only background refresh mode (`Partial`: service support exists, main timer wiring still refreshes all servers)
+    - Separate full and favorites auto-refresh intervals, with an option for favorites refresh to stay synced to the full refresh timer
    - Query concurrency and retry settings
     - WAD search paths, download folder, and download sites
     - Download concurrency, per-domain thread settings, download dialog behavior, and optional PWAD download policy with skipped-name list
@@ -593,6 +592,8 @@ public class AppSettings
     public bool RefreshOnLaunch { get; set; } = true;
     public bool AutoRefresh { get; set; }
     public int AutoRefreshIntervalMinutes { get; set; } = 5;
+    public int AutoRefreshFavoritesIntervalMinutes { get; set; } = 5;
+    public bool AutoRefreshFavoritesUseFullRefreshTimer { get; set; } = true;
     public bool AutoRefreshFavoritesOnly { get; set; }
 
     // Panel sizes
@@ -712,7 +713,7 @@ public enum OptionalPwadDownloadMode
 - Uses `Channel<T>` for streaming query results to the UI as they arrive.
 - Implements retry logic per server with `ConsecutiveFailures` tracking.
 - `RefreshAsync()`: Full refresh from master server.
-- `RefreshFavoritesAsync()`: Refresh only favorite servers without master query. The dedicated path exists today; current auto-refresh timer wiring still needs to invoke it when favorites-only mode is enabled.
+- `RefreshFavoritesAsync()`: Refresh only favorite servers without master query. `MainWindow` can schedule it on its own interval or keep it synced to the full refresh timer.
 - Integrates `Ip2CountryService` to resolve countries for servers with XIP or empty country codes after querying.
 - Exposes server lists, summary counts (TotalServers, OnlineServers, TotalPlayers, TotalHumanPlayers, TotalBots) and filtering helper `GetFilteredServers(...)`.
 - Raises events: `ServerUpdated`, `RefreshStarted`, `RefreshProgress`, `RefreshCompleted`.
@@ -1195,7 +1196,7 @@ dotnet run --project ZScape.csproj
 - Testing builds are stored in `{ZandronumPath}/TestingVersions/{version}/` by default.
 - Country codes are normalized during filtering: alpha-3 codes (USA, DEU) convert to alpha-2 (US, DE). Unknown codes (XIP, XUN, O1, empty) normalize to "??".
 - Servers with "XIP" or empty country codes trigger automatic IP geolocation lookup via ip-api.com after querying. Failed lookups are marked as "??" to prevent retry.
-- Favorites-only auto-refresh remains intended behavior; the current timer wiring still performs a full refresh.
+- Favorite-server auto-refresh can run on its own interval or reuse the full refresh timer, and the settings dialog keeps the two intervals synced when requested.
 - Server alert detection exists for favorite and manual servers; native desktop notification delivery is still partial and currently falls back to logging.
 - First-time setup wizard is shown automatically when `settings.json` doesn't exist; settings file is only created after completing setup.
 - Automatic updates check GitHub releases on configurable intervals (hours/days/weeks); the current download/install asset path still expects Windows `win-x64` zip releases.

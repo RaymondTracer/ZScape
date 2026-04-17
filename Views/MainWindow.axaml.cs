@@ -31,11 +31,13 @@ public partial class MainWindow : Window
     private readonly NotificationService _notificationService = NotificationService.Instance;
     private readonly ScreenshotMonitorService _screenshotMonitor = ScreenshotMonitorService.Instance;
     private readonly DispatcherTimer _autoRefreshTimer = new();
+    private readonly DispatcherTimer _favoritesRefreshTimer = new();
     private readonly DispatcherTimer _countdownTimer = new();
     private readonly DispatcherTimer _alertTimer = new();
     private readonly DispatcherTimer _logFlushTimer = new();
     private readonly DispatcherTimer _serverListUpdateTimer = new();
-    private DateTime _nextAutoRefreshTime;
+    private DateTime? _nextAutoRefreshTime;
+    private DateTime? _nextFavoritesRefreshTime;
 
     private ServerInfo? _selectedServer;
     private int _sortColumnIndex = 3; // Default to Players column
@@ -380,8 +382,9 @@ public partial class MainWindow : Window
         _serverListUpdateTimer.Tick += ServerListUpdateTimer_Tick;
         _serverListUpdateTimer.Start();
 
-        // Auto-refresh timer
+        // Auto-refresh timers
         _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
+        _favoritesRefreshTimer.Tick += FavoritesRefreshTimer_Tick;
 
         // Countdown display timer (1-second tick)
         _countdownTimer.Interval = TimeSpan.FromSeconds(1);
@@ -411,49 +414,177 @@ public partial class MainWindow : Window
 
     private void AutoRefreshTimer_Tick(object? sender, EventArgs e)
     {
-        if (_settings.Settings.AutoRefresh)
+        if (!_settings.Settings.AutoRefresh)
         {
-            _nextAutoRefreshTime = DateTime.UtcNow.Add(_autoRefreshTimer.Interval);
-            _ = RefreshServersAsync();
+            return;
         }
+
+        _nextAutoRefreshTime = DateTime.UtcNow.Add(_autoRefreshTimer.Interval);
+        if (FavoritesUseFullRefreshTimer() && _nextAutoRefreshTime.HasValue)
+        {
+            _nextFavoritesRefreshTime = _nextAutoRefreshTime.Value;
+        }
+
+        UpdateAutoRefreshStatus();
+        if (_browserService.IsRefreshing)
+        {
+            return;
+        }
+
+        _ = RefreshServersAsync();
+    }
+
+    private void FavoritesRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        if (!_settings.Settings.AutoRefreshFavoritesOnly)
+        {
+            return;
+        }
+
+        _nextFavoritesRefreshTime = DateTime.UtcNow.Add(_favoritesRefreshTimer.Interval);
+        UpdateAutoRefreshStatus();
+        if (_browserService.IsRefreshing)
+        {
+            return;
+        }
+
+        _ = RefreshFavoriteServersAsync();
     }
 
     private void CountdownTimer_Tick(object? sender, EventArgs e)
     {
-        if (!_settings.Settings.AutoRefresh || _browserService.IsRefreshing)
+        if (_browserService.IsRefreshing)
             return;
 
-        var remaining = _nextAutoRefreshTime - DateTime.UtcNow;
-        if (remaining.TotalSeconds < 0) remaining = TimeSpan.Zero;
-
-        if (StatusLabel != null)
-        {
-            var minutes = (int)remaining.TotalMinutes;
-            var seconds = remaining.Seconds;
-            StatusLabel.Text = $"Ready (next refresh in {minutes}:{seconds:D2})";
-        }
+        UpdateAutoRefreshStatus();
     }
 
-    private void UpdateAutoRefreshTimer()
+    private void UpdateAutoRefreshTimers()
     {
         _autoRefreshTimer.Stop();
+        _favoritesRefreshTimer.Stop();
         _countdownTimer.Stop();
-        if (_settings.Settings.AutoRefresh)
+        _nextAutoRefreshTime = null;
+        _nextFavoritesRefreshTime = null;
+
+        var fullEnabled = _settings.Settings.AutoRefresh;
+        var favoritesEnabled = _settings.Settings.AutoRefreshFavoritesOnly;
+        var fullIntervalMinutes = NormalizeRefreshIntervalMinutes(_settings.Settings.AutoRefreshIntervalMinutes);
+        var favoritesIntervalMinutes = GetEffectiveFavoritesRefreshIntervalMinutes();
+
+        if (fullEnabled)
         {
-            var intervalMinutes = _settings.Settings.AutoRefreshIntervalMinutes;
-            if (intervalMinutes < 1) intervalMinutes = 5;
-            _autoRefreshTimer.Interval = TimeSpan.FromMinutes(intervalMinutes);
+            _autoRefreshTimer.Interval = TimeSpan.FromMinutes(fullIntervalMinutes);
             _autoRefreshTimer.Start();
-            _nextAutoRefreshTime = DateTime.UtcNow.AddMinutes(intervalMinutes);
-            _countdownTimer.Start();
-            _logger.Info($"Auto-refresh enabled: every {intervalMinutes} minutes");
+            _nextAutoRefreshTime = DateTime.UtcNow.AddMinutes(fullIntervalMinutes);
+            _logger.Info($"Auto-refresh enabled: every {fullIntervalMinutes} minutes");
         }
         else
         {
-            if (StatusLabel != null && StatusLabel.Text?.StartsWith("Ready") == true)
-                StatusLabel.Text = "Ready";
             _logger.Info("Auto-refresh disabled");
         }
+
+        if (favoritesEnabled)
+        {
+            if (FavoritesUseFullRefreshTimer() && _nextAutoRefreshTime.HasValue)
+            {
+                _nextFavoritesRefreshTime = _nextAutoRefreshTime.Value;
+                _logger.Info($"Favorites auto-refresh enabled: using the full refresh timer ({fullIntervalMinutes} minutes)");
+            }
+            else
+            {
+                _favoritesRefreshTimer.Interval = TimeSpan.FromMinutes(favoritesIntervalMinutes);
+                _favoritesRefreshTimer.Start();
+                _nextFavoritesRefreshTime = DateTime.UtcNow.AddMinutes(favoritesIntervalMinutes);
+                _logger.Info($"Favorites auto-refresh enabled: every {favoritesIntervalMinutes} minutes");
+            }
+        }
+        else
+        {
+            _logger.Info("Favorites auto-refresh disabled");
+        }
+
+        if (fullEnabled || favoritesEnabled)
+        {
+            _countdownTimer.Start();
+        }
+
+        UpdateAutoRefreshStatus();
+    }
+
+    private static int NormalizeRefreshIntervalMinutes(int intervalMinutes)
+    {
+        return intervalMinutes < 1 ? 5 : intervalMinutes;
+    }
+
+    private int GetEffectiveFavoritesRefreshIntervalMinutes()
+    {
+        if (_settings.Settings.AutoRefreshFavoritesUseFullRefreshTimer)
+        {
+            return NormalizeRefreshIntervalMinutes(_settings.Settings.AutoRefreshIntervalMinutes);
+        }
+
+        return NormalizeRefreshIntervalMinutes(_settings.Settings.AutoRefreshFavoritesIntervalMinutes);
+    }
+
+    private bool FavoritesUseFullRefreshTimer()
+    {
+        return _settings.Settings.AutoRefreshFavoritesOnly
+            && _settings.Settings.AutoRefreshFavoritesUseFullRefreshTimer
+            && _settings.Settings.AutoRefresh;
+    }
+
+    private void UpdateAutoRefreshStatus()
+    {
+        if (StatusLabel == null)
+        {
+            return;
+        }
+
+        if (_browserService.IsRefreshing)
+        {
+            return;
+        }
+
+        if (_settings.Settings.AutoRefresh && _settings.Settings.AutoRefreshFavoritesOnly && FavoritesUseFullRefreshTimer() && _nextAutoRefreshTime.HasValue)
+        {
+            StatusLabel.Text = $"Ready (next full/favorites refresh in {FormatRefreshCountdown(_nextAutoRefreshTime.Value)})";
+            return;
+        }
+
+        if (_settings.Settings.AutoRefresh && _nextAutoRefreshTime.HasValue && _settings.Settings.AutoRefreshFavoritesOnly && _nextFavoritesRefreshTime.HasValue)
+        {
+            StatusLabel.Text = $"Ready (next full refresh in {FormatRefreshCountdown(_nextAutoRefreshTime.Value)} | favorites in {FormatRefreshCountdown(_nextFavoritesRefreshTime.Value)})";
+            return;
+        }
+
+        if (_settings.Settings.AutoRefresh && _nextAutoRefreshTime.HasValue)
+        {
+            StatusLabel.Text = $"Ready (next full refresh in {FormatRefreshCountdown(_nextAutoRefreshTime.Value)})";
+            return;
+        }
+
+        if (_settings.Settings.AutoRefreshFavoritesOnly && _nextFavoritesRefreshTime.HasValue)
+        {
+            StatusLabel.Text = $"Ready (next favorites refresh in {FormatRefreshCountdown(_nextFavoritesRefreshTime.Value)})";
+            return;
+        }
+
+        if (StatusLabel.Text?.StartsWith("Ready") == true)
+        {
+            StatusLabel.Text = "Ready";
+        }
+    }
+
+    private static string FormatRefreshCountdown(DateTime nextRefreshTime)
+    {
+        var remaining = nextRefreshTime - DateTime.UtcNow;
+        if (remaining.TotalSeconds < 0)
+        {
+            remaining = TimeSpan.Zero;
+        }
+
+        return $"{(int)remaining.TotalMinutes}:{remaining.Seconds:D2}";
     }
 
     #endregion
@@ -548,8 +679,8 @@ public partial class MainWindow : Window
         // Apply verbose logging to logger
         _logger.VerboseMode = settings.VerboseLogging;
 
-        // Auto-refresh timer
-        UpdateAutoRefreshTimer();
+        // Auto-refresh timers
+        UpdateAutoRefreshTimers();
 
         // WAD settings
         var searchPaths = settings.WadSearchPaths ?? [];
@@ -668,6 +799,18 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _logger.Error($"Refresh failed: {ex.Message}");
+        }
+    }
+
+    private async Task RefreshFavoriteServersAsync()
+    {
+        try
+        {
+            await _browserService.RefreshFavoritesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"Favorites refresh failed: {ex.Message}");
         }
     }
 
@@ -1147,7 +1290,7 @@ public partial class MainWindow : Window
     {
         _settings.Settings.AutoRefresh = !_settings.Settings.AutoRefresh;
         UpdateMenuCheckMark(AutoRefreshMenuItem, _settings.Settings.AutoRefresh);
-        UpdateAutoRefreshTimer();
+        UpdateAutoRefreshTimers();
         _settings.Save();
     }
 
@@ -1155,6 +1298,7 @@ public partial class MainWindow : Window
     {
         _settings.Settings.AutoRefreshFavoritesOnly = !_settings.Settings.AutoRefreshFavoritesOnly;
         UpdateMenuCheckMark(AutoRefreshFavoritesOnlyMenuItem, _settings.Settings.AutoRefreshFavoritesOnly);
+        UpdateAutoRefreshTimers();
         _settings.Save();
     }
 
@@ -2501,7 +2645,7 @@ public partial class MainWindow : Window
 
             if (e.Success)
             {
-                if (StatusLabel != null) StatusLabel.Text = "Ready";
+                UpdateAutoRefreshStatus();
                 UpdateServerList();
             }
             else

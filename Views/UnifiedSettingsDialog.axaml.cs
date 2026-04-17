@@ -33,6 +33,7 @@ public partial class UnifiedSettingsDialog : Window
     private ObservableCollection<DomainThreadDisplay> _domainConfigs = new();
     private string _lastValidDownloadPath = string.Empty;
     private bool _updatingIntervalControls;
+    private bool _updatingAutoRefreshControls;
 
     public bool SettingsChanged { get; private set; }
     public event EventHandler<int>? RowHeightPreviewChanged;
@@ -55,6 +56,12 @@ public partial class UnifiedSettingsDialog : Window
         UpdateIntervalPresets.SelectionChanged += UpdateIntervalPresets_SelectionChanged;
         UpdateCheckIntervalValue.ValueChanged += (_, _) => UpdateInterval_ManualChanged();
         UpdateCheckIntervalUnit.SelectionChanged += (_, _) => UpdateInterval_ManualChanged();
+
+        // Sync full and favorites auto-refresh controls
+        AutoRefreshIntervalNumeric.ValueChanged += (_, newValue) => AutoRefreshIntervalNumeric_ValueChanged(newValue);
+        AutoRefreshFavoritesIntervalNumeric.ValueChanged += (_, newValue) => AutoRefreshFavoritesIntervalNumeric_ValueChanged(newValue);
+        UseFullRefreshTimerForFavoritesCheckBox.IsCheckedChanged += (_, _) =>
+            UseFullRefreshTimerForFavoritesChanged(UseFullRefreshTimerForFavoritesCheckBox.IsChecked == true);
         
         // Handle Escape/Enter keys
         KeyDown += OnDialogKeyDown;
@@ -361,8 +368,7 @@ public partial class UnifiedSettingsDialog : Window
         QueryRetryDelayMsNumeric.Value = Settings.QueryRetryDelayMs;
         MasterServerRetryCountNumeric.Value = Settings.MasterServerRetryCount;
         ConsecutiveFailuresNumeric.Value = Settings.ConsecutiveFailuresBeforeOffline;
-        AutoRefreshIntervalNumeric.Value = Settings.AutoRefreshIntervalMinutes;
-        AutoRefreshFavoritesOnlyCheckBox.IsChecked = Settings.AutoRefreshFavoritesOnly;
+        LoadAutoRefreshSettings();
 
         // Updates
         UpdateBehaviorComboBox.SelectedIndex = (int)Settings.UpdateBehavior;
@@ -534,6 +540,89 @@ public partial class UnifiedSettingsDialog : Window
         }
     }
 
+    private void LoadAutoRefreshSettings()
+    {
+        _updatingAutoRefreshControls = true;
+        try
+        {
+            AutoRefreshIntervalNumeric.Value = NormalizeAutoRefreshInterval(Settings.AutoRefreshIntervalMinutes);
+            UseFullRefreshTimerForFavoritesCheckBox.IsChecked = Settings.AutoRefreshFavoritesUseFullRefreshTimer;
+            AutoRefreshFavoritesIntervalNumeric.Value = Settings.AutoRefreshFavoritesUseFullRefreshTimer
+                ? AutoRefreshIntervalNumeric.Value
+                : NormalizeAutoRefreshInterval(Settings.AutoRefreshFavoritesIntervalMinutes);
+            AutoRefreshFavoritesOnlyCheckBox.IsChecked = Settings.AutoRefreshFavoritesOnly;
+        }
+        finally
+        {
+            _updatingAutoRefreshControls = false;
+        }
+    }
+
+    private void AutoRefreshIntervalNumeric_ValueChanged(int newValue)
+    {
+        if (_updatingAutoRefreshControls)
+        {
+            return;
+        }
+
+        if (UseFullRefreshTimerForFavoritesCheckBox.IsChecked == true)
+        {
+            _updatingAutoRefreshControls = true;
+            try
+            {
+                AutoRefreshFavoritesIntervalNumeric.Value = newValue;
+            }
+            finally
+            {
+                _updatingAutoRefreshControls = false;
+            }
+        }
+    }
+
+    private void AutoRefreshFavoritesIntervalNumeric_ValueChanged(int newValue)
+    {
+        if (_updatingAutoRefreshControls)
+        {
+            return;
+        }
+
+        if (UseFullRefreshTimerForFavoritesCheckBox.IsChecked == true && newValue != AutoRefreshIntervalNumeric.Value)
+        {
+            _updatingAutoRefreshControls = true;
+            try
+            {
+                UseFullRefreshTimerForFavoritesCheckBox.IsChecked = false;
+            }
+            finally
+            {
+                _updatingAutoRefreshControls = false;
+            }
+        }
+    }
+
+    private void UseFullRefreshTimerForFavoritesChanged(bool isChecked)
+    {
+        if (_updatingAutoRefreshControls || !isChecked)
+        {
+            return;
+        }
+
+        _updatingAutoRefreshControls = true;
+        try
+        {
+            AutoRefreshFavoritesIntervalNumeric.Value = AutoRefreshIntervalNumeric.Value;
+        }
+        finally
+        {
+            _updatingAutoRefreshControls = false;
+        }
+    }
+
+    private static int NormalizeAutoRefreshInterval(int intervalMinutes)
+    {
+        return intervalMinutes < 1 ? 5 : intervalMinutes;
+    }
+
     private void SaveSettings()
     {
         // General
@@ -610,6 +699,10 @@ public partial class UnifiedSettingsDialog : Window
         Settings.MasterServerRetryCount = MasterServerRetryCountNumeric.Value;
         Settings.ConsecutiveFailuresBeforeOffline = ConsecutiveFailuresNumeric.Value;
         Settings.AutoRefreshIntervalMinutes = AutoRefreshIntervalNumeric.Value;
+        Settings.AutoRefreshFavoritesUseFullRefreshTimer = UseFullRefreshTimerForFavoritesCheckBox.IsChecked ?? true;
+        Settings.AutoRefreshFavoritesIntervalMinutes = Settings.AutoRefreshFavoritesUseFullRefreshTimer
+            ? AutoRefreshIntervalNumeric.Value
+            : AutoRefreshFavoritesIntervalNumeric.Value;
         Settings.AutoRefreshFavoritesOnly = AutoRefreshFavoritesOnlyCheckBox.IsChecked ?? false;
 
         // Updates

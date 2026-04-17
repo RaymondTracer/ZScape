@@ -349,6 +349,8 @@ public class AppSettings
     public bool RefreshOnLaunch { get; set; } = true;
     public bool AutoRefresh { get; set; }
     public int AutoRefreshIntervalMinutes { get; set; } = 5;
+    public int AutoRefreshFavoritesIntervalMinutes { get; set; } = 5;
+    public bool AutoRefreshFavoritesUseFullRefreshTimer { get; set; } = true;
     public bool AutoRefreshFavoritesOnly { get; set; }
 
     // Panel sizes (splitter positions)

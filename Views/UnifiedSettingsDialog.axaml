@@ -352,7 +352,7 @@
                         <StackPanel Margin="5" Spacing="15">
                             <TextBlock Text="Server Query Settings" FontWeight="Bold" FontSize="14"/>
                             
-                            <Grid ColumnDefinitions="180,80,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                            <Grid ColumnDefinitions="180,80,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                                 <TextBlock Grid.Row="0" Text="Query Interval (ms):" VerticalAlignment="Center"/>
                                 <controls:NumericSpinner Grid.Row="0" Grid.Column="1" x:Name="QueryIntervalMsNumeric" 
                                                Minimum="1" Maximum="1000" Width="70"/>
@@ -380,9 +380,16 @@
                                 <TextBlock Grid.Row="6" Text="Auto Refresh (min):" VerticalAlignment="Center"/>
                                 <controls:NumericSpinner Grid.Row="6" Grid.Column="1" x:Name="AutoRefreshIntervalNumeric" 
                                                Minimum="1" Maximum="60" Width="70"/>
+
+                                <TextBlock Grid.Row="7" Text="Favorites Refresh (min):" VerticalAlignment="Center"/>
+                                <controls:NumericSpinner Grid.Row="7" Grid.Column="1" x:Name="AutoRefreshFavoritesIntervalNumeric" 
+                                               Minimum="1" Maximum="60" Width="70"/>
                                 
-                                <CheckBox Grid.Row="7" Grid.ColumnSpan="3" x:Name="AutoRefreshFavoritesOnlyCheckBox" 
-                                          Content="Auto-refresh favorites only"/>
+                                <CheckBox Grid.Row="8" Grid.ColumnSpan="3" x:Name="UseFullRefreshTimerForFavoritesCheckBox" 
+                                          Content="Use full refresh timer for favorites"/>
+
+                                <CheckBox Grid.Row="9" Grid.ColumnSpan="3" x:Name="AutoRefreshFavoritesOnlyCheckBox" 
+                                          Content="Auto-refresh favorite servers"/>
                             </Grid>
                             
                             <TextBlock Text="Query Interval: Delay between sending queries. Lower = faster but more aggressive.&#10;  1-5ms: Very Aggressive | 5-30ms: Aggressive | 30-60ms: Moderate | 60+ms: Cautious"
