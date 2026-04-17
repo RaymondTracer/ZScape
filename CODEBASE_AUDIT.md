@@ -26,18 +26,7 @@ This audit covered the full workspace for:
 
 ## High-Confidence Findings
 
-### 1. Update install flow is not wired end-to-end
-
-Severity: High
-
-The main window exposes an `Install & Restart` action, but the action only calls `UpdateService.InstallUpdate()`, which raises `InstallRequested` and does not call `PerformInstallation()` directly. There is no subscriber in the workspace that handles `InstallRequested`, so downloaded updates cannot actually be installed from the current UI flow.
-
-Relevant files:
-
-- `Views/MainWindow.axaml.cs`
-- `Services/UpdateService.cs`
-
-### 2. Optional WADs are treated as required when joining servers
+### 1. Optional WADs are treated as required when joining servers
 
 Severity: High
 
@@ -48,7 +37,7 @@ Relevant files:
 - `Protocol/ServerQueryClient.cs`
 - `Services/GameLauncher.cs`
 
-### 3. Testing-build WAD discovery does not line up with testing executable folders
+### 2. Testing-build WAD discovery does not line up with testing executable folders
 
 Severity: High
 
@@ -60,7 +49,7 @@ Relevant files:
 - `Services/GameLauncher.cs`
 - `Services/WadManager.cs`
 
-### 4. Auto-refresh favorites-only is exposed but not honored by the timer
+### 3. Auto-refresh favorites-only is exposed but not honored by the timer
 
 Severity: Medium
 
@@ -71,7 +60,7 @@ Relevant files:
 - `Views/MainWindow.axaml.cs`
 - `Services/ServerBrowserService.cs`
 
-### 5. Favorite/manual server alerts are still a stub
+### 4. Favorite/manual server alerts are still a stub
 
 Severity: Medium
 
@@ -82,7 +71,7 @@ Relevant files:
 - `Views/MainWindow.axaml.cs`
 - `Services/NotificationService.cs`
 
-### 6. Hexdump diagnostics are only partially wired
+### 5. Hexdump diagnostics are only partially wired
 
 Severity: Medium
 
@@ -96,21 +85,7 @@ Relevant files:
 - `Protocol/MasterServerClient.cs`
 - `Protocol/ServerQueryClient.cs`
 
-### 7. SPECIFICATION.md is materially out of sync with the current codebase
-
-Severity: Medium
-
-The spec still describes a WinForms/MainForm-based UI and an outdated project structure, while the repository is now Avalonia-based with `App.axaml`, `MainWindow.axaml`, `Views/`, `Controls/`, and `Themes/`. Some other spec claims also overstate implementation completeness.
-
-Relevant files:
-
-- `SPECIFICATION.md`
-- `App.axaml`
-- `Program.cs`
-- `Views/MainWindow.axaml`
-- `ZScape.csproj`
-
-### 8. Updater asset selection is Windows-specific despite multi-runtime targeting
+### 6. Updater asset selection is Windows-specific despite multi-runtime targeting
 
 Severity: Medium
 
@@ -121,7 +96,7 @@ Relevant files:
 - `ZScape.csproj`
 - `Services/UpdateService.cs`
 
-### 9. IP geolocation currently uses HTTP endpoints
+### 7. IP geolocation currently uses HTTP endpoints
 
 Severity: Medium
 
@@ -133,7 +108,7 @@ Relevant files:
 
 ## Overlooked or Dead Code
 
-### 10. `AppSettings.ShowFavoritesOnly` is currently unused
+### 8. `AppSettings.ShowFavoritesOnly` is currently unused
 
 Severity: Low
 
@@ -144,7 +119,7 @@ Relevant files:
 - `Services/SettingsService.cs`
 - `Views/MainWindow.axaml.cs`
 
-### 11. `AppSettings.VerboseMode` appears to be legacy state
+### 9. `AppSettings.VerboseMode` appears to be legacy state
 
 Severity: Low
 
@@ -155,22 +130,9 @@ Relevant files:
 - `Services/SettingsService.cs`
 - `Views/MainWindow.axaml.cs`
 
-### 12. Update-state persistence hooks exist but are not assigned
-
-Severity: Medium
-
-`ServerBrowserService` can snapshot current server state, and `UpdateService` exposes `GetServerState` and `SaveStateWithProgress` hooks plus `UpdateProgressDialog`, but no assignment was found in the workspace. Post-update restore logic exists, but the pre-restart save path is not wired.
-
-Relevant files:
-
-- `Services/ServerBrowserService.cs`
-- `Services/UpdateService.cs`
-- `Views/UpdateProgressDialog.axaml.cs`
-- `Views/MainWindow.axaml.cs`
-
 ## Suspicious Areas Requiring Runtime Validation
 
-### 13. Master server packet parsing looks suspicious
+### 10. Master server packet parsing looks suspicious
 
 Confidence: Medium
 
@@ -182,21 +144,10 @@ Relevant files:
 - `Protocol/ProtocolConstants.cs`
 - `SPECIFICATION.md`
 
-## Documentation Pass Guidance
-
-The second-pass rewrite of `SPECIFICATION.md` should:
-
-1. Treat the Avalonia migration as authoritative and remove stale WinForms/MainForm/UIHelpers/DataGridView language.
-2. Keep product features that are only partially implemented, but label them clearly as partial rather than claiming they are complete.
-3. Update settings and persistence documentation to reflect `settings.json`, `history.json`, and `domain-settings.json`.
-4. Reflect the actual project structure under `Controls/`, `Views/`, `Themes/`, `Utilities/`, and `Services/`.
-5. Preserve intended features such as notifications, favorites-only auto-refresh, hexdump diagnostics, and update install/restart support in the spec, while calling out their current implementation status.
-
 ## Recommended Fix Order
 
-1. Wire the updater end-to-end.
-2. Fix optional-WAD handling during join.
-3. Fix testing-build WAD discovery/search priority.
-4. Wire auto-refresh favorites-only to `RefreshFavoritesAsync()`.
-5. Finish notification delivery or explicitly degrade the feature in UI/docs.
-6. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
+1. Fix optional-WAD handling during join.
+2. Fix testing-build WAD discovery/search priority.
+3. Wire auto-refresh favorites-only to `RefreshFavoritesAsync()`.
+4. Finish notification delivery or explicitly degrade the feature in UI/docs.
+5. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.

@@ -33,7 +33,7 @@ Status language used in this document:
 - **NotificationService**: Server alert abstraction for native desktop notifications; the current backend is partial and currently logs alerts instead of showing native notifications.
 - **ScreenshotMonitorService**: Consolidates screenshots from testing versions to a central location.
 - **Ip2CountryService**: IP-to-country geolocation service using ip-api.com with caching, rate limiting, and batch lookup support.
-- **UpdateService**: Automatic updates from GitHub releases with configurable check intervals, background downloading, and optional auto-restart; installation and cross-platform asset handling remain partial.
+- **UpdateService**: Automatic updates from GitHub releases with configurable check intervals, background downloading, saved-state restart support, and optional auto-restart; cross-platform asset handling remains partial.
 - **UI**: Avalonia `MainWindow` and supporting dialogs, custom controls (`ResizableListView`, `PersistentComboBox`, `NumericSpinner`, `LogPanelControl`), and shared dark theme resources in `Themes/DarkTheme.axaml`.
 
 ## Implementation Status
@@ -42,7 +42,6 @@ Unless noted otherwise, the feature descriptions below describe intended product
 - **Native desktop notifications** are **Partial**: server alert detection exists, but `NotificationService` currently logs alerts instead of raising native notifications.
 - **Auto-refresh favorites only** is **Partial**: the setting and `ServerBrowserService.RefreshFavoritesAsync()` exist, but the current timer still invokes a full refresh.
 - **Verbose hex dumps** are **Partial**: `LoggingService.ShowHexDumps` and protocol call sites exist, but the current main-window wiring only applies verbose logging.
-- **Automatic update installation** is **Partial**: update check/download, save-state, and restart helpers exist, but the `InstallRequested` to `PerformInstallation()` wiring is incomplete.
 - **Cross-platform update asset selection** is **Partial**: the project targets Windows, Linux, and macOS, but the current download path expects Windows `win-x64` zip releases.
 - **Optional PWAD handling during join validation** is **Partial**: optional WAD flags are parsed from the protocol, but join-time required-WAD checks still treat all PWADs as required.
 - **Testing-version WAD discovery** is **Partial**: testing executables are resolved per server, but the global WAD cache currently prioritizes the stable executable folder configured in main-window settings.
@@ -203,13 +202,13 @@ Server List Row Colors:
    - Connection history with recent servers
     - Server alerts when favorites or manual servers come online (`Partial`: alert detection exists; current notification backend logs instead of showing native desktop notifications)
    - Testing version auto-download and management
-    - Automatic update checking and downloading (`Partial`: current install/restart flow and cross-platform asset handling are incomplete)
+    - Automatic update checking, save-state persistence, and installation/restart flow (`Partial`: current asset download/install packaging is still Windows-oriented despite multi-runtime targeting)
 
 ### UI Dialogs
 - **MainWindow**: Primary Avalonia server browser interface
 - **UnifiedSettingsDialog**: Comprehensive settings configuration
 - **FirstTimeSetupDialog**: Initial setup wizard shown when settings.json doesn't exist
-- **UpdateProgressDialog**: Progress dialog for update save-state operations (`Partial`: current updater wiring does not yet route through it)
+- **UpdateProgressDialog**: Progress dialog for update save-state operations before restart
 - **ServerFilterDialog**: Advanced server filtering options
 - **AddServerDialog**: Manually add servers by IP:Port
 - **ConnectionHistoryDialog**: View and reconnect to recent servers
@@ -1187,5 +1186,5 @@ dotnet run --project ZScape.csproj
 - Favorites-only auto-refresh remains intended behavior; the current timer wiring still performs a full refresh.
 - Server alert detection exists for favorite and manual servers; native desktop notification delivery is still partial and currently falls back to logging.
 - First-time setup wizard is shown automatically when `settings.json` doesn't exist; settings file is only created after completing setup.
-- Automatic updates check GitHub releases on configurable intervals (hours/days/weeks); the current download path expects Windows `win-x64` zip assets, and install/restart wiring remains partial.
+- Automatic updates check GitHub releases on configurable intervals (hours/days/weeks); the current download/install asset path still expects Windows `win-x64` zip releases.
 - For precise implementation details, consult the corresponding classes in `Protocol/`, `Services/`, `Views/`, `Controls/`, and `Themes/`.

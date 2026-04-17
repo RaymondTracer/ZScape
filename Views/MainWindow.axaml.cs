@@ -47,6 +47,7 @@ public partial class MainWindow : Window
 
     // Update notification panel
     private Border? _updateNotificationPanel;
+    private bool _isInstallingUpdate;
 
     // Throttle for server updates
     private bool _serverListNeedsUpdate = false;
@@ -399,9 +400,13 @@ public partial class MainWindow : Window
         _notificationService.AlertClicked += NotificationService_AlertClicked;
 
         // Update service events
-        UpdateService.Instance.UpdateAvailable += UpdateService_UpdateAvailable;
-        UpdateService.Instance.UpdateReady += UpdateService_UpdateReady;
-        UpdateService.Instance.IsApplicationBusy = () => _browserService.IsRefreshing;
+        var updateService = UpdateService.Instance;
+        updateService.UpdateAvailable += UpdateService_UpdateAvailable;
+        updateService.UpdateReady += UpdateService_UpdateReady;
+        updateService.InstallRequested += UpdateService_InstallRequested;
+        updateService.IsApplicationBusy = () => _browserService.IsRefreshing;
+        updateService.GetServerState = _browserService.GetServerState;
+        updateService.SaveStateWithProgress = updateService.SaveServerStateAsync;
     }
 
     private void AutoRefreshTimer_Tick(object? sender, EventArgs e)
@@ -2680,6 +2685,47 @@ public partial class MainWindow : Window
         {
             ShowUpdateNotification();
         });
+    }
+
+    private void UpdateService_InstallRequested(object? sender, UpdateInstallEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() => _ = InstallReadyUpdateAsync());
+    }
+
+    private async Task InstallReadyUpdateAsync()
+    {
+        if (_isInstallingUpdate)
+            return;
+
+        _isInstallingUpdate = true;
+
+        try
+        {
+            var updateService = UpdateService.Instance;
+            var saveAction = updateService.SaveStateWithProgress;
+
+            if (saveAction != null)
+            {
+                var progressDialog = new UpdateProgressDialog(saveAction);
+                var saveSucceeded = await progressDialog.ShowDialog<bool>(this);
+                if (!saveSucceeded)
+                {
+                    _logger.Warning("Update installation canceled before restart because server state was not saved.");
+                    return;
+                }
+            }
+
+            HideUpdateNotification();
+            updateService.PerformInstallation();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"Update installation failed: {ex.Message}");
+        }
+        finally
+        {
+            _isInstallingUpdate = false;
+        }
     }
 
     private void ShowUpdateNotification()
