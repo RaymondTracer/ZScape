@@ -182,7 +182,7 @@ Server List Row Colors:
     - Auto-refresh interval and favorites-only background refresh mode (`Partial`: service support exists, main timer wiring still refreshes all servers)
    - Query concurrency and retry settings
     - WAD search paths, download folder, and download sites
-    - Download concurrency, per-domain thread settings, and download dialog behavior
+    - Download concurrency, per-domain thread settings, download dialog behavior, and optional PWAD download policy with skipped-name list
     - Zandronum stable executable path and testing versions root path
     - Favorites, manual servers, alerts, row height, and player name colorization
    - Screenshot consolidation settings
@@ -195,7 +195,7 @@ Server List Row Colors:
    - Automatic WAD archiving with hash suffixes
    - idgames Archive integration
    - Web search fallback (DuckDuckGo)
-    - Optional WAD metadata from server responses is honored during join-time required-WAD and hash-validation checks
+    - Optional WAD metadata from server responses is honored during join-time required-WAD checks, and missing optional PWADs can be auto-downloaded, skipped, or selected per join based on user settings
 
 6. **Connection & Update Features**
    - Connection history with recent servers
@@ -207,6 +207,7 @@ Server List Row Colors:
 - **MainWindow**: Primary Avalonia server browser interface
 - **UnifiedSettingsDialog**: Comprehensive settings configuration
 - **FirstTimeSetupDialog**: Initial setup wizard shown when settings.json doesn't exist
+- **OptionalWadSelectionDialog**: Join-time selection dialog for required and optional PWAD downloads
 - **UpdateProgressDialog**: Progress dialog for update save-state operations before restart
 - **ServerFilterDialog**: Advanced server filtering options
 - **AddServerDialog**: Manually add servers by IP:Port
@@ -648,6 +649,8 @@ public class AppSettings
 
     // Download dialog
     public DownloadDialogBehavior DownloadDialogBehavior { get; set; } = DownloadDialogBehavior.CloseOnSuccess;
+    public OptionalPwadDownloadMode OptionalPwadDownloadMode { get; set; } = OptionalPwadDownloadMode.AskEachTime;
+    public List<string> SkippedOptionalPwads { get; set; } = [];
 
     // Screenshot consolidation
     public bool EnableScreenshotMonitoring { get; set; }
@@ -693,6 +696,13 @@ public class DomainSettingsData
 {
     public Dictionary<string, DomainSettings> Domains { get; set; } = new();
 }
+
+public enum OptionalPwadDownloadMode
+{
+    AskEachTime = 0,
+    AlwaysDownload = 1,
+    NeverDownload = 2
+}
 ```
 
 `ConnectionHistoryData` and `DomainSettingsData` are persisted separately from `AppSettings`. `VerboseMode` and `ShowFavoritesOnly` remain in the settings model for compatibility and future wiring, even though the current Avalonia UI primarily uses `VerboseLogging` and an in-session favorites-only toggle.
@@ -712,6 +722,7 @@ public class DomainSettingsData
 - Singleton (`GameLauncher.Instance`) handling Zandronum launches.
 - `LaunchGame(ServerInfo, connectPassword?, joinPassword?)`: Launches Zandronum with constructed arguments.
 - `CheckRequiredWads(ServerInfo)`: Returns missing WADs with expected hashes.
+- `CheckOptionalWads(ServerInfo)`: Returns missing optional WADs that can be offered for download without blocking joins.
 - `VerifyWadHashesAsync(ServerInfo, progress, cancellationToken)`: Concurrent hash verification with byte-level progress.
 - `ResolveHashMismatches(List<WadHashMismatch>)`: Swaps WAD versions or prepares download list.
 - `DownloadTestingBuildAsync(ServerInfo)`: Downloads and extracts testing versions, copies config files.
@@ -1081,6 +1092,8 @@ ZScape/
     ├── FirstTimeSetupDialog.axaml.cs
     ├── MainWindow.axaml
     ├── MainWindow.axaml.cs
+    ├── OptionalWadSelectionDialog.axaml
+    ├── OptionalWadSelectionDialog.axaml.cs
     ├── ServerFilterDialog.axaml
     ├── ServerFilterDialog.axaml.cs
     ├── TestingVersionManagerDialog.axaml
