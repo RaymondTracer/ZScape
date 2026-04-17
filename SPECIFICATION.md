@@ -2,11 +2,16 @@
 
 ## Project Overview
 
-A modern, dark-themed WinForms application for browsing Zandronum game servers. Built with .NET 10 and C#.
+A modern, dark-themed Avalonia desktop application for browsing Zandronum game servers. Built with .NET 10 and C#.
 
 **Author**: Charlie Gadd
 
-This specification has been synchronized with the implementation and documents protocol constants, encoding/decoding behavior, data models, services, UI theme details, settings, and build instructions as implemented in the repository.
+This document tracks both the current implementation and intended product behavior. Implemented behavior is documented directly, while incomplete or partially wired features remain in the specification with explicit status notes so ongoing work is not mistaken for removed scope.
+
+Status language used in this document:
+- **Implemented**: Present in the current codebase and wired into runtime behavior.
+- **Partial**: Present in code, UI, or settings, but not fully wired or not yet complete across platforms.
+- **Planned**: Retained product requirement that is not yet fully implemented.
 
 ---
 
@@ -19,21 +24,32 @@ This specification has been synchronized with the implementation and documents p
 - **MasterServerClient**: UDP client that communicates with the master server to obtain server endpoints and handles multi-packet responses with retry logic.
 - **ServerQueryClient**: Queries individual servers, handles segmented responses and reassembly, and parses server payloads into `ServerInfo`.
 - **ServerBrowserService**: Coordinates master refresh and batch server queries with pipelined processing, keeps an in-memory server store, and provides filtering and summary metrics.
-- **SettingsService**: Loads/saves `AppSettings` to `settings.json` in the application base directory.
-- **LoggingService**: Singleton logging with `VerboseMode` and optional hexdump output used across the protocol and UI layers.
+- **SettingsService**: Loads/saves `AppSettings` to `settings.json`, connection history to `history.json`, and domain thread settings to `domain-settings.json` in the application base directory.
+- **LoggingService**: Singleton logging with verbose logging and optional hexdump plumbing used across the protocol and UI layers.
 - **WadManager**: Manages WAD file discovery across configured search paths with hash verification and archived version management.
 - **WadDownloader**: Multi-threaded WAD downloading with parallel URL discovery, idgames Archive integration, and web search fallback.
 - **GameLauncher**: Handles launching Zandronum with proper arguments, WAD hash verification, and testing build downloads.
 - **DomainThreadConfig**: Manages domain-specific thread settings for optimized parallel downloads with adaptive learning.
-- **NotificationService**: System tray notifications for server alerts (favorite servers coming online).
+- **NotificationService**: Server alert abstraction for native desktop notifications; the current backend is partial and currently logs alerts instead of showing native notifications.
 - **ScreenshotMonitorService**: Consolidates screenshots from testing versions to a central location.
 - **Ip2CountryService**: IP-to-country geolocation service using ip-api.com with caching, rate limiting, and batch lookup support.
-- **UpdateService**: Automatic updates from GitHub releases with configurable check intervals, background downloading, and optional auto-restart.
-- **UI**: WinForms MainForm and supporting dialogs, with `DarkTheme` to consistently style controls and `UIHelpers` for shared component creation.
+- **UpdateService**: Automatic updates from GitHub releases with configurable check intervals, background downloading, and optional auto-restart; installation and cross-platform asset handling remain partial.
+- **UI**: Avalonia `MainWindow` and supporting dialogs, custom controls (`ResizableListView`, `PersistentComboBox`, `NumericSpinner`, `LogPanelControl`), and shared dark theme resources in `Themes/DarkTheme.axaml`.
+
+## Implementation Status
+
+Unless noted otherwise, the feature descriptions below describe intended product behavior. Known current gaps worth keeping in the specification:
+- **Native desktop notifications** are **Partial**: server alert detection exists, but `NotificationService` currently logs alerts instead of raising native notifications.
+- **Auto-refresh favorites only** is **Partial**: the setting and `ServerBrowserService.RefreshFavoritesAsync()` exist, but the current timer still invokes a full refresh.
+- **Verbose hex dumps** are **Partial**: `LoggingService.ShowHexDumps` and protocol call sites exist, but the current main-window wiring only applies verbose logging.
+- **Automatic update installation** is **Partial**: update check/download, save-state, and restart helpers exist, but the `InstallRequested` to `PerformInstallation()` wiring is incomplete.
+- **Cross-platform update asset selection** is **Partial**: the project targets Windows, Linux, and macOS, but the current download path expects Windows `win-x64` zip releases.
+- **Optional PWAD handling during join validation** is **Partial**: optional WAD flags are parsed from the protocol, but join-time required-WAD checks still treat all PWADs as required.
+- **Testing-version WAD discovery** is **Partial**: testing executables are resolved per server, but the global WAD cache currently prioritizes the stable executable folder configured in main-window settings.
 
 ---
 
-## Protocol Details (implementation-accurate)
+## Protocol Details
 
 ### Master Server Communication
 
@@ -148,7 +164,7 @@ Server List Row Colors:
    - By map name (wildcards and regex support)
    - By IWAD
    - By WAD requirements (require/include any/exclude)
-   - By country (include/exclude with CheckedListBox UI, search functionality, mutual exclusion)
+    - By country (searchable include/exclude lists in Avalonia UI, with mutual exclusion)
    - Special country codes at list top: [Unknown/Unresolved], [Anonymous Proxy], [Satellite Provider], [Asia/Pacific Region], [Europe Region]
    - IP-to-Country geolocation for servers returning XIP or empty country codes
    - ISO 3166-1 alpha-3 to alpha-2 country code normalization
@@ -157,21 +173,22 @@ Server List Row Colors:
    - Quick search (searches name, map, address)
    - Saved filter presets
 
-3. **Verbose Mode**
+3. **Logging & Diagnostics**
    - Toggle via View menu
    - Shows detailed network operations
-   - Displays packet timing information
-   - Shows raw protocol data (hexdump option)
+    - Displays packet timing information and protocol troubleshooting details in the log panel
+    - Shows raw protocol data (hexdump option) as part of the intended diagnostics surface (`Partial`: `LoggingService` and protocol call sites support it, but current main-window wiring only applies verbose logging)
 
 4. **Settings**
    - Unified settings dialog
-   - Auto-refresh interval
+    - Auto-refresh interval and favorites-only background refresh mode (`Partial`: service support exists, main timer wiring still refreshes all servers)
    - Query concurrency and retry settings
-   - WAD search paths configuration
-   - Download concurrency and thread settings
-   - Zandronum executable paths (stable and testing)
-   - Favorites and alerts configuration
+    - WAD search paths, download folder, and download sites
+    - Download concurrency, per-domain thread settings, and download dialog behavior
+    - Zandronum stable executable path and testing versions root path
+    - Favorites, manual servers, alerts, row height, and player name colorization
    - Screenshot consolidation settings
+    - Update behavior and check interval settings
 
 5. **WAD Management**
    - WAD browser dialog for exploring local WADs
@@ -180,23 +197,25 @@ Server List Row Colors:
    - Automatic WAD archiving with hash suffixes
    - idgames Archive integration
    - Web search fallback (DuckDuckGo)
+    - Optional WAD metadata is parsed from server responses (`Partial`: join-time required-WAD validation still treats all PWADs as mandatory)
 
-6. **Connection Features**
+6. **Connection & Update Features**
    - Connection history with recent servers
-   - Server alerts when favorites come online
+    - Server alerts when favorites or manual servers come online (`Partial`: alert detection exists; current notification backend logs instead of showing native desktop notifications)
    - Testing version auto-download and management
+    - Automatic update checking and downloading (`Partial`: current install/restart flow and cross-platform asset handling are incomplete)
 
 ### UI Dialogs
-- **MainForm**: Primary server browser interface
+- **MainWindow**: Primary Avalonia server browser interface
 - **UnifiedSettingsDialog**: Comprehensive settings configuration
 - **FirstTimeSetupDialog**: Initial setup wizard shown when settings.json doesn't exist
-- **UpdateProgressDialog**: Update download progress display with cancel option
+- **UpdateProgressDialog**: Progress dialog for update save-state operations (`Partial`: current updater wiring does not yet route through it)
 - **ServerFilterDialog**: Advanced server filtering options
 - **AddServerDialog**: Manually add servers by IP:Port
 - **ConnectionHistoryDialog**: View and reconnect to recent servers
 - **FetchWadsDialog**: Download missing WADs interface
 - **WadBrowserDialog**: Explore and manage local WAD files
-- **WadDownloadDialog**: Multi-threaded download progress display
+- **WadDownloadDialog**: Multi-threaded download progress display with configurable server-join auto-close behavior
 - **TestingVersionManagerDialog**: Manage installed testing builds
 
 ## Data Models
@@ -533,11 +552,15 @@ Note: `CreateServerChallenge()` currently writes `ExtendedQueryFlags.StandardQue
 
 ### Logging & Verbose Mode
 - `LoggingService.Instance` controls `VerboseMode` and `ShowHexDumps`.
-- `LogHexDump` will return early (do nothing) if `VerboseMode` is false, `ShowHexDumps` is false, or if the provided `data` is null or empty. When enabled, protocol clients call `LogHexDump` to output formatted hex + ASCII blocks for troubleshooting.
+- The current Avalonia main window applies `AppSettings.VerboseLogging` to `LoggingService.VerboseMode`.
+- `ShowHexDumps` remains part of the persisted settings and logger API, but current main-window UI wiring for toggling/applying it is still partial.
+- `LogHexDump` returns early if `VerboseMode` is false, `ShowHexDumps` is false, or if the provided `data` is null or empty. When enabled, protocol clients output formatted hex + ASCII blocks for troubleshooting.
 
 ### Settings & Persistence
-- `SettingsService` persists runtime options to `settings.json` in the application base directory (portable / next to executable).
-- Provides `RecordConnection` and `ClearConnectionHistory` methods for connection history management.
+- `SettingsService` persists `AppSettings` to `settings.json` in the application base directory (portable / next to executable).
+- Connection history is stored separately in `history.json`.
+- Learned per-domain download settings are stored separately in `domain-settings.json`.
+- Provides `RecordConnection`, `ClearConnectionHistory`, `SaveHistory`, and `SaveDomainSettings` methods, plus migration helpers from older monolithic `settings.json` layouts.
 
 ### AppSettings (comprehensive)
 ```csharp
@@ -549,34 +572,57 @@ public class AppSettings
     public int WindowWidth { get; set; } = 1200;
     public int WindowHeight { get; set; } = 800;
     public bool WindowMaximized { get; set; }
-    public Dictionary<string, int> ColumnWidths { get; set; }
-    public int SortColumnIndex { get; set; } = 3;  // Default: Players (column 3)
+    public Dictionary<string, int> ColumnWidths { get; set; } = new();
+    public int SortColumnIndex { get; set; } = 3;
     public bool SortAscending { get; set; } = false;
-    public int MainSplitterDistance { get; set; } = 400;
-    public int DetailsSplitterDistance { get; set; } = 400;
-    public int LogSplitterDistance { get; set; } = 150;
-    
+
     // Filters
     public bool HideEmpty { get; set; }
-    public bool TreatBotOnlyAsEmpty { get; set; }  // Treat bot-only servers as empty
+    public bool TreatBotOnlyAsEmpty { get; set; }
     public bool HideFull { get; set; }
     public bool HidePassworded { get; set; }
     public int GameModeFilterIndex { get; set; }
-    public string SearchText { get; set; }
-    public ServerFilter CurrentFilter { get; set; }
-    public List<ServerFilter> FilterPresets { get; set; }
-    
-    // View options
-    public bool VerboseMode { get; set; } = false;
-    public bool ShowHexDumps { get; set; } = false;
-    public bool ShowLogPanel { get; set; } = true;
-    
+    public string SearchText { get; set; } = string.Empty;
+
+    // View options (`VerboseMode` is retained as a legacy persisted field)
+    public bool VerboseMode { get; set; }
+    public bool ShowHexDumps { get; set; }
+    public bool ShowLogPanel { get; set; }
+    public bool VerboseLogging { get; set; }
+    public bool ColorizePlayerNames { get; set; } = true;
+
     // Behavior options
     public bool RefreshOnLaunch { get; set; } = true;
     public bool AutoRefresh { get; set; }
     public int AutoRefreshIntervalMinutes { get; set; } = 5;
-    public bool AutoRefreshFavoritesOnly { get; set; }  // Only refresh favorites during auto-refresh
+    public bool AutoRefreshFavoritesOnly { get; set; }
+
+    // Panel sizes
+    public int MainSplitterDistance { get; set; } = 400;
+    public int DetailsSplitterDistance { get; set; } = 400;
+    public int LogSplitterDistance { get; set; } = 150;
+
+    // Advanced filter
+    public ServerFilter CurrentFilter { get; set; } = new();
+    public List<ServerFilter> FilterPresets { get; set; } = [];
+
+    // WAD settings
+    public List<string> WadSearchPaths { get; set; } = [];
+    public string WadDownloadPath { get; set; } = string.Empty;
+    public List<string> DownloadSites { get; set; } = [];
+    public int HashVerificationConcurrency { get; set; } = 0;
     
+    // Download concurrency settings
+    public int MaxConcurrentDownloads { get; set; } = 0;
+    public int MaxConcurrentDomains { get; set; } = 8;
+    public int MaxThreadsPerFile { get; set; } = 0;
+    public int DefaultInitialThreads { get; set; } = 2;
+    public int DefaultMinSegmentSizeKb { get; set; } = 256;
+
+    // Zandronum paths
+    public string ZandronumPath { get; set; } = string.Empty;
+    public string ZandronumTestingPath { get; set; } = string.Empty;
+
     // Server query settings
     public int QueryIntervalMs { get; set; } = 5;
     public int MaxConcurrentQueries { get; set; } = 50;
@@ -584,45 +630,39 @@ public class AppSettings
     public int QueryRetryDelayMs { get; set; } = 2000;
     public int MasterServerRetryCount { get; set; } = 3;
     public int ConsecutiveFailuresBeforeOffline { get; set; } = 3;
-    
-    // WAD settings
-    public List<string> WadSearchPaths { get; set; }
-    public string WadDownloadPath { get; set; }
-    public List<string> DownloadSites { get; set; }
-    public int HashVerificationConcurrency { get; set; } = 0;  // 0 = unlimited
-    
-    // Download concurrency settings
-    public int MaxConcurrentDownloads { get; set; } = 0;  // 0 = unlimited
-    public int MaxConcurrentDomains { get; set; } = 8;
-    public int MaxThreadsPerFile { get; set; } = 0;  // 0 = no global limit
-    public int DefaultMaxThreads { get; set; } = 32;
-    public int DefaultInitialThreads { get; set; } = 2;
-    public int DefaultMinSegmentSizeKb { get; set; } = 256;
-    public Dictionary<string, DomainSettings> DomainThreadSettings { get; set; }
-    
-    // Zandronum paths
-    public string ZandronumPath { get; set; }
-    public string ZandronumTestingPath { get; set; }
-    
-    // Favorites
-    public HashSet<string> FavoriteServers { get; set; }
-    public List<ManualServerEntry> ManualServers { get; set; }
+
+    // Favorites system
+    public HashSet<string> FavoriteServers { get; set; } = [];
+    public List<ManualServerEntry> ManualServers { get; set; } = [];
     public bool ShowFavoritesColumn { get; set; } = true;
-    public bool ShowFavoritesOnly { get; set; }
-    
+    public bool ShowFavoritesOnly { get; set; }   // Present in the model; current UI toggle is session-driven
+    public int ServerListRowHeight { get; set; } = 26;
+
     // Server Alerts
     public bool EnableFavoriteServerAlerts { get; set; }
     public bool EnableManualServerAlerts { get; set; }
     public int AlertMinPlayers { get; set; } = 1;
     public int AlertCheckIntervalSeconds { get; set; } = 60;
-    
-    // Connection History
-    public List<ConnectionHistoryEntry> ConnectionHistory { get; set; }
+
+    // Connection history settings (entries are stored in history.json)
     public int MaxHistoryEntries { get; set; } = 50;
-    
+    public HistoryTrackingMode HistoryTrackingMode { get; set; } = HistoryTrackingMode.ByAddress;
+
+    // Download dialog
+    public DownloadDialogBehavior DownloadDialogBehavior { get; set; } = DownloadDialogBehavior.CloseOnSuccess;
+
     // Screenshot consolidation
     public bool EnableScreenshotMonitoring { get; set; }
-    public string ScreenshotConsolidationPath { get; set; }
+    public string ScreenshotConsolidationPath { get; set; } = string.Empty;
+
+    // Update settings
+    public UpdateBehavior UpdateBehavior { get; set; } = UpdateBehavior.CheckAndDownload;
+    public bool AutoRestartForUpdates { get; set; } = false;
+    public int UpdateCheckIntervalValue { get; set; } = 1;
+    public UpdateIntervalUnit UpdateCheckIntervalUnit { get; set; } = UpdateIntervalUnit.Days;
+    public DateTime LastUpdateCheck { get; set; } = DateTime.MinValue;
+    public string GitHubOwner { get; set; } = "RaymondTracer";
+    public string GitHubRepo { get; set; } = "ZScape";
 }
 
 public class ManualServerEntry
@@ -645,7 +685,19 @@ public class ConnectionHistoryEntry
     public string? GameMode { get; set; }
     public string FullAddress => $"{Address}:{Port}";
 }
+
+public class ConnectionHistoryData
+{
+    public List<ConnectionHistoryEntry> Entries { get; set; } = [];
+}
+
+public class DomainSettingsData
+{
+    public Dictionary<string, DomainSettings> Domains { get; set; } = new();
+}
 ```
+
+`ConnectionHistoryData` and `DomainSettingsData` are persisted separately from `AppSettings`. `VerboseMode` and `ShowFavoritesOnly` remain in the settings model for compatibility and future wiring, even though the current Avalonia UI primarily uses `VerboseLogging` and an in-session favorites-only toggle.
 
 ### ServerBrowserService
 - Orchestrates refresh: fetch endpoints from master, add/cleanup `ServerInfo` entries, and query servers using pipelined processing with configurable concurrency.
@@ -653,7 +705,7 @@ public class ConnectionHistoryEntry
 - Uses `Channel<T>` for streaming query results to the UI as they arrive.
 - Implements retry logic per server with `ConsecutiveFailures` tracking.
 - `RefreshAsync()`: Full refresh from master server.
-- `RefreshFavoritesAsync()`: Refresh only favorite servers without master query.
+- `RefreshFavoritesAsync()`: Refresh only favorite servers without master query. The dedicated path exists today; current auto-refresh timer wiring still needs to invoke it when favorites-only mode is enabled.
 - Integrates `Ip2CountryService` to resolve countries for servers with XIP or empty country codes after querying.
 - Exposes server lists, summary counts (TotalServers, OnlineServers, TotalPlayers, TotalHumanPlayers, TotalBots) and filtering helper `GetFilteredServers(...)`.
 - Raises events: `ServerUpdated`, `RefreshStarted`, `RefreshProgress`, `RefreshCompleted`.
@@ -706,7 +758,7 @@ audrealms.org, pizza-doom.it, wads.firestick.games, doomshack.org
 
 ### Ip2CountryService
 IP geolocation service for resolving server countries from IP addresses.
-- Uses ip-api.com (free tier, no API key required).
+- Uses `http://ip-api.com` JSON and batch endpoints (free tier, no API key required) as implemented today.
 - Rate limiting: 45 requests/minute with 1.5s minimum interval between requests.
 - Response caching to avoid duplicate lookups.
 - `LookupCountryAsync(ipAddress)`: Single IP lookup, returns ISO alpha-2 code.
@@ -779,11 +831,15 @@ public class HashVerificationProgress
 ```csharp
 public class DomainSettings
 {
-    public int MaxThreads { get; set; }
-    public int InitialThreads { get; set; }
-    public int MinSegmentSizeKb { get; set; }
+    public int MaxThreads { get; set; } = 0;
+    public int MaxConcurrentDownloads { get; set; } = 0;
+    public int InitialThreads { get; set; } = 2;
+    public int MinSegmentSizeKb { get; set; } = 256;
     public bool AdaptiveLearning { get; set; } = true;
-    public DateTime LastUpdated { get; set; }
+    public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
+    public int SuccessCount { get; set; }
+    public int FailureCount { get; set; }
+    public string? Notes { get; set; }
 }
 ```
 
@@ -828,10 +884,10 @@ public static class CountryData
 Used by `ServerFilter.Matches()` to normalize server country codes before comparison with filter values.
 
 ### UI Notes
-- `DarkTheme` defines colors and provides `Apply`/`ApplyToControl` methods for consistent styling.
-- Custom renderers: `DarkMenuRenderer`, `DarkToolStripRenderer`, `DarkColorTable`.
-- ListView owner-draw support for proper dark theme rendering.
-- DataGridView styling with alternating row colors and header customization.
+- Application styling is provided by Avalonia `FluentTheme` plus `Themes/DarkTheme.axaml`.
+- `MainWindow` uses a DockPanel layout with a menu bar, toolbar, status bar, custom `ResizableListView`, details panes, and `LogPanelControl`.
+- Custom controls under `Controls/` provide resizable list columns, persistent combo box selection, numeric spinners, log rendering, and an alternate DataGrid-based server list control retained in the repository.
+- Windows title-bar dark mode is applied via `DarkModeHelper.ApplyDarkTitleBar(IntPtr)` when a platform handle is available.
 
 ---
 
@@ -953,89 +1009,116 @@ Utility for applying Windows dark mode to window title bars.
 ```csharp
 public static class DarkModeHelper
 {
-    // Detects if Windows is using dark mode
-    public static bool IsWindowsDarkModeEnabled();
-    
-    // Applies dark mode to a form's title bar
-    public static void ApplyDarkTitleBar(Form form);
-    public static void ApplyDarkTitleBar(IntPtr handle, bool enabled);
+    public static void ApplyDarkTitleBar(IntPtr handle, bool enabled = true);
 }
 ```
 
 ## Project Structure
+
+Build output directories such as `bin/` and `obj/` are omitted for brevity.
+
 ```
 ZScape/
-├── SPECIFICATION.md
-├── README.md
-├── PROPOSED_CHANGES.md
-├── ZScape.sln
-├── ZScape.csproj
+├── App.axaml
+├── App.axaml.cs
 ├── Program.cs
-├── MainForm.cs
-├── MainForm.Designer.cs
+├── app.manifest
+├── README.md
+├── SPECIFICATION.md
+├── ZScape.csproj
+├── ZScape.sln
+├── Controls/
+│   ├── ListViewColumn.cs
+│   ├── LogPanelControl.cs
+│   ├── NumericSpinner.axaml
+│   ├── NumericSpinner.axaml.cs
+│   ├── PersistentComboBox.cs
+│   ├── ResizableListView.cs
+│   └── ServerListControl.cs
+├── Models/
+│   ├── GameMode.cs
+│   ├── PlayerInfo.cs
+│   ├── PWadInfo.cs
+│   ├── ServerFilter.cs
+│   ├── ServerInfo.cs
+│   ├── TeamInfo.cs
+│   └── WadInfo.cs
 ├── Protocol/
 │   ├── HuffmanCodec.cs
-│   ├── ProtocolConstants.cs
 │   ├── MasterServerClient.cs
+│   ├── ProtocolConstants.cs
 │   └── ServerQueryClient.cs
-├── Models/
-│   ├── ServerInfo.cs
-│   ├── PlayerInfo.cs
-│   ├── TeamInfo.cs
-│   ├── PWadInfo.cs
-│   ├── WadInfo.cs
-│   ├── GameMode.cs
-│   └── ServerFilter.cs
 ├── Services/
+│   ├── DomainThreadConfig.cs
+│   ├── GameLauncher.cs
+│   ├── Ip2CountryService.cs
+│   ├── LoggingService.cs
+│   ├── NotificationService.cs
+│   ├── SaveStateProgress.cs
+│   ├── ScreenshotMonitorService.cs
 │   ├── ServerBrowserService.cs
 │   ├── SettingsService.cs
-│   ├── LoggingService.cs
+│   ├── UpdateService.cs
 │   ├── WadDownloader.cs
 │   ├── WadManager.cs
-│   ├── GameLauncher.cs
-│   ├── DomainThreadConfig.cs
-│   ├── NotificationService.cs
-│   ├── ScreenshotMonitorService.cs
-│   ├── Ip2CountryService.cs
-│   └── UpdateService.cs
-├── UI/
-│   ├── DarkTheme.cs
-│   ├── UIHelpers.cs
-│   ├── AddServerDialog.cs
-│   ├── ConnectionHistoryDialog.cs
-│   ├── FetchWadsDialog.cs
-│   ├── FirstTimeSetupDialog.cs
-│   ├── ServerFilterDialog.cs
-│   ├── TestingVersionManagerDialog.cs
-│   ├── UnifiedSettingsDialog.cs
-│   ├── UpdateProgressDialog.cs
-│   ├── WadBrowserDialog.cs
-│   └── WadDownloadDialog.cs
+├── Themes/
+│   └── DarkTheme.axaml
 ├── Utilities/
 │   ├── AppConstants.cs
+│   ├── CountryData.cs
 │   ├── DarkModeHelper.cs
 │   ├── DoomColorCodes.cs
 │   ├── FormatUtils.cs
 │   ├── JsonUtils.cs
+│   ├── PathResolver.cs
 │   └── WadExtensions.cs
-└── References/
-    └── (reference implementations)
+└── Views/
+    ├── AddServerDialog.axaml
+    ├── AddServerDialog.axaml.cs
+    ├── ConnectionHistoryDialog.axaml
+    ├── ConnectionHistoryDialog.axaml.cs
+    ├── FetchWadsDialog.axaml
+    ├── FetchWadsDialog.axaml.cs
+    ├── FirstTimeSetupDialog.axaml
+    ├── FirstTimeSetupDialog.axaml.cs
+    ├── MainWindow.axaml
+    ├── MainWindow.axaml.cs
+    ├── ServerFilterDialog.axaml
+    ├── ServerFilterDialog.axaml.cs
+    ├── TestingVersionManagerDialog.axaml
+    ├── TestingVersionManagerDialog.axaml.cs
+    ├── UnifiedSettingsDialog.axaml
+    ├── UnifiedSettingsDialog.axaml.cs
+    ├── UpdateProgressDialog.axaml
+    ├── UpdateProgressDialog.axaml.cs
+    ├── WadBrowserDialog.axaml
+    ├── WadBrowserDialog.axaml.cs
+    ├── WadDownloadDialog.axaml
+    └── WadDownloadDialog.axaml.cs
 ```
 
 ## Dependencies
 - .NET 10.0
-- System.Net.Sockets (built-in)
-- Windows Forms (built-in)
+- Avalonia 11.2.3
+- Avalonia.Desktop 11.2.3
+- Avalonia.Themes.Fluent 11.2.3
+- Avalonia.Fonts.Inter 11.2.3
+- Avalonia.Controls.DataGrid 11.2.3
+- Avalonia.Diagnostics 11.2.3 (Debug only)
 - **SharpCompress** (0.44.5) - Archive extraction (7z, rar, tar, etc.)
 
 ## Build Instructions
 ```bash
-cd ZScape
-dotnet build
-dotnet run
+dotnet build ZScape.sln -c Debug
+dotnet run --project ZScape.csproj
 ```
 
 ## Version History
+- 2.0.0-indev - Spec refreshed for the Avalonia codebase and current implementation status (2026-04-17):
+  - Replaced stale WinForms/MainForm/UI folder references with the current `App`/`MainWindow`/`Controls`/`Themes`/`Views` layout
+  - Added explicit Implemented / Partial / Planned status language
+  - Preserved incomplete intended features such as notifications, favorites-only auto-refresh, optional WAD handling, and update installation with status notes instead of deleting them
+  - Corrected settings persistence, dependencies, build instructions, `DarkModeHelper`, and UI notes to match the current repository
 - 1.0.0 - Initial release
 - 1.0.1 - Spec synchronized to repository (2026-01-30): updated protocol constants, Huffman codec behavior, model fields, services, and UI theming.
 - 1.0.2 - Spec synchronized to repository (2026-01-31): comprehensive update including:
@@ -1092,8 +1175,8 @@ dotnet run
 ---
 
 ## Notes
-- Settings are persisted to `settings.json` in the application's base directory (portable by default).
-- Use `LoggingService.Instance.VerboseMode` and `ShowHexDumps` for detailed protocol-level troubleshooting.
+- Runtime configuration is stored in `settings.json`; connection history and learned domain-thread settings are stored in `history.json` and `domain-settings.json`.
+- The current Avalonia UI applies `VerboseLogging` to `LoggingService.VerboseMode`; `ShowHexDumps` remains part of the intended diagnostics surface but still needs dedicated UI wiring.
 - Master server queries respect `MasterServerRetryCount` setting (default 3 attempts).
 - Server queries respect `ConsecutiveFailuresBeforeOffline` setting to mark servers offline.
 - WAD files are searched in priority order: executable folders > download path > configured search paths.
@@ -1101,7 +1184,8 @@ dotnet run
 - Testing builds are stored in `{ZandronumPath}/TestingVersions/{version}/` by default.
 - Country codes are normalized during filtering: alpha-3 codes (USA, DEU) convert to alpha-2 (US, DE). Unknown codes (XIP, XUN, O1, empty) normalize to "??".
 - Servers with "XIP" or empty country codes trigger automatic IP geolocation lookup via ip-api.com after querying. Failed lookups are marked as "??" to prevent retry.
-- Auto-refresh can be configured to only refresh favorite servers, skipping the master server query entirely.
+- Favorites-only auto-refresh remains intended behavior; the current timer wiring still performs a full refresh.
+- Server alert detection exists for favorite and manual servers; native desktop notification delivery is still partial and currently falls back to logging.
 - First-time setup wizard is shown automatically when `settings.json` doesn't exist; settings file is only created after completing setup.
-- Automatic updates check GitHub releases on configurable intervals (hours/days/weeks); downloads occur in background with optional auto-restart when idle.
-- For any behavioral differences, consult the corresponding class in `Protocol/`, `Services/`, or `UI/` for precise implementation details.
+- Automatic updates check GitHub releases on configurable intervals (hours/days/weeks); the current download path expects Windows `win-x64` zip assets, and install/restart wiring remains partial.
+- For precise implementation details, consult the corresponding classes in `Protocol/`, `Services/`, `Views/`, `Controls/`, and `Themes/`.
