@@ -101,6 +101,7 @@ public class GameLauncher
     /// <summary>
     /// Validates if all required WADs are available for the server.
     /// Checks exe folder first, then WAD manager paths.
+    /// Optional PWADs do not block joins and are skipped here.
     /// </summary>
     /// <param name="server">The server to check.</param>
     /// <returns>A tuple with (allFound, missingWads) where each missing WAD includes name and expected hash.</returns>
@@ -119,8 +120,8 @@ public class GameLauncher
             }
         }
         
-        // Check PWADs (include hash from server)
-        foreach (var pwad in server.PWADs)
+        // Check only required PWADs (include hash from server)
+        foreach (var pwad in server.PWADs.Where(p => !p.IsOptional))
         {
             var pwadPath = FindWadWithExeFolder(pwad.Name, exeFolder);
             if (string.IsNullOrEmpty(pwadPath))
@@ -224,8 +225,10 @@ public class GameLauncher
         var wadManager = WadManager.Instance;
         var settings = SettingsService.Instance.Settings;
         
-        // Get list of PWADs that have hashes to verify
-        var pwadsWithHashes = server.PWADs.Where(p => !string.IsNullOrEmpty(p.Hash)).ToList();
+        // Verify only required PWADs that advertise hashes.
+        var pwadsWithHashes = server.PWADs
+            .Where(p => !p.IsOptional && !string.IsNullOrEmpty(p.Hash))
+            .ToList();
         var totalFiles = pwadsWithHashes.Count;
         
         if (totalFiles == 0)

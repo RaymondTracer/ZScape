@@ -43,7 +43,6 @@ Unless noted otherwise, the feature descriptions below describe intended product
 - **Auto-refresh favorites only** is **Partial**: the setting and `ServerBrowserService.RefreshFavoritesAsync()` exist, but the current timer still invokes a full refresh.
 - **Verbose hex dumps** are **Partial**: `LoggingService.ShowHexDumps` and protocol call sites exist, but the current main-window wiring only applies verbose logging.
 - **Cross-platform update asset selection** is **Partial**: the project targets Windows, Linux, and macOS, but the current download path expects Windows `win-x64` zip releases.
-- **Optional PWAD handling during join validation** is **Partial**: optional WAD flags are parsed from the protocol, but join-time required-WAD checks still treat all PWADs as required.
 - **Testing-version WAD discovery** is **Partial**: testing executables are resolved per server, but the global WAD cache currently prioritizes the stable executable folder configured in main-window settings.
 
 ---
@@ -196,7 +195,7 @@ Server List Row Colors:
    - Automatic WAD archiving with hash suffixes
    - idgames Archive integration
    - Web search fallback (DuckDuckGo)
-    - Optional WAD metadata is parsed from server responses (`Partial`: join-time required-WAD validation still treats all PWADs as mandatory)
+    - Optional WAD metadata from server responses is honored during join-time required-WAD and hash-validation checks
 
 6. **Connection & Update Features**
    - Connection history with recent servers
