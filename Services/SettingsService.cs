@@ -449,6 +449,17 @@ public class AppSettings
     // Download Dialog
     /// <summary>Behavior of the WAD download dialog after downloads complete.</summary>
     public DownloadDialogBehavior DownloadDialogBehavior { get; set; } = DownloadDialogBehavior.CloseOnSuccess;
+
+    /// <summary>
+    /// How optional PWADs should be handled when joining a server.
+    /// </summary>
+    public OptionalPwadDownloadMode OptionalPwadDownloadMode { get; set; } = OptionalPwadDownloadMode.AskEachTime;
+
+    /// <summary>
+    /// Optional PWAD file names that should default to skipped when prompting,
+    /// and should be excluded from auto-download mode.
+    /// </summary>
+    public List<string> SkippedOptionalPwads { get; set; } = [];
     
     // Screenshot consolidation
     /// <summary>Enable automatic screenshot consolidation from testing versions.</summary>
@@ -597,4 +608,19 @@ public enum DownloadDialogBehavior
     
     /// <summary>Legacy value retained for settings compatibility; treated as CloseOnSuccess.</summary>
     AlwaysClose = 4
+}
+
+/// <summary>
+/// Defines how optional PWADs should be handled during server join.
+/// </summary>
+public enum OptionalPwadDownloadMode
+{
+    /// <summary>Ask which optional PWADs to download each time.</summary>
+    AskEachTime = 0,
+
+    /// <summary>Automatically download optional PWADs unless they are in the skipped list.</summary>
+    AlwaysDownload = 1,
+
+    /// <summary>Never download optional PWADs during server join.</summary>
+    NeverDownload = 2
 }

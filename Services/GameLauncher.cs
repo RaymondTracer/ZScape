@@ -107,6 +107,22 @@ public class GameLauncher
     /// <returns>A tuple with (allFound, missingWads) where each missing WAD includes name and expected hash.</returns>
     public (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckRequiredWads(ServerInfo server)
     {
+        return CheckPwads(server, pwad => !pwad.IsOptional);
+    }
+
+    /// <summary>
+    /// Finds optional PWADs that are not currently available.
+    /// These do not block joins, but can be offered for download.
+    /// </summary>
+    public (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckOptionalWads(ServerInfo server)
+    {
+        return CheckPwads(server, pwad => pwad.IsOptional);
+    }
+
+    private (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckPwads(
+        ServerInfo server,
+        Func<PWadInfo, bool> predicate)
+    {
         var missing = new List<(string Name, string? Hash)>();
         var exeFolder = GetExecutableFolder(server);
         
@@ -120,8 +136,7 @@ public class GameLauncher
             }
         }
         
-        // Check only required PWADs (include hash from server)
-        foreach (var pwad in server.PWADs.Where(p => !p.IsOptional))
+        foreach (var pwad in server.PWADs.Where(predicate))
         {
             var pwadPath = FindWadWithExeFolder(pwad.Name, exeFolder);
             if (string.IsNullOrEmpty(pwadPath))

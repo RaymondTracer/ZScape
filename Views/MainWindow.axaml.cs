@@ -1764,18 +1764,29 @@ public partial class MainWindow : Window
         }
 
         var pendingWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
+        var optionalCandidateWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
+        var optionalPwadMode = _settings.Settings.OptionalPwadDownloadMode;
+        var skippedOptionalPwads = GetSkippedOptionalPwadNames();
+        var downloadSelectionConfirmed = false;
         var serverWadSourceUrl = Uri.TryCreate(server.Website, UriKind.Absolute, out var serverWebsiteUri)
             ? serverWebsiteUri.ToString()
             : null;
 
-        void AddPendingWads(IEnumerable<WadInfo> wads)
+        void AddWadsToDictionary(Dictionary<string, WadInfo> target, IEnumerable<WadInfo> wads, bool isOptional)
         {
             foreach (var wad in wads)
             {
                 wad.ServerUrl ??= serverWadSourceUrl;
-                pendingWads[wad.FileName] = wad;
+                wad.IsOptional = isOptional;
+                target[wad.FileName] = wad;
             }
         }
+
+        void AddPendingWads(IEnumerable<WadInfo> wads, bool isOptional = false) =>
+            AddWadsToDictionary(pendingWads, wads, isOptional);
+
+        void AddOptionalCandidateWads(IEnumerable<WadInfo> wads) =>
+            AddWadsToDictionary(optionalCandidateWads, wads, isOptional: true);
 
         var (_, missingWads) = launcher.CheckRequiredWads(server);
         AddPendingWads(launcher.ResolveMissingWadsByHash(missingWads));
@@ -1795,30 +1806,89 @@ public partial class MainWindow : Window
         var (_, remainingMissingWads) = launcher.CheckRequiredWads(server);
         AddPendingWads(launcher.ResolveMissingWadsByHash(remainingMissingWads));
 
+        if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
+        {
+            var (_, missingOptionalWads) = launcher.CheckOptionalWads(server);
+            AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(missingOptionalWads));
+            _wadManager.RefreshCache();
+
+            var (_, remainingOptionalWads) = launcher.CheckOptionalWads(server);
+            AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(remainingOptionalWads));
+        }
+
+        if (optionalCandidateWads.Count > 0)
+        {
+            if (optionalPwadMode == OptionalPwadDownloadMode.AlwaysDownload)
+            {
+                var autoSelectedOptionalWads = optionalCandidateWads.Values
+                    .Where(wad => !skippedOptionalPwads.Contains(wad.FileName))
+                    .ToList();
+                AddPendingWads(autoSelectedOptionalWads, isOptional: true);
+            }
+            else if (optionalPwadMode == OptionalPwadDownloadMode.AskEachTime)
+            {
+                var selectionDialog = new OptionalWadSelectionDialog(
+                    pendingWads.Values.Where(wad => !wad.IsOptional).OrderBy(wad => wad.FileName).ToList(),
+                    optionalCandidateWads.Values.OrderBy(wad => wad.FileName).ToList(),
+                    skippedOptionalPwads);
+
+                var selectionAccepted = await selectionDialog.ShowDialog<bool>(this);
+                if (!selectionAccepted)
+                {
+                    _logger.Info("Server join cancelled during optional WAD selection.");
+                    return;
+                }
+
+                AddPendingWads(selectionDialog.SelectedOptionalWads, isOptional: true);
+                downloadSelectionConfirmed = true;
+
+                if (selectionDialog.RememberSkippedSelections)
+                {
+                    RememberSkippedOptionalPwads(selectionDialog);
+                }
+            }
+        }
+
         if (pendingWads.Count > 0)
         {
-            var requiredWads = pendingWads.Values.OrderBy(w => w.FileName).ToList();
-            var wadList = string.Join("\n", requiredWads.Take(10).Select(w => $"  - {w.FileName}"));
-            if (requiredWads.Count > 10)
-                wadList += $"\n  ... and {requiredWads.Count - 10} more";
+            var requiredWads = pendingWads.Values.Where(wad => !wad.IsOptional).OrderBy(wad => wad.FileName).ToList();
+            var optionalWads = pendingWads.Values.Where(wad => wad.IsOptional).OrderBy(wad => wad.FileName).ToList();
+            var hasRequiredWads = requiredWads.Count > 0;
+            var shouldDownload = true;
 
-            var shouldDownload = await ShowConfirmDialogAsync(
-                "Required WADs",
-                $"The following WAD files are missing or need the server version:\n\n{wadList}\n\nWould you like to download them?");
+            if (!downloadSelectionConfirmed)
+            {
+                if (!hasRequiredWads && optionalPwadMode == OptionalPwadDownloadMode.AlwaysDownload)
+                {
+                    _logger.Info($"Auto-downloading {optionalWads.Count} optional WAD(s) based on settings.");
+                }
+                else
+                {
+                    shouldDownload = await ShowConfirmDialogAsync(
+                        hasRequiredWads ? "Server WADs" : "Optional WADs",
+                        BuildWadDownloadPromptMessage(requiredWads, optionalWads));
+                }
+            }
 
             if (!shouldDownload)
             {
-                _logger.Info("Server join cancelled because required WAD download was declined.");
-                return;
+                if (hasRequiredWads)
+                {
+                    _logger.Info("Server join cancelled because required WAD download was declined.");
+                    return;
+                }
+
+                _logger.Info("Optional WAD download skipped.");
             }
 
             if (shouldDownload)
             {
+                var wadsToDownload = pendingWads.Values.OrderBy(wad => wad.FileName).ToList();
                 var downloader = new WadDownloader(_settings.Settings.DownloadSites.Count > 0
                     ? _settings.Settings.DownloadSites
                     : null);
 
-                var downloadDialog = new WadDownloadDialog(requiredWads, _wadManager.DownloadPath, downloader, isServerJoinContext: true);
+                var downloadDialog = new WadDownloadDialog(wadsToDownload, _wadManager.DownloadPath, downloader, isServerJoinContext: true);
 
                 await downloadDialog.ShowDialog(this);
 
@@ -2244,6 +2314,77 @@ public partial class MainWindow : Window
 
         await dialog.ShowDialog(this);
         return result;
+    }
+
+    private HashSet<string> GetSkippedOptionalPwadNames()
+    {
+        return _settings.Settings.SkippedOptionalPwads
+            .Select(name => Path.GetFileName(name) ?? string.Empty)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void RememberSkippedOptionalPwads(OptionalWadSelectionDialog dialog)
+    {
+        var skippedNames = GetSkippedOptionalPwadNames();
+        var skippedFromDialog = dialog.SkippedOptionalWadNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var wadName in dialog.OptionalWadNames)
+        {
+            if (skippedFromDialog.Contains(wadName))
+            {
+                skippedNames.Add(wadName);
+            }
+            else
+            {
+                skippedNames.Remove(wadName);
+            }
+        }
+
+        _settings.Settings.SkippedOptionalPwads = skippedNames
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _settings.Save();
+    }
+
+    private static string BuildWadDownloadPromptMessage(List<WadInfo> requiredWads, List<WadInfo> optionalWads)
+    {
+        var lines = new List<string>();
+
+        if (requiredWads.Count > 0)
+        {
+            lines.Add("Required WADs:");
+            lines.AddRange(FormatWadPromptLines(requiredWads));
+        }
+
+        if (optionalWads.Count > 0)
+        {
+            if (lines.Count > 0)
+            {
+                lines.Add(string.Empty);
+            }
+
+            lines.Add("Optional WADs:");
+            lines.AddRange(FormatWadPromptLines(optionalWads));
+        }
+
+        lines.Add(string.Empty);
+        lines.Add("Would you like to download them?");
+        return string.Join("\n", lines);
+    }
+
+    private static IEnumerable<string> FormatWadPromptLines(List<WadInfo> wads)
+    {
+        if (wads.Count == 0)
+            return [];
+
+        var lines = wads.Take(10).Select(wad => $"  - {wad.FileName}").ToList();
+        if (wads.Count > 10)
+        {
+            lines.Add($"  ... and {wads.Count - 10} more");
+        }
+
+        return lines;
     }
 
     #endregion

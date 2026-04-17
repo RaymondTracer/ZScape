@@ -29,6 +29,7 @@ public partial class UnifiedSettingsDialog : Window
     private ObservableCollection<string> _manualServers = new();
     private ObservableCollection<string> _wadPaths = new();
     private ObservableCollection<string> _downloadSites = new();
+    private ObservableCollection<string> _skippedOptionalPwads = new();
     private ObservableCollection<DomainThreadDisplay> _domainConfigs = new();
     private string _lastValidDownloadPath = string.Empty;
     private bool _updatingIntervalControls;
@@ -43,6 +44,7 @@ public partial class UnifiedSettingsDialog : Window
         
         CategoryList.SelectionChanged += CategoryList_SelectionChanged;
         WadPathsListBox.SelectionChanged += WadPathsListBox_SelectionChanged;
+        SkippedOptionalPwadsListBox.SelectionChanged += SkippedOptionalPwadsListBox_SelectionChanged;
         WadDownloadPathTextBox.TextChanged += WadDownloadPathTextBox_TextChanged;
         ZandronumPathTextBox.TextChanged += ZandronumPathTextBox_TextChanged;
         
@@ -335,10 +337,19 @@ public partial class UnifiedSettingsDialog : Window
 
         // Downloads
         PopulateDownloadBehaviorComboBox();
+        PopulateOptionalPwadModeComboBox();
         MaxConcurrentDownloadsNumeric.Value = Settings.MaxConcurrentDownloads;
         MaxConcurrentDomainsNumeric.Value = Settings.MaxConcurrentDomains;
         MaxThreadsPerFileNumeric.Value = Settings.MaxThreadsPerFile;
         DefaultMinSegmentKbNumeric.Value = Settings.DefaultMinSegmentSizeKb;
+        OptionalPwadModeComboBox.SelectedIndex = AppConstants.OptionalPwadDownloadModeLabels.GetIndex(Settings.OptionalPwadDownloadMode);
+        _skippedOptionalPwads = new ObservableCollection<string>(Settings.SkippedOptionalPwads
+            .Select(NormalizeOptionalPwadName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
+        SkippedOptionalPwadsListBox.ItemsSource = _skippedOptionalPwads;
+        UpdateSkippedOptionalPwadButtons();
 
         // Domain Threads
         LoadDomainConfigs();
@@ -373,6 +384,16 @@ public partial class UnifiedSettingsDialog : Window
             DownloadBehaviorComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
         }
         DownloadBehaviorComboBox.SelectedIndex = AppConstants.DownloadDialogBehaviorLabels.GetIndex(Settings.DownloadDialogBehavior);
+    }
+
+    private void PopulateOptionalPwadModeComboBox()
+    {
+        OptionalPwadModeComboBox.Items.Clear();
+        foreach (var option in AppConstants.OptionalPwadDownloadModeLabels.Options)
+        {
+            OptionalPwadModeComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
+        }
+        OptionalPwadModeComboBox.SelectedIndex = AppConstants.OptionalPwadDownloadModeLabels.GetIndex(Settings.OptionalPwadDownloadMode);
     }
 
     private void LoadDomainConfigs()
@@ -566,6 +587,13 @@ public partial class UnifiedSettingsDialog : Window
 
         // Downloads
         Settings.DownloadDialogBehavior = AppConstants.DownloadDialogBehaviorLabels.GetValue(DownloadBehaviorComboBox.SelectedIndex);
+        Settings.OptionalPwadDownloadMode = AppConstants.OptionalPwadDownloadModeLabels.GetValue(OptionalPwadModeComboBox.SelectedIndex);
+        Settings.SkippedOptionalPwads = _skippedOptionalPwads
+            .Select(NormalizeOptionalPwadName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         Settings.MaxConcurrentDownloads = MaxConcurrentDownloadsNumeric.Value;
         Settings.MaxConcurrentDomains = MaxConcurrentDomainsNumeric.Value;
         Settings.MaxThreadsPerFile = MaxThreadsPerFileNumeric.Value;
@@ -860,6 +888,87 @@ public partial class UnifiedSettingsDialog : Window
                 _downloadSites.Add(site);
             }
         }
+    }
+
+    private static string NormalizeOptionalPwadName(string? value)
+    {
+        var trimmed = value?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(trimmed))
+            return string.Empty;
+
+        return Path.GetFileName(trimmed);
+    }
+
+    private void UpdateSkippedOptionalPwadButtons()
+    {
+        var hasSelection = SkippedOptionalPwadsListBox.SelectedItem is string;
+        UpdateSkippedOptionalPwadButton.IsEnabled = hasSelection;
+        RemoveSkippedOptionalPwadButton.IsEnabled = hasSelection;
+    }
+
+    private void SkippedOptionalPwadsListBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (SkippedOptionalPwadsListBox.SelectedItem is string selected)
+        {
+            SkippedOptionalPwadTextBox.Text = selected;
+        }
+
+        UpdateSkippedOptionalPwadButtons();
+    }
+
+    private void AddSkippedOptionalPwad_Click(object? sender, RoutedEventArgs e)
+    {
+        var name = NormalizeOptionalPwadName(SkippedOptionalPwadTextBox.Text);
+        if (string.IsNullOrEmpty(name))
+            return;
+
+        var existing = _skippedOptionalPwads.FirstOrDefault(item => item.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            SkippedOptionalPwadsListBox.SelectedItem = existing;
+            return;
+        }
+
+        _skippedOptionalPwads.Add(name);
+        SkippedOptionalPwadTextBox.Text = string.Empty;
+        SkippedOptionalPwadsListBox.SelectedItem = name;
+    }
+
+    private void UpdateSkippedOptionalPwad_Click(object? sender, RoutedEventArgs e)
+    {
+        if (SkippedOptionalPwadsListBox.SelectedItem is not string selected)
+            return;
+
+        var updatedName = NormalizeOptionalPwadName(SkippedOptionalPwadTextBox.Text);
+        if (string.IsNullOrEmpty(updatedName))
+            return;
+
+        var duplicate = _skippedOptionalPwads.FirstOrDefault(item =>
+            !item.Equals(selected, StringComparison.OrdinalIgnoreCase) &&
+            item.Equals(updatedName, StringComparison.OrdinalIgnoreCase));
+        if (duplicate != null)
+        {
+            SkippedOptionalPwadsListBox.SelectedItem = duplicate;
+            return;
+        }
+
+        var index = _skippedOptionalPwads.IndexOf(selected);
+        if (index < 0)
+            return;
+
+        _skippedOptionalPwads[index] = updatedName;
+        SkippedOptionalPwadsListBox.SelectedItem = updatedName;
+    }
+
+    private void RemoveSkippedOptionalPwad_Click(object? sender, RoutedEventArgs e)
+    {
+        if (SkippedOptionalPwadsListBox.SelectedItem is not string selected)
+            return;
+
+        _skippedOptionalPwads.Remove(selected);
+        SkippedOptionalPwadsListBox.SelectedIndex = -1;
+        SkippedOptionalPwadTextBox.Text = string.Empty;
+        UpdateSkippedOptionalPwadButtons();
     }
 
     private void RemoveDownloadSite_Click(object? sender, RoutedEventArgs e)

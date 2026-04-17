@@ -215,4 +215,28 @@ public static class AppConstants
                 ? index
                 : Array.FindIndex(Options, o => o.Value == Services.DownloadDialogBehavior.CloseOnSuccess);
     }
+
+    /// <summary>
+    /// Display labels for OptionalPwadDownloadMode enum values.
+    /// </summary>
+    public static class OptionalPwadDownloadModeLabels
+    {
+        public static readonly (Services.OptionalPwadDownloadMode Value, string Label)[] Options =
+        [
+            (Services.OptionalPwadDownloadMode.AlwaysDownload, "Always download optional PWADs"),
+            (Services.OptionalPwadDownloadMode.AskEachTime, "Ask each time"),
+            (Services.OptionalPwadDownloadMode.NeverDownload, "Never download optional PWADs")
+        ];
+
+        public static string GetLabel(Services.OptionalPwadDownloadMode mode) =>
+            Options.FirstOrDefault(o => o.Value == mode).Label ?? GetLabel(Services.OptionalPwadDownloadMode.AskEachTime);
+
+        public static Services.OptionalPwadDownloadMode GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Services.OptionalPwadDownloadMode.AskEachTime;
+
+        public static int GetIndex(Services.OptionalPwadDownloadMode mode) =>
+            Array.FindIndex(Options, o => o.Value == mode) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Services.OptionalPwadDownloadMode.AskEachTime);
+    }
 }
