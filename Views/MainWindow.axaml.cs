@@ -99,6 +99,7 @@ public partial class MainWindow : Window
         }
 
         SubscribeToEvents();
+        _notificationService.AttachWindow(this);
 
         // Apply dark title bar on Windows
         if (OperatingSystem.IsWindows())
@@ -392,13 +393,8 @@ public partial class MainWindow : Window
         _countdownTimer.Tick += CountdownTimer_Tick;
 
         // Alert timer for background server monitoring
-        _alertTimer.Interval = TimeSpan.FromSeconds(_settings.Settings.AlertCheckIntervalSeconds > 0
-            ? _settings.Settings.AlertCheckIntervalSeconds : 60);
         _alertTimer.Tick += AlertTimer_Tick;
-        if (_settings.Settings.EnableFavoriteServerAlerts || _settings.Settings.EnableManualServerAlerts)
-        {
-            _alertTimer.Start();
-        }
+        UpdateAlertTimerSettings();
 
         // Alert notification click handler
         _notificationService.AlertClicked += NotificationService_AlertClicked;
@@ -682,6 +678,8 @@ public partial class MainWindow : Window
 
         // Auto-refresh timers
         UpdateAutoRefreshTimers();
+
+        UpdateAlertTimerSettings();
 
         // WAD settings
         var searchPaths = settings.WadSearchPaths ?? [];
@@ -2947,6 +2945,20 @@ public partial class MainWindow : Window
         await CheckServersForAlertsAsync();
     }
 
+    private void UpdateAlertTimerSettings()
+    {
+        var settings = _settings.Settings;
+        _alertTimer.Stop();
+        _alertTimer.Interval = TimeSpan.FromSeconds(settings.AlertCheckIntervalSeconds > 0
+            ? settings.AlertCheckIntervalSeconds
+            : 60);
+
+        if (settings.EnableFavoriteServerAlerts || settings.EnableManualServerAlerts)
+        {
+            _alertTimer.Start();
+        }
+    }
+
     private async Task CheckServersForAlertsAsync()
     {
         var settings = _settings.Settings;
@@ -3017,16 +3029,53 @@ public partial class MainWindow : Window
     {
         Dispatcher.UIThread.Post(() =>
         {
-            Activate();
+            FocusMainWindow();
 
-            var address = $"{e.Server.Address}:{e.Server.Port}";
-            var vm = Servers.FirstOrDefault(s => s.AddressDisplay == address);
-            if (vm != null)
+            if (e.Action == ServerAlertAction.FocusWindow)
             {
-                // Select via built-in highlighting (also fires SelectionChanged)
-                ServerListView.SelectItem(vm);
+                return;
+            }
+
+            if (!TrySelectServerFromAlert(e, out var server))
+            {
+                return;
+            }
+
+            if (e.Action == ServerAlertAction.Connect)
+            {
+                _ = LaunchServerAsync(server);
             }
         });
+    }
+
+    private void FocusMainWindow()
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+    }
+
+    private bool TrySelectServerFromAlert(ServerAlertEventArgs alertArgs, out ServerInfo server)
+    {
+        server = alertArgs.Server ?? _browserService.Servers.FirstOrDefault(currentServer =>
+            ServerRuleUtility.GetServerAddress(currentServer) == alertArgs.ServerAddress)!;
+
+        if (server == null)
+        {
+            return false;
+        }
+
+        var address = ServerRuleUtility.GetServerAddress(server);
+        var vm = Servers.FirstOrDefault(item => item.AddressDisplay == address);
+        if (vm != null)
+        {
+            ServerListView.SelectItem(vm);
+        }
+
+        return true;
     }
 
     #endregion

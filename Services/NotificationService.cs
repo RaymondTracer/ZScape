@@ -1,28 +1,43 @@
+using Avalonia.Controls;
+using Avalonia.Threading;
+#if WINDOWS
+using Microsoft.Toolkit.Uwp.Notifications;
+#endif
 using ZScape.Models;
+using ZScape.Utilities;
+using ZScape.Views;
 
 namespace ZScape.Services;
 
 /// <summary>
-/// Handles desktop notifications for server alerts.
-/// Cross-platform stub - actual notifications can be implemented per-platform later.
+/// Handles server alert notifications, preferring native OS notifications when available.
 /// </summary>
 public class NotificationService : IDisposable
 {
     private static readonly Lazy<NotificationService> _instance = new(() => new NotificationService());
     public static NotificationService Instance => _instance.Value;
-    
+
+    private readonly Dictionary<string, (ServerInfo Server, ServerAlertType Type)> _knownServers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<ServerAlertNotificationWindow> _customWindows = [];
+    private WeakReference<Window>? _ownerWindow;
+    private bool _nativeActivationSubscribed;
     private bool _disposed;
-    
+
     /// <summary>
-    /// Event raised when user clicks on a notification.
+    /// Event raised when user activates an alert action.
     /// </summary>
     public event EventHandler<ServerAlertEventArgs>? AlertClicked;
-    
+
     private NotificationService()
     {
-        // Cross-platform notification initialization can be added here
+        TrySubscribeNativeActivation();
     }
-    
+
+    public void AttachWindow(Window owner)
+    {
+        _ownerWindow = new WeakReference<Window>(owner);
+    }
+
     /// <summary>
     /// Shows a notification for a server coming online with players.
     /// </summary>
@@ -32,14 +47,15 @@ public class NotificationService : IDisposable
     {
         if (_disposed)
             return;
-        
-        var typeText = alertType == ServerAlertType.Favorite ? "Favorite" : "Manual";
-        
-        // TODO: Implement cross-platform notifications
-        // For now, just log the alert
-        LoggingService.Instance.Info($"Alert: {typeText} server '{server.Name}' is online with {server.CurrentPlayers} players");
+
+        RegisterKnownServer(server, alertType);
+
+        if (!TryShowNativeServerAlert(server, alertType))
+        {
+            ShowCustomServerAlert(server, alertType);
+        }
     }
-    
+
     /// <summary>
     /// Shows a batch notification when multiple servers come online.
     /// </summary>
@@ -53,18 +69,333 @@ public class NotificationService : IDisposable
             ShowServerAlert(servers[0].Server, servers[0].Type);
             return;
         }
-        
-        // TODO: Implement cross-platform notifications
-        LoggingService.Instance.Info($"Alert: {servers.Count} servers came online");
+
+        foreach (var (server, type) in servers)
+        {
+            RegisterKnownServer(server, type);
+        }
+
+        if (!TryShowNativeMultipleServersAlert(servers))
+        {
+            ShowCustomMultipleServersAlert(servers);
+        }
     }
-    
+
     public void Dispose()
     {
         if (!_disposed)
         {
             _disposed = true;
+
+            if (_nativeActivationSubscribed)
+            {
+                _nativeActivationSubscribed = false;
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                foreach (var window in _customWindows.ToList())
+                {
+                    window.Close();
+                }
+                _customWindows.Clear();
+            });
         }
         GC.SuppressFinalize(this);
+    }
+
+    private void TrySubscribeNativeActivation()
+    {
+#if WINDOWS
+        if (_nativeActivationSubscribed || !OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            ToastNotificationManagerCompat.OnActivated += toastArgs => HandleNativeActivation(toastArgs.Argument);
+            _nativeActivationSubscribed = true;
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Instance.Warning($"Native notification activation is unavailable: {ex.Message}");
+        }
+#endif
+    }
+
+#if WINDOWS
+    private void HandleNativeActivation(string argument)
+    {
+        try
+        {
+            var args = ToastArguments.Parse(argument);
+            if (!TryGetArgument(args, "action", out var actionValue) || !Enum.TryParse(actionValue, true, out ServerAlertAction action))
+            {
+                action = ServerAlertAction.FocusWindow;
+            }
+
+            TryGetArgument(args, "serverAddress", out var serverAddress);
+            ServerInfo? server = null;
+            ServerAlertType? alertType = null;
+
+            if (!string.IsNullOrEmpty(serverAddress) && _knownServers.TryGetValue(serverAddress, out var knownServer))
+            {
+                server = knownServer.Server;
+                alertType = knownServer.Type;
+            }
+
+            if (!alertType.HasValue && TryGetArgument(args, "alertType", out var alertTypeValue) && Enum.TryParse<ServerAlertType>(alertTypeValue, true, out var parsedAlertType))
+            {
+                alertType = parsedAlertType;
+            }
+
+            AlertClicked?.Invoke(this, new ServerAlertEventArgs(server, alertType, action, serverAddress));
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Instance.Exception("Failed to handle native notification activation", ex);
+        }
+    }
+
+    private static bool TryGetArgument(ToastArguments args, string key, out string value)
+    {
+        try
+        {
+            value = args[key];
+            return !string.IsNullOrWhiteSpace(value);
+        }
+        catch
+        {
+            value = string.Empty;
+            return false;
+        }
+    }
+#endif
+
+    private bool TryShowNativeServerAlert(ServerInfo server, ServerAlertType alertType)
+    {
+#if WINDOWS
+        if (_disposed || !OperatingSystem.IsWindows() || SettingsService.Instance.Settings.AlertNotificationMode != NotificationDisplayMode.Native)
+        {
+            return false;
+        }
+
+        try
+        {
+            var address = ServerRuleUtility.GetServerAddress(server);
+            var title = alertType == ServerAlertType.Favorite ? "Favorite server online" : "Manual server online";
+
+            new ToastContentBuilder()
+                .AddArgument("serverAddress", address)
+                .AddArgument("alertType", alertType.ToString())
+                .AddArgument("action", ServerAlertAction.ShowServer.ToString())
+                .AddText(title)
+                .AddText(server.Name)
+                .AddText($"{server.CurrentPlayers}/{server.MaxClients} players on {server.Map} ({server.GameMode.Name})")
+                .AddButton(new ToastButton()
+                    .SetContent("Connect")
+                    .AddArgument("action", ServerAlertAction.Connect.ToString()))
+                .AddButton(new ToastButton()
+                    .SetContent("Show Server")
+                    .AddArgument("action", ServerAlertAction.ShowServer.ToString()))
+                .Show(toast =>
+                {
+                    toast.Tag = address;
+                    toast.Group = "server-alerts";
+                    toast.ExpirationTime = DateTime.Now.AddMinutes(10);
+                });
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Instance.Warning($"Native single-server notification failed, using custom fallback: {ex.Message}");
+            return false;
+        }
+#else
+        return false;
+#endif
+    }
+
+    private bool TryShowNativeMultipleServersAlert(IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers)
+    {
+#if WINDOWS
+        if (_disposed || !OperatingSystem.IsWindows() || SettingsService.Instance.Settings.AlertNotificationMode != NotificationDisplayMode.Native)
+        {
+            return false;
+        }
+
+        try
+        {
+            new ToastContentBuilder()
+                .AddArgument("action", ServerAlertAction.FocusWindow.ToString())
+                .AddText("Servers online")
+                .AddText($"{servers.Count} favorite or manual servers are online")
+                .AddText(BuildServerSummary(servers.Select(entry => entry.Server)))
+                .AddButton(new ToastButton()
+                    .SetContent("Show Window")
+                    .AddArgument("action", ServerAlertAction.FocusWindow.ToString()))
+                .Show(toast =>
+                {
+                    toast.Group = "server-alerts";
+                    toast.ExpirationTime = DateTime.Now.AddMinutes(10);
+                });
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Instance.Warning($"Native multi-server notification failed, using custom fallback: {ex.Message}");
+            return false;
+        }
+#else
+        return false;
+#endif
+    }
+
+    private void ShowCustomServerAlert(ServerInfo server, ServerAlertType alertType)
+    {
+        var title = alertType == ServerAlertType.Favorite ? "Favorite server online" : "Manual server online";
+        var detail = $"{server.CurrentPlayers}/{server.MaxClients} players on {server.Map} ({server.GameMode.Name})";
+
+        ShowCustomNotification(
+            title,
+            server.Name,
+            detail,
+            [
+                new AlertActionDefinition("Connect", ServerAlertAction.Connect, IsPrimary: true),
+                new AlertActionDefinition("Show Server", ServerAlertAction.ShowServer, IsPrimary: false)
+            ],
+            server,
+            alertType);
+    }
+
+    private void ShowCustomMultipleServersAlert(IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers)
+    {
+        ShowCustomNotification(
+            "Servers online",
+            $"{servers.Count} favorite or manual servers are online",
+            BuildServerSummary(servers.Select(entry => entry.Server)),
+            [
+                new AlertActionDefinition("Show Window", ServerAlertAction.FocusWindow, IsPrimary: true)
+            ],
+            server: null,
+            alertType: null);
+    }
+
+    private void ShowCustomNotification(
+        string title,
+        string message,
+        string detail,
+        IReadOnlyList<AlertActionDefinition> actions,
+        ServerInfo? server,
+        ServerAlertType? alertType)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            var notificationWindow = new ServerAlertNotificationWindow(title, message, detail, actions);
+            notificationWindow.ActionInvoked += (_, action) =>
+            {
+                AlertClicked?.Invoke(this, new ServerAlertEventArgs(server, alertType, action, server is null ? null : ServerRuleUtility.GetServerAddress(server)));
+            };
+            notificationWindow.Closed += (_, _) =>
+            {
+                _customWindows.Remove(notificationWindow);
+                PositionCustomWindows();
+            };
+
+            _customWindows.Add(notificationWindow);
+
+            if (TryGetOwnerWindow(out var ownerWindow) && ownerWindow != null)
+            {
+                notificationWindow.Show(ownerWindow);
+            }
+            else
+            {
+                notificationWindow.Show();
+            }
+
+            PositionCustomWindows();
+        });
+    }
+
+    private void PositionCustomWindows()
+    {
+        if (_customWindows.Count == 0)
+        {
+            return;
+        }
+
+        Avalonia.PixelRect? workArea = null;
+        if (TryGetOwnerWindow(out var ownerWindow) && ownerWindow != null)
+        {
+            workArea = ownerWindow.Screens.ScreenFromVisual(ownerWindow)?.WorkingArea;
+            if (workArea == null)
+            {
+                workArea = ownerWindow.Screens.Primary?.WorkingArea;
+            }
+        }
+
+        var bounds = workArea ?? new Avalonia.PixelRect(0, 0, 1920, 1080);
+        var right = bounds.X + bounds.Width - 16;
+        var top = bounds.Y + 16;
+
+        for (var index = 0; index < _customWindows.Count; index++)
+        {
+            var window = _customWindows[index];
+            var width = (int)(window.Width > 0 ? window.Width : Math.Max(window.Bounds.Width, 420));
+            var height = (int)(window.Height > 0 ? window.Height : Math.Max(window.Bounds.Height, 170));
+            window.Position = new Avalonia.PixelPoint(right - width, top + (index * (height + 12)));
+        }
+    }
+
+    private bool TryGetOwnerWindow(out Window? ownerWindow)
+    {
+        if (_ownerWindow != null && _ownerWindow.TryGetTarget(out ownerWindow))
+        {
+            return true;
+        }
+
+        ownerWindow = null;
+        return false;
+    }
+
+    private void RegisterKnownServer(ServerInfo server, ServerAlertType alertType)
+    {
+        _knownServers[ServerRuleUtility.GetServerAddress(server)] = (server, alertType);
+    }
+
+    private static string BuildServerSummary(IEnumerable<ServerInfo> servers)
+    {
+        var names = servers
+            .Select(server => server.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToList();
+
+        if (names.Count == 0)
+        {
+            return "Open ZScape to review the servers.";
+        }
+
+        var summary = string.Join(", ", names);
+        var remaining = servers
+            .Select(server => server.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count() - names.Count;
+
+        return remaining > 0 ? $"{summary}, and {remaining} more" : summary;
     }
 }
 
@@ -78,16 +409,41 @@ public enum ServerAlertType
 }
 
 /// <summary>
+/// Preferred presentation mode for server alerts.
+/// </summary>
+public enum NotificationDisplayMode
+{
+    Native,
+    Custom
+}
+
+/// <summary>
+/// Action invoked from a server alert notification.
+/// </summary>
+public enum ServerAlertAction
+{
+    Connect,
+    ShowServer,
+    FocusWindow
+}
+
+/// <summary>
 /// Event arguments for server alerts.
 /// </summary>
 public class ServerAlertEventArgs : EventArgs
 {
-    public ServerInfo Server { get; }
-    public ServerAlertType AlertType { get; }
-    
-    public ServerAlertEventArgs(ServerInfo server, ServerAlertType alertType)
+    public ServerInfo? Server { get; }
+    public ServerAlertType? AlertType { get; }
+    public ServerAlertAction Action { get; }
+    public string? ServerAddress { get; }
+
+    public ServerAlertEventArgs(ServerInfo? server, ServerAlertType? alertType, ServerAlertAction action, string? serverAddress)
     {
         Server = server;
         AlertType = alertType;
+        Action = action;
+        ServerAddress = serverAddress;
     }
 }
+
+internal sealed record AlertActionDefinition(string Label, ServerAlertAction Action, bool IsPrimary);

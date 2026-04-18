@@ -173,6 +173,12 @@
                                     <TextBlock Text="Server Alerts" FontWeight="Bold"/>
                                     <CheckBox x:Name="EnableFavoriteAlertsCheckBox" Content="Alert when favorite servers come online with players"/>
                                     <CheckBox x:Name="EnableManualAlertsCheckBox" Content="Alert when manually added servers come online with players"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="Notification style:" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="AlertNotificationModeComboBox" Width="300" HorizontalAlignment="Left"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Native uses OS notification services when available and falls back to the custom popup if native delivery is unavailable."
+                                               Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
                                     <CheckBox x:Name="ShowFavoritesColumnCheckBox" Content="Show favorites column in server list"/>
                                     <StackPanel Orientation="Horizontal" Spacing="10">
                                         <TextBlock Text="Minimum players:" VerticalAlignment="Center"/>

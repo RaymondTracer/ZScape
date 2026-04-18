@@ -1,6 +1,6 @@
 # ZScape Codebase Audit
 
-Date: 2026-04-17
+Date: 2026-04-18
 
 ## Scope
 
@@ -20,24 +20,13 @@ This audit covered the full workspace for:
 
 ### Build Warnings
 
-1. `Controls/ResizableListView.cs(662,36)` `CS8619` nullability mismatch
-2. `Services/NotificationService.cs(19,54)` `CS0067` event `AlertClicked` is never used
+1. `ZScape.csproj` `NU1903` known vulnerability in transitive package `Tmds.DBus.Protocol` 0.20.0
+2. `Controls/ResizableListView.cs(662,36)` `CS8619` nullability mismatch
 3. `Views/WadDownloadDialog.axaml.cs(451,51)` `CS0067` event `LogEntry.PropertyChanged` is never used
 
 ## High-Confidence Findings
 
-### 1. Favorite/manual server alerts are still a stub
-
-Severity: Medium
-
-Alert detection exists and the main window schedules background alert checks, but `NotificationService` currently only logs messages. Native desktop notifications are not implemented, and the dead `AlertClicked` event confirms the missing backend.
-
-Relevant files:
-
-- `Views/MainWindow.axaml.cs`
-- `Services/NotificationService.cs`
-
-### 2. Hexdump diagnostics are only partially wired
+### 1. Hexdump diagnostics are only partially wired
 
 Severity: Medium
 
@@ -51,7 +40,7 @@ Relevant files:
 - `Protocol/MasterServerClient.cs`
 - `Protocol/ServerQueryClient.cs`
 
-### 3. Updater asset selection is Windows-specific despite multi-runtime targeting
+### 2. Updater asset selection is Windows-specific despite multi-runtime targeting
 
 Severity: Medium
 
@@ -62,7 +51,7 @@ Relevant files:
 - `ZScape.csproj`
 - `Services/UpdateService.cs`
 
-### 4. IP geolocation currently uses HTTP endpoints
+### 3. IP geolocation currently uses HTTP endpoints
 
 Severity: Medium
 
@@ -74,7 +63,7 @@ Relevant files:
 
 ## Overlooked or Dead Code
 
-### 5. `AppSettings.ShowFavoritesOnly` is currently unused
+### 4. `AppSettings.ShowFavoritesOnly` is currently unused
 
 Severity: Low
 
@@ -85,7 +74,7 @@ Relevant files:
 - `Services/SettingsService.cs`
 - `Views/MainWindow.axaml.cs`
 
-### 6. `AppSettings.VerboseMode` appears to be legacy state
+### 5. `AppSettings.VerboseMode` appears to be legacy state
 
 Severity: Low
 
@@ -98,7 +87,7 @@ Relevant files:
 
 ## Suspicious Areas Requiring Runtime Validation
 
-### 7. Master server packet parsing looks suspicious
+### 6. Master server packet parsing looks suspicious
 
 Confidence: Medium
 
@@ -112,5 +101,5 @@ Relevant files:
 
 ## Recommended Fix Order
 
-1. Finish notification delivery or explicitly degrade the feature in UI/docs.
+1. Wire `AppSettings.ShowHexDumps` into `LoggingService.ShowHexDumps`, or remove the dead setting surface.
 2. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.

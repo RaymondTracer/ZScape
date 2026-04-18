@@ -241,6 +241,29 @@ public static class AppConstants
     }
 
     /// <summary>
+    /// Display labels for NotificationDisplayMode enum values.
+    /// </summary>
+    public static class NotificationDisplayModeLabels
+    {
+        public static readonly (Services.NotificationDisplayMode Value, string Label)[] Options =
+        [
+            (Services.NotificationDisplayMode.Native, "Native notifications (fall back to custom popup)"),
+            (Services.NotificationDisplayMode.Custom, "Custom in-app popup notifications")
+        ];
+
+        public static string GetLabel(Services.NotificationDisplayMode mode) =>
+            Options.FirstOrDefault(o => o.Value == mode).Label ?? GetLabel(Services.NotificationDisplayMode.Native);
+
+        public static Services.NotificationDisplayMode GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Services.NotificationDisplayMode.Native;
+
+        public static int GetIndex(Services.NotificationDisplayMode mode) =>
+            Array.FindIndex(Options, o => o.Value == mode) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Services.NotificationDisplayMode.Native);
+    }
+
+    /// <summary>
     /// Display labels for TextMatchMode enum values.
     /// </summary>
     public static class TextMatchModeLabels

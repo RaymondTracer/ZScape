@@ -30,7 +30,7 @@ Status language used in this document:
 - **WadDownloader**: Multi-threaded WAD downloading with parallel URL discovery, idgames Archive integration, and web search fallback.
 - **GameLauncher**: Handles launching Zandronum with proper arguments, WAD hash verification, and testing build downloads.
 - **DomainThreadConfig**: Manages domain-specific thread settings for optimized parallel downloads with adaptive learning.
-- **NotificationService**: Server alert abstraction for native desktop notifications; the current backend is partial and currently logs alerts instead of showing native notifications.
+- **NotificationService**: Server alert abstraction with user-selectable native Windows toast notifications and a custom in-app popup fallback, including connect, show-server, and focus-window activation paths.
 - **ScreenshotMonitorService**: Consolidates screenshots from testing versions to a central location.
 - **Ip2CountryService**: IP-to-country geolocation service using ip-api.com with caching, rate limiting, and batch lookup support.
 - **UpdateService**: Automatic updates from GitHub releases with configurable check intervals, background downloading, saved-state restart support, and optional auto-restart; cross-platform asset handling remains partial.
@@ -39,7 +39,6 @@ Status language used in this document:
 ## Implementation Status
 
 Unless noted otherwise, the feature descriptions below describe intended product behavior. Known current gaps worth keeping in the specification:
-- **Native desktop notifications** are **Partial**: server alert detection exists, but `NotificationService` currently logs alerts instead of raising native notifications.
 - **Verbose hex dumps** are **Partial**: `LoggingService.ShowHexDumps` and protocol call sites exist, but the current main-window wiring only applies verbose logging.
 - **Cross-platform update asset selection** is **Partial**: the project targets Windows, Linux, and macOS, but the current download path expects Windows `win-x64` zip releases.
 
@@ -178,7 +177,7 @@ Server List Row Colors:
 4. **Settings**
    - Unified settings dialog
     - Separate full and favorites auto-refresh intervals, with an option for favorites refresh to stay synced to the full refresh timer
-    - Favorite address list, favorite name rules, hidden server rules, and alert settings
+    - Favorite address list, favorite name rules, hidden server rules, alert settings, and alert notification style selection (native or custom)
    - Query concurrency and retry settings
     - WAD search paths, download folder, and download sites
     - Download concurrency, per-domain thread settings, download dialog behavior, and optional PWAD download policy with skipped-name list
@@ -198,7 +197,7 @@ Server List Row Colors:
 
 6. **Connection & Update Features**
    - Connection history with recent servers
-    - Server alerts when favorites or manual servers come online (`Partial`: alert detection exists; current notification backend logs instead of showing native desktop notifications)
+    - Server alerts when favorites or manual servers come online, with user-selectable native Windows toasts or custom popup notifications; single-server alerts provide `Connect` and `Show Server` actions, while multi-server alerts provide a `Show Window` focus action
    - Testing version auto-download and management
     - Automatic update checking, save-state persistence, and installation/restart flow (`Partial`: current asset download/install packaging is still Windows-oriented despite multi-runtime targeting)
 
@@ -214,6 +213,7 @@ Server List Row Colors:
 - **FetchWadsDialog**: Download missing WADs interface
 - **WadBrowserDialog**: Explore and manage local WAD files
 - **WadDownloadDialog**: Multi-threaded download progress display with configurable server-join auto-close behavior
+- **ServerAlertNotificationWindow**: Custom popup fallback for alert delivery when native notifications are disabled or unavailable
 - **TestingVersionManagerDialog**: Manage installed testing builds
 
 ## Data Models
@@ -810,16 +810,31 @@ public class LogEntry : EventArgs
 
 ### NotificationService Types
 ```csharp
+public enum NotificationDisplayMode
+{
+    Native,
+    Custom
+}
+
 public enum ServerAlertType
 {
     Favorite,
     Manual
 }
 
+public enum ServerAlertAction
+{
+    Connect,
+    ShowServer,
+    FocusWindow
+}
+
 public class ServerAlertEventArgs : EventArgs
 {
-    public ServerInfo Server { get; }
-    public ServerAlertType AlertType { get; }
+    public ServerInfo? Server { get; }
+    public string? ServerAddress { get; }
+    public ServerAlertType? AlertType { get; }
+    public ServerAlertAction Action { get; }
 }
 ```
 

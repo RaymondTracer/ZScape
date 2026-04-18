@@ -355,6 +355,7 @@ public partial class UnifiedSettingsDialog : Window
         // Downloads
         PopulateDownloadBehaviorComboBox();
         PopulateOptionalPwadModeComboBox();
+        PopulateAlertNotificationModeComboBox();
         MaxConcurrentDownloadsNumeric.Value = Settings.MaxConcurrentDownloads;
         MaxConcurrentDomainsNumeric.Value = Settings.MaxConcurrentDomains;
         MaxThreadsPerFileNumeric.Value = Settings.MaxThreadsPerFile;
@@ -410,6 +411,16 @@ public partial class UnifiedSettingsDialog : Window
             OptionalPwadModeComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
         }
         OptionalPwadModeComboBox.SelectedIndex = AppConstants.OptionalPwadDownloadModeLabels.GetIndex(Settings.OptionalPwadDownloadMode);
+    }
+
+    private void PopulateAlertNotificationModeComboBox()
+    {
+        AlertNotificationModeComboBox.Items.Clear();
+        foreach (var option in AppConstants.NotificationDisplayModeLabels.Options)
+        {
+            AlertNotificationModeComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
+        }
+        AlertNotificationModeComboBox.SelectedIndex = AppConstants.NotificationDisplayModeLabels.GetIndex(Settings.AlertNotificationMode);
     }
 
     private void LoadDomainConfigs()
@@ -657,6 +668,7 @@ public partial class UnifiedSettingsDialog : Window
         }).ToList();
         Settings.EnableFavoriteServerAlerts = EnableFavoriteAlertsCheckBox.IsChecked ?? false;
         Settings.EnableManualServerAlerts = EnableManualAlertsCheckBox.IsChecked ?? false;
+        Settings.AlertNotificationMode = AppConstants.NotificationDisplayModeLabels.GetValue(AlertNotificationModeComboBox.SelectedIndex);
         Settings.ShowFavoritesColumn = ShowFavoritesColumnCheckBox.IsChecked ?? false;
         Settings.AlertMinPlayers = AlertMinPlayersNumeric.Value;
         Settings.AlertCheckIntervalSeconds = AlertIntervalNumeric.Value;

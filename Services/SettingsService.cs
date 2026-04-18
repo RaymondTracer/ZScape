@@ -489,6 +489,9 @@ public class AppSettings
     
     /// <summary>Minimum number of players to trigger an alert (0 = any players).</summary>
     public int AlertMinPlayers { get; set; } = 1;
+
+    /// <summary>Preferred notification presentation. Native uses OS notifications when available, then falls back to custom popups.</summary>
+    public NotificationDisplayMode AlertNotificationMode { get; set; } = NotificationDisplayMode.Native;
     
     /// <summary>Interval in seconds between alert checks when window is not focused.</summary>
     public int AlertCheckIntervalSeconds { get; set; } = 60;
