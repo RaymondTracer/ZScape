@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -2506,40 +2507,59 @@ public partial class MainWindow : Window
     private async Task<bool> ShowConfirmDialogAsync(string title, string message)
     {
         var result = false;
+        var messageLineCount = message.Split('\n').Length;
+        var isLargeMessage = messageLineCount > 4 || message.Length > 160;
+
+        var contentGrid = new Grid
+        {
+            Margin = new Thickness(20),
+            RowDefinitions = new RowDefinitions("*,Auto")
+        };
+
+        var messageBlock = new TextBlock
+        {
+            Text = message,
+            TextWrapping = TextWrapping.WrapWithOverflow
+        };
+
+        var messageScrollViewer = new ScrollViewer
+        {
+            Content = messageBlock,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = isLargeMessage ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled
+        };
+        Grid.SetRow(messageScrollViewer, 0);
+        contentGrid.Children.Add(messageScrollViewer);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Spacing = 10,
+            Margin = new Thickness(0, 15, 0, 0),
+            Children =
+            {
+                new Button { Content = "Yes", Width = 80 },
+                new Button { Content = "No", Width = 80 }
+            }
+        };
+        Grid.SetRow(buttons, 1);
+        contentGrid.Children.Add(buttons);
+
         var dialog = new Window
         {
             Title = title,
-            Width = 400,
-            Height = 150,
+            Width = isLargeMessage ? 620 : 400,
+            Height = isLargeMessage ? Math.Min(520, 170 + (messageLineCount * 22)) : 170,
+            MinWidth = 400,
+            MinHeight = 170,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            CanResize = false,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 15,
-                Children =
-                {
-                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    new StackPanel
-                    {
-                        Orientation = Avalonia.Layout.Orientation.Horizontal,
-                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                        Spacing = 10,
-                        Children =
-                        {
-                            new Button { Content = "Yes", Width = 80 },
-                            new Button { Content = "No", Width = 80 }
-                        }
-                    }
-                }
-            }
+            CanResize = isLargeMessage,
+            Content = contentGrid
         };
 
-        if (dialog.Content is StackPanel sp && sp.Children.LastOrDefault() is StackPanel buttons)
-        {
-            if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { result = true; dialog.Close(); };
-            if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
-        }
+        if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { result = true; dialog.Close(); };
+        if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
 
         await dialog.ShowDialog(this);
         return result;
