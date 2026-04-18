@@ -26,18 +26,7 @@ This audit covered the full workspace for:
 
 ## High-Confidence Findings
 
-### 1. Updater asset selection is Windows-specific despite multi-runtime targeting
-
-Severity: Medium
-
-The project declares `win-x64`, `linux-x64`, and `osx-x64` runtime identifiers, but `UpdateService.DownloadUpdateAsync()` only looks for a Windows x64 zip asset. Non-Windows builds cannot currently use the automatic download path successfully.
-
-Relevant files:
-
-- `ZScape.csproj`
-- `Services/UpdateService.cs`
-
-### 2. IP geolocation currently uses HTTP endpoints
+### 1. IP geolocation currently uses HTTP endpoints
 
 Severity: Medium
 
@@ -49,7 +38,7 @@ Relevant files:
 
 ## Overlooked or Dead Code
 
-### 3. `AppSettings.ShowFavoritesOnly` is currently unused
+### 2. `AppSettings.ShowFavoritesOnly` is currently unused
 
 Severity: Low
 
@@ -60,7 +49,7 @@ Relevant files:
 - `Services/SettingsService.cs`
 - `Views/MainWindow.axaml.cs`
 
-### 4. `AppSettings.VerboseMode` appears to be legacy state
+### 3. `AppSettings.VerboseMode` appears to be legacy state
 
 Severity: Low
 
@@ -73,7 +62,7 @@ Relevant files:
 
 ## Suspicious Areas Requiring Runtime Validation
 
-### 5. Master server packet parsing looks suspicious
+### 4. Master server packet parsing looks suspicious
 
 Confidence: Medium
 
@@ -87,5 +76,6 @@ Relevant files:
 
 ## Recommended Fix Order
 
-1. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
-2. Validate master server packet parsing against a fresh packet trace.
+1. Switch IP geolocation to HTTPS or replace it with a provider that supports TLS.
+2. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
+3. Validate master server packet parsing against a fresh packet trace.

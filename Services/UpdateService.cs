@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using SharpCompress.Archives;
 using SharpCompress.Common;
@@ -154,15 +155,13 @@ public class UpdateService
     public async Task<bool> DownloadUpdateAsync()
     {
         if (_isDownloading || _latestRelease == null) return false;
-        
-        // Find the Windows x64 asset
-        var asset = _latestRelease.Assets?.FirstOrDefault(a => 
-            a.Name?.Contains("win-x64", StringComparison.OrdinalIgnoreCase) == true &&
-            a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+
+        var asset = FindCompatibleUpdateAsset(_latestRelease);
         
         if (asset == null || string.IsNullOrEmpty(asset.BrowserDownloadUrl))
         {
-            LoggingService.Instance.Warning("No compatible update asset found");
+            LoggingService.Instance.Warning(
+                $"No compatible update asset found for {GetCurrentRuntimeDescription()}. Available assets: {FormatAvailableAssets(_latestRelease.Assets)}");
             return false;
         }
         
@@ -565,6 +564,92 @@ chmod +x ""{Path.Combine(appDirectory, appName)}""
             LoggingService.Instance.Warning($"Failed to save server state: {ex.Message}");
             return false;
         }
+    }
+
+    private static GitHubAsset? FindCompatibleUpdateAsset(GitHubRelease release)
+    {
+        if (release.Assets == null || release.Assets.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var token in GetCompatibleAssetTokens())
+        {
+            var asset = release.Assets.FirstOrDefault(a =>
+                !string.IsNullOrWhiteSpace(a.Name) &&
+                !string.IsNullOrWhiteSpace(a.BrowserDownloadUrl) &&
+                a.Name.Contains(token, StringComparison.OrdinalIgnoreCase) &&
+                a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+
+            if (asset != null)
+            {
+                return asset;
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<string> GetCompatibleAssetTokens()
+    {
+        var architecture = GetArchitectureToken();
+
+        if (OperatingSystem.IsWindows())
+        {
+            return [$"win-{architecture}", $"windows-{architecture}"];
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return [$"linux-{architecture}"];
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            return [$"osx-{architecture}", $"macos-{architecture}", $"darwin-{architecture}"];
+        }
+
+        return [];
+    }
+
+    private static string GetArchitectureToken()
+    {
+        return RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.X64 => "x64",
+            Architecture.X86 => "x86",
+            Architecture.Arm64 => "arm64",
+            Architecture.Arm => "arm",
+            _ => RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()
+        };
+    }
+
+    private static string GetCurrentRuntimeDescription()
+    {
+        var platform = OperatingSystem.IsWindows()
+            ? "Windows"
+            : OperatingSystem.IsLinux()
+                ? "Linux"
+                : OperatingSystem.IsMacOS()
+                    ? "macOS"
+                    : "unknown platform";
+
+        return $"{platform} {GetArchitectureToken()}";
+    }
+
+    private static string FormatAvailableAssets(IEnumerable<GitHubAsset>? assets)
+    {
+        if (assets == null)
+        {
+            return "none";
+        }
+
+        var names = assets
+            .Select(asset => asset.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+
+        return names.Count > 0 ? string.Join(", ", names) : "none";
     }
     
     /// <summary>

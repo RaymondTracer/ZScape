@@ -33,13 +33,12 @@ Status language used in this document:
 - **NotificationService**: Server alert abstraction with user-selectable native Windows toast notifications and a custom in-app popup fallback, including connect, show-server, and focus-window activation paths.
 - **ScreenshotMonitorService**: Consolidates screenshots from testing versions to a central location.
 - **Ip2CountryService**: IP-to-country geolocation service using ip-api.com with caching, rate limiting, and batch lookup support.
-- **UpdateService**: Automatic updates from GitHub releases with configurable check intervals, background downloading, saved-state restart support, and optional auto-restart; cross-platform asset handling remains partial.
+- **UpdateService**: Automatic updates from GitHub releases with configurable check intervals, background downloading, saved-state restart support, optional auto-restart, and runtime-specific asset selection for Windows, Linux, and macOS release zips.
 - **UI**: Avalonia `MainWindow` and supporting dialogs, custom controls (`ResizableListView`, `PersistentComboBox`, `NumericSpinner`, `LogPanelControl`), and shared dark theme resources in `Themes/DarkTheme.axaml`.
 
 ## Implementation Status
 
 Unless noted otherwise, the feature descriptions below describe intended product behavior. Known current gaps worth keeping in the specification:
-- **Cross-platform update asset selection** is **Partial**: the project targets Windows, Linux, and macOS, but the current download path expects Windows `win-x64` zip releases.
 
 ---
 
@@ -1223,5 +1222,5 @@ dotnet run --project ZScape.csproj
 - Hidden server rules apply before other list filters so persistent name-based hides remain in effect across sessions.
 - Server alert detection exists for favorite and manual servers; native desktop notification delivery is still partial and currently falls back to logging.
 - First-time setup wizard is shown automatically when `settings.json` doesn't exist; settings file is only created after completing setup.
-- Automatic updates check GitHub releases on configurable intervals (hours/days/weeks); the current download/install asset path still expects Windows `win-x64` zip releases.
+- Automatic updates check GitHub releases on configurable intervals (hours/days/weeks) and select the matching Windows, Linux, or macOS release zip for the current runtime.
 - For precise implementation details, consult the corresponding classes in `Protocol/`, `Services/`, `Views/`, `Controls/`, and `Themes/`.
