@@ -166,8 +166,6 @@ Testing & debugging tips:
 - Country codes are automatically normalized (USA -> US, XIP/XUN -> Unknown). Servers with unknown countries are resolved via IP geolocation (ip-api.com).
 - IP geolocation is rate-limited (45 requests/minute) and cached. Failed lookups are marked as Unknown to prevent retries.
 
-> Note: Some implementation details (such as segmented response handling and unconditional extended flag field writing in `CreateServerChallenge`) are documented in `SPECIFICATION.md` for reference.
-
 ---
 
 ## Contributing
@@ -183,9 +181,3 @@ Testing & debugging tips:
 ZScape - Copyright (C) 2026 Charlie Gadd
 
 Licensed under the GNU General Public License v3.0. See LICENSE for details.
-
----
-
-## Where to look next
-
-For a complete, implementation-accurate reference, see `SPECIFICATION.md` in this repository.
