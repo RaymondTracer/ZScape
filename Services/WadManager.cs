@@ -137,6 +137,7 @@ public class WadManager
     public void RefreshCache()
     {
         _wadCache.Clear();
+        var searchRoots = GetSearchRootsInPriorityOrder();
         
         // Log configured paths for debugging
         _logger.Info($"WAD search: {_executableFolders.Count} exe folders, download={!string.IsNullOrEmpty(_downloadPath)}, {_searchPaths.Count} search paths");
@@ -147,27 +148,62 @@ public class WadManager
         _logger.Verbose($"  Executable folders: {string.Join(", ", _executableFolders)}");
         _logger.Verbose($"  Download path: {_downloadPath}");
         _logger.Verbose($"  Search paths: {string.Join(", ", _searchPaths)}");
-        
-        // Scan executable folders first (highest priority - where Zandronum.exe lives)
-        foreach (var exeFolder in _executableFolders)
-        {
-            ScanDirectory(exeFolder);
-        }
-        
-        // Scan download path second
-        if (!string.IsNullOrEmpty(_downloadPath) && Directory.Exists(_downloadPath))
-        {
-            ScanDirectory(_downloadPath);
-        }
-        
-        // Scan search paths last
-        foreach (var searchPath in _searchPaths)
+
+        foreach (var searchPath in searchRoots)
         {
             ScanDirectory(searchPath);
         }
-        
-        var pathCount = _executableFolders.Count + _searchPaths.Count + (string.IsNullOrEmpty(_downloadPath) ? 0 : 1);
+
+        var pathCount = searchRoots.Count;
         _logger.Verbose($"WAD cache refreshed: {_wadCache.Count} files found in {pathCount} paths");
+    }
+
+    private List<string> GetSearchRootsInPriorityOrder()
+    {
+        var orderedPaths = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddPath(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            {
+                return;
+            }
+
+            var normalizedPath = NormalizePathKey(path);
+            if (seen.Add(normalizedPath))
+            {
+                orderedPaths.Add(path);
+            }
+        }
+
+        foreach (var exeFolder in _executableFolders)
+        {
+            AddPath(exeFolder);
+        }
+
+        AddPath(_downloadPath);
+
+        foreach (var searchPath in _searchPaths)
+        {
+            AddPath(searchPath);
+        }
+
+        return orderedPaths;
+    }
+
+    private static string NormalizePathKey(string path)
+    {
+        try
+        {
+            path = Path.GetFullPath(path);
+        }
+        catch
+        {
+            // Keep the original path if normalization fails.
+        }
+
+        return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
     
     private void ScanDirectory(string path)
@@ -220,11 +256,7 @@ public class WadManager
         // 1) Executable folders (where Zandronum.exe lives)
         // 2) Download path (recently downloaded files)
         // 3) Configured search paths
-        var pathsToSearch = new List<string>();
-        pathsToSearch.AddRange(_executableFolders.Where(Directory.Exists));
-        if (!string.IsNullOrEmpty(_downloadPath) && Directory.Exists(_downloadPath))
-            pathsToSearch.Add(_downloadPath);
-        pathsToSearch.AddRange(_searchPaths);
+        var pathsToSearch = GetSearchRootsInPriorityOrder();
         
         // Search all paths (case-insensitive file matching)
         foreach (var searchPath in pathsToSearch)
@@ -371,11 +403,7 @@ public class WadManager
             return null;
         
         // Build search paths in priority order: exe folders, download path, search paths
-        var searchPaths = new List<string>();
-        searchPaths.AddRange(_executableFolders.Where(Directory.Exists));
-        if (!string.IsNullOrEmpty(_downloadPath) && Directory.Exists(_downloadPath))
-            searchPaths.Add(_downloadPath);
-        searchPaths.AddRange(_searchPaths.Where(Directory.Exists));
+        var searchPaths = GetSearchRootsInPriorityOrder();
         
         foreach (var searchPath in searchPaths)
         {
@@ -425,11 +453,7 @@ public class WadManager
         var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         
         // Build search paths in priority order: exe folders, download path, search paths
-        var searchPaths = new List<string>();
-        searchPaths.AddRange(_executableFolders.Where(Directory.Exists));
-        if (!string.IsNullOrEmpty(_downloadPath) && Directory.Exists(_downloadPath))
-            searchPaths.Add(_downloadPath);
-        searchPaths.AddRange(_searchPaths.Where(Directory.Exists));
+        var searchPaths = GetSearchRootsInPriorityOrder();
         
         foreach (var searchPath in searchPaths)
         {

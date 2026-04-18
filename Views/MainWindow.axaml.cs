@@ -1993,9 +1993,6 @@ public partial class MainWindow : Window
             }
         }
 
-        var (_, remainingMissingWads) = launcher.CheckRequiredWads(server);
-        AddPendingWads(launcher.ResolveMissingWadsByHash(remainingMissingWads).NeedsDownload);
-
         if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
         {
             var (_, missingOptionalWads) = launcher.CheckOptionalWads(server);
@@ -2005,9 +2002,6 @@ public partial class MainWindow : Window
             {
                 _wadManager.RefreshCache();
             }
-
-            var (_, remainingOptionalWads) = launcher.CheckOptionalWads(server);
-            AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(remainingOptionalWads).NeedsDownload);
         }
 
         if (hasOptionalServerHashes)
