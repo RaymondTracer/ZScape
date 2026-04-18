@@ -194,7 +194,7 @@ Server List Row Colors:
    - Automatic WAD archiving with hash suffixes
    - idgames Archive integration
    - Web search fallback (DuckDuckGo)
-    - Optional WAD metadata from server responses is honored during join-time required-WAD checks, and optional PWADs that are missing or hash-mismatched can be auto-downloaded, skipped, or selected per join based on user settings; unresolved optional mismatches are excluded from the launch command line
+    - Optional WAD metadata from server responses is honored during join-time required-WAD checks, and optional PWADs that are missing or hash-mismatched can be auto-downloaded, skipped, or selected per join based on user settings; unresolved optional mismatches are excluded from the launch command line, and join-time WAD review uses a scrollable checklist layout so large missing-WAD sets remain usable
 
 6. **Connection & Update Features**
    - Connection history with recent servers
@@ -206,7 +206,7 @@ Server List Row Colors:
 - **MainWindow**: Primary Avalonia server browser interface
 - **UnifiedSettingsDialog**: Comprehensive settings configuration
 - **FirstTimeSetupDialog**: Initial setup wizard shown when settings.json doesn't exist
-- **OptionalWadSelectionDialog**: Join-time selection dialog for required PWAD downloads plus optional missing or hash-mismatched PWAD handling
+- **OptionalWadSelectionDialog**: Join-time review and selection dialog for required PWAD downloads plus optional missing or hash-mismatched PWAD handling, with a scrollable checklist layout and bulk optional-selection actions for large file sets
 - **UpdateProgressDialog**: Progress dialog for update save-state operations before restart
 - **ServerFilterDialog**: Advanced server filtering options
 - **AddServerDialog**: Manually add servers by IP:Port

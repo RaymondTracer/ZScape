@@ -2034,7 +2034,8 @@ public partial class MainWindow : Window
                 var selectionDialog = new OptionalWadSelectionDialog(
                     pendingWads.Values.Where(wad => !wad.IsOptional).OrderBy(wad => wad.FileName).ToList(),
                     optionalCandidateWads.Values.OrderBy(wad => wad.FileName).ToList(),
-                    skippedOptionalPwads);
+                    skippedOptionalPwads,
+                    allowOptionalSelection: true);
 
                 var selectionAccepted = await selectionDialog.ShowDialog<bool>(this);
                 if (!selectionAccepted)
@@ -2074,9 +2075,13 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    shouldDownload = await ShowConfirmDialogAsync(
-                        hasRequiredWads ? "Server WADs" : "Optional WADs",
-                        BuildWadDownloadPromptMessage(requiredWads, optionalWads));
+                    var reviewDialog = new OptionalWadSelectionDialog(
+                        requiredWads,
+                        optionalWads,
+                        skippedOptionalPwads: null,
+                        allowOptionalSelection: false);
+
+                    shouldDownload = await reviewDialog.ShowDialog<bool>(this);
                 }
             }
 
@@ -2594,46 +2599,6 @@ public partial class MainWindow : Window
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
         _settings.Save();
-    }
-
-    private static string BuildWadDownloadPromptMessage(List<WadInfo> requiredWads, List<WadInfo> optionalWads)
-    {
-        var lines = new List<string>();
-
-        if (requiredWads.Count > 0)
-        {
-            lines.Add("Required WADs:");
-            lines.AddRange(FormatWadPromptLines(requiredWads));
-        }
-
-        if (optionalWads.Count > 0)
-        {
-            if (lines.Count > 0)
-            {
-                lines.Add(string.Empty);
-            }
-
-            lines.Add("Optional WADs:");
-            lines.AddRange(FormatWadPromptLines(optionalWads));
-        }
-
-        lines.Add(string.Empty);
-        lines.Add("Would you like to download them?");
-        return string.Join("\n", lines);
-    }
-
-    private static IEnumerable<string> FormatWadPromptLines(List<WadInfo> wads)
-    {
-        if (wads.Count == 0)
-            return [];
-
-        var lines = wads.Take(10).Select(wad => $"  - {wad.FileName}").ToList();
-        if (wads.Count > 10)
-        {
-            lines.Add($"  ... and {wads.Count - 10} more");
-        }
-
-        return lines;
     }
 
     #endregion
