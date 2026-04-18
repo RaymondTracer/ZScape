@@ -303,6 +303,19 @@ public class GameLauncher
             verificationItems.Add((pwad, localPath, fileSize));
             fileProgress[pwad.Name] = (0, fileSize);
         }
+
+        if (verificationItems.Count == 0)
+        {
+            progress?.Report(new HashVerificationProgress
+            {
+                CurrentFile = string.Empty,
+                CurrentIndex = 0,
+                TotalFiles = 0,
+                Status = "No local WADs with server hashes are available to verify.",
+                FileSize = 0
+            });
+            return [];
+        }
         
         // Report initial state
         progress?.Report(new HashVerificationProgress
