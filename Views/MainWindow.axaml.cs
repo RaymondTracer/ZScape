@@ -1975,8 +1975,12 @@ public partial class MainWindow : Window
         }
 
         var (_, missingWads) = launcher.CheckRequiredWads(server);
-        AddPendingWads(launcher.ResolveMissingWadsByHash(missingWads));
-        _wadManager.RefreshCache();
+        var (requiredWadsNeedingDownload, requiredCacheChanged) = launcher.ResolveMissingWadsByHash(missingWads);
+        AddPendingWads(requiredWadsNeedingDownload);
+        if (requiredCacheChanged)
+        {
+            _wadManager.RefreshCache();
+        }
 
         var hasServerHashes = server.PWADs.Any(p => !p.IsOptional && !string.IsNullOrEmpty(p.Hash));
         if (hasServerHashes)
@@ -1990,16 +1994,20 @@ public partial class MainWindow : Window
         }
 
         var (_, remainingMissingWads) = launcher.CheckRequiredWads(server);
-        AddPendingWads(launcher.ResolveMissingWadsByHash(remainingMissingWads));
+        AddPendingWads(launcher.ResolveMissingWadsByHash(remainingMissingWads).NeedsDownload);
 
         if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
         {
             var (_, missingOptionalWads) = launcher.CheckOptionalWads(server);
-            AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(missingOptionalWads));
-            _wadManager.RefreshCache();
+            var (optionalWadsNeedingDownload, optionalCacheChanged) = launcher.ResolveMissingWadsByHash(missingOptionalWads);
+            AddOptionalCandidateWads(optionalWadsNeedingDownload);
+            if (optionalCacheChanged)
+            {
+                _wadManager.RefreshCache();
+            }
 
             var (_, remainingOptionalWads) = launcher.CheckOptionalWads(server);
-            AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(remainingOptionalWads));
+            AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(remainingOptionalWads).NeedsDownload);
         }
 
         if (hasOptionalServerHashes)

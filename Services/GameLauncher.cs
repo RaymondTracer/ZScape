@@ -157,10 +157,11 @@ public class GameLauncher
     /// Resolves missing WADs by activating locally archived copies that match the server hash.
     /// Returns only the WADs that still need to be downloaded.
     /// </summary>
-    public List<WadInfo> ResolveMissingWadsByHash(List<(string Name, string? Hash)> missingWads)
+    public (List<WadInfo> NeedsDownload, bool CacheChanged) ResolveMissingWadsByHash(List<(string Name, string? Hash)> missingWads)
     {
         var needsDownload = new List<WadInfo>();
         var wadManager = WadManager.Instance;
+        var cacheChanged = false;
 
         foreach (var (name, hash) in missingWads)
         {
@@ -182,6 +183,7 @@ public class GameLauncher
             var activatedPath = wadManager.ActivateArchivedWad(matchingPath, name);
             if (activatedPath != null)
             {
+                cacheChanged = true;
                 LoggingService.Instance.Info(
                     $"Activated local WAD for {name}: {Path.GetFileName(matchingPath)} -> {Path.GetFileName(activatedPath)}");
                 continue;
@@ -191,7 +193,7 @@ public class GameLauncher
             needsDownload.Add(new WadInfo(name, hash));
         }
 
-        return needsDownload;
+        return (needsDownload, cacheChanged);
     }
 
     /// <summary>
