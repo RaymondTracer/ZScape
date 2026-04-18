@@ -229,14 +229,15 @@ public class MasterServerClient : IDisposable
 
         _logger.Verbose($"Processing packet {packetNum + 1} (expected: {expectedPackets})");
 
-        // Read server blocks
+         // Doomseeker-compatible master packets place a non-terminal marker byte here
+         // before a run of [count][ip][ports...] groups. The count run ends at 0,
+         // then the packet continues with EndPart or End.
         if (ms.Position >= ms.Length) return MasterResponseResult.Bad;
-        byte firstByte = reader.ReadByte();
+         byte blockOrEndMarker = reader.ReadByte();
 
-        while (firstByte != ProtocolConstants.MasterResponseEndPart && 
-               firstByte != ProtocolConstants.MasterResponseEnd)
+         while (blockOrEndMarker != ProtocolConstants.MasterResponseEndPart && 
+             blockOrEndMarker != ProtocolConstants.MasterResponseEnd)
         {
-            // firstByte is server count in this block (sharing same IP)
             byte numServersInBlock = reader.ReadByte();
             
             while (numServersInBlock > 0)
@@ -262,10 +263,10 @@ public class MasterServerClient : IDisposable
             }
 
             if (ms.Position >= ms.Length) break;
-            firstByte = reader.ReadByte();
+            blockOrEndMarker = reader.ReadByte();
         }
 
-        if (firstByte == ProtocolConstants.MasterResponseEnd)
+        if (blockOrEndMarker == ProtocolConstants.MasterResponseEnd)
         {
             readLastPacket = true;
             _logger.Verbose("Received end-of-list marker");

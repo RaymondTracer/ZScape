@@ -57,7 +57,7 @@ Request (Huffman encoded, little-endian):
 [2 bytes] int16 MasterProtocolVersion
 ```
 
-The master server can return multi-packet responses using begin-part markers and packet numbers. The master parser aggregates server endpoints using groups of [IP:4 bytes][count:1 byte][ports:2 bytes each]. Master response codes are defined in `ProtocolConstants` and include codes for Good, Server, End, Banned, Bad, WrongVersion, BeginPart, EndPart and ServerBlock.
+The master server can return multi-packet responses using begin-part markers and packet numbers. After the begin-part header, the packet carries a non-terminal block marker followed by one or more grouped endpoint entries encoded as [count:1 byte][IP:4 bytes][ports:2 bytes each], terminated by a zero count and then an EndPart or End marker. Master response codes are defined in `ProtocolConstants` and include codes for Good, Server, End, Banned, Bad, WrongVersion, BeginPart, EndPart and ServerBlock.
 
 ### Individual Server Query
 
@@ -580,8 +580,7 @@ public class AppSettings
     public int GameModeFilterIndex { get; set; }
     public string SearchText { get; set; } = string.Empty;
 
-    // View options (`VerboseMode` is retained as a legacy persisted field)
-    public bool VerboseMode { get; set; }
+    // View options
     public bool ShowLogPanel { get; set; }
     public bool VerboseLogging { get; set; }
     public bool ColorizePlayerNames { get; set; } = true;
@@ -634,7 +633,7 @@ public class AppSettings
     public List<TextMatchRule> HiddenServerNameRules { get; set; } = [];
     public List<ManualServerEntry> ManualServers { get; set; } = [];
     public bool ShowFavoritesColumn { get; set; } = true;
-    public bool ShowFavoritesOnly { get; set; }   // Present in the model; current UI toggle is session-driven
+    public bool ShowFavoritesOnly { get; set; }
     public int ServerListRowHeight { get; set; } = 26;
 
     // Server Alerts
@@ -711,7 +710,7 @@ public enum OptionalPwadDownloadMode
 }
 ```
 
-`ConnectionHistoryData` and `DomainSettingsData` are persisted separately from `AppSettings`. `VerboseMode` and `ShowFavoritesOnly` remain in the settings model for compatibility and future wiring, even though the current Avalonia UI primarily uses `VerboseLogging` and an in-session favorites-only toggle. Favorite rules and hidden server rules use the same `TextMatchRule` matcher that powers advanced server-name and map filters.
+`ConnectionHistoryData` and `DomainSettingsData` are persisted separately from `AppSettings`. `ShowFavoritesOnly` persists the toolbar's favorites-only filter state, and legacy `verboseMode` settings files are migrated forward into `VerboseLogging` during load. Favorite rules and hidden server rules use the same `TextMatchRule` matcher that powers advanced server-name and map filters.
 
 ### ServerBrowserService
 - Orchestrates refresh: fetch endpoints from master, add/cleanup `ServerInfo` entries, and query servers using pipelined processing with configurable concurrency.

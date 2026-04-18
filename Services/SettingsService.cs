@@ -62,7 +62,8 @@ public class SettingsService
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonUtils.DefaultOptions);
                 if (loaded != null)
                 {
-                    NormalizeLoadedSettings(loaded);
+                    using var doc = JsonDocument.Parse(json);
+                    NormalizeLoadedSettings(loaded, doc.RootElement);
                     _settings = loaded;
                 }
             }
@@ -77,8 +78,9 @@ public class SettingsService
         }
     }
 
-    private static void NormalizeLoadedSettings(AppSettings settings)
+    private static void NormalizeLoadedSettings(AppSettings settings, JsonElement settingsJson)
     {
+        ApplyLegacySettingsCompatibility(settings, settingsJson);
         settings.CurrentFilter ??= new ServerFilter();
         settings.FilterPresets ??= [];
         settings.FavoriteServers ??= [];
@@ -93,6 +95,41 @@ public class SettingsService
         {
             NormalizeFilter(preset);
         }
+    }
+
+    private static void ApplyLegacySettingsCompatibility(AppSettings settings, JsonElement settingsJson)
+    {
+        if (TryGetBooleanProperty(settingsJson, "verboseLogging", out _))
+        {
+            return;
+        }
+
+        if (TryGetBooleanProperty(settingsJson, "verboseMode", out var legacyVerboseMode) && legacyVerboseMode)
+        {
+            settings.VerboseLogging = true;
+        }
+    }
+
+    private static bool TryGetBooleanProperty(JsonElement root, string propertyName, out bool value)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                value = property.Value.GetBoolean();
+                return true;
+            }
+
+            break;
+        }
+
+        value = false;
+        return false;
     }
 
     private static List<TextMatchRule> NormalizeRules(List<TextMatchRule>? rules)
@@ -385,7 +422,6 @@ public class AppSettings
     public string SearchText { get; set; } = string.Empty;
 
     // View options
-    public bool VerboseMode { get; set; }
     public bool ShowLogPanel { get; set; }
     public bool VerboseLogging { get; set; }
     public bool ColorizePlayerNames { get; set; } = true;

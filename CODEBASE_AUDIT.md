@@ -24,58 +24,8 @@ This audit covered the full workspace for:
 2. `Controls/ResizableListView.cs(662,36)` `CS8619` nullability mismatch
 3. `Views/WadDownloadDialog.axaml.cs(451,51)` `CS0067` event `LogEntry.PropertyChanged` is never used
 
-## High-Confidence Findings
+## Findings Status
 
-### 1. IP geolocation currently uses HTTP endpoints
+No active audit findings remain from this pass.
 
-Severity: Medium
-
-`Ip2CountryService` uses `http://ip-api.com` for both single and batch lookups. That exposes request traffic in cleartext and permits response tampering on the network path.
-
-Relevant files:
-
-- `Services/Ip2CountryService.cs`
-
-## Overlooked or Dead Code
-
-### 2. `AppSettings.ShowFavoritesOnly` is currently unused
-
-Severity: Low
-
-The field exists in `AppSettings`, but no usage was found outside the settings model. The current favorites-only filter is driven directly by the toolbar toggle, and the state is not persisted through `ShowFavoritesOnly`.
-
-Relevant files:
-
-- `Services/SettingsService.cs`
-- `Views/MainWindow.axaml.cs`
-
-### 3. `AppSettings.VerboseMode` appears to be legacy state
-
-Severity: Low
-
-The model still persists `VerboseMode`, but the current UI path uses `VerboseLogging` and applies that to `LoggingService.VerboseMode`. `AppSettings.VerboseMode` looks like leftover compatibility state rather than an actively used setting.
-
-Relevant files:
-
-- `Services/SettingsService.cs`
-- `Views/MainWindow.axaml.cs`
-
-## Suspicious Areas Requiring Runtime Validation
-
-### 4. Master server packet parsing looks suspicious
-
-Confidence: Medium
-
-The master parser defines a `MasterResponseServerBlock` constant and the spec documents grouped endpoint blocks, but the current parsing logic does not appear to consume the block marker in a straightforward way. This may be correct for live packets, but it warrants targeted packet-trace validation before assuming the implementation is sound.
-
-Relevant files:
-
-- `Protocol/MasterServerClient.cs`
-- `Protocol/ProtocolConstants.cs`
-- `SPECIFICATION.md`
-
-## Recommended Fix Order
-
-1. Switch IP geolocation to HTTPS or replace it with a provider that supports TLS.
-2. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
-3. Validate master server packet parsing against a fresh packet trace.
+The previously suspicious master server parser was validated against Doomseeker's Zandronum master client behavior. The implementation and grouped-block packet shape are consistent; the confusion came from underspecified documentation and a misleading local code comment, which have now been corrected.

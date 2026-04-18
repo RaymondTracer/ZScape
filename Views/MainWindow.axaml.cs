@@ -664,6 +664,7 @@ public partial class MainWindow : Window
             if (HideBotOnlyCheckBox != null) HideBotOnlyCheckBox.IsChecked = settings.TreatBotOnlyAsEmpty;
             if (HideFullCheckBox != null) HideFullCheckBox.IsChecked = settings.HideFull;
             if (HidePasswordedCheckBox != null) HidePasswordedCheckBox.IsChecked = settings.HidePassworded;
+            if (FavoritesOnlyCheckBox != null) FavoritesOnlyCheckBox.IsChecked = settings.ShowFavoritesOnly;
             if (GameModeComboBox != null && settings.GameModeFilterIndex >= 0 && settings.GameModeFilterIndex < GameModes.Count)
             {
                 GameModeComboBox.SelectedIndex = settings.GameModeFilterIndex;
@@ -792,6 +793,7 @@ public partial class MainWindow : Window
         settings.TreatBotOnlyAsEmpty = HideBotOnlyCheckBox?.IsChecked ?? false;
         settings.HideFull = HideFullCheckBox?.IsChecked ?? false;
         settings.HidePassworded = HidePasswordedCheckBox?.IsChecked ?? false;
+        settings.ShowFavoritesOnly = FavoritesOnlyCheckBox?.IsChecked ?? false;
         settings.GameModeFilterIndex = GameModeComboBox?.SelectedIndex ?? 0;
         settings.SearchText = SearchBox?.Text ?? "";
 
