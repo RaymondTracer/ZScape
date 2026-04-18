@@ -386,7 +386,6 @@ public class AppSettings
 
     // View options
     public bool VerboseMode { get; set; }
-    public bool ShowHexDumps { get; set; }
     public bool ShowLogPanel { get; set; }
     public bool VerboseLogging { get; set; }
     public bool ColorizePlayerNames { get; set; } = true;

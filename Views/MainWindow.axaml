@@ -51,6 +51,8 @@
                 <MenuItem Header="_Preferences..." Click="PreferencesMenuItem_Click" />
             </MenuItem>
             <MenuItem Header="_Help">
+                <MenuItem Header="Notification _Debug Window..." x:Name="NotificationDebugMenuItem" Click="NotificationDebugMenuItem_Click" IsVisible="False" />
+                <Separator x:Name="NotificationDebugSeparator" IsVisible="False" />
                 <MenuItem Header="_About ZScape" Click="AboutMenuItem_Click" />
             </MenuItem>
         </Menu>

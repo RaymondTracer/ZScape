@@ -26,21 +26,7 @@ This audit covered the full workspace for:
 
 ## High-Confidence Findings
 
-### 1. Hexdump diagnostics are only partially wired
-
-Severity: Medium
-
-`LoggingService` supports `VerboseMode` and `ShowHexDumps`, and protocol clients call `LogHexDump()`. The current main-window wiring only applies `VerboseLogging` to `LoggingService.VerboseMode`; no runtime path was found that applies `AppSettings.ShowHexDumps` to the logger.
-
-Relevant files:
-
-- `Services/LoggingService.cs`
-- `Services/SettingsService.cs`
-- `Views/MainWindow.axaml.cs`
-- `Protocol/MasterServerClient.cs`
-- `Protocol/ServerQueryClient.cs`
-
-### 2. Updater asset selection is Windows-specific despite multi-runtime targeting
+### 1. Updater asset selection is Windows-specific despite multi-runtime targeting
 
 Severity: Medium
 
@@ -51,7 +37,7 @@ Relevant files:
 - `ZScape.csproj`
 - `Services/UpdateService.cs`
 
-### 3. IP geolocation currently uses HTTP endpoints
+### 2. IP geolocation currently uses HTTP endpoints
 
 Severity: Medium
 
@@ -63,7 +49,7 @@ Relevant files:
 
 ## Overlooked or Dead Code
 
-### 4. `AppSettings.ShowFavoritesOnly` is currently unused
+### 3. `AppSettings.ShowFavoritesOnly` is currently unused
 
 Severity: Low
 
@@ -74,7 +60,7 @@ Relevant files:
 - `Services/SettingsService.cs`
 - `Views/MainWindow.axaml.cs`
 
-### 5. `AppSettings.VerboseMode` appears to be legacy state
+### 4. `AppSettings.VerboseMode` appears to be legacy state
 
 Severity: Low
 
@@ -87,7 +73,7 @@ Relevant files:
 
 ## Suspicious Areas Requiring Runtime Validation
 
-### 6. Master server packet parsing looks suspicious
+### 5. Master server packet parsing looks suspicious
 
 Confidence: Medium
 
@@ -101,5 +87,5 @@ Relevant files:
 
 ## Recommended Fix Order
 
-1. Wire `AppSettings.ShowHexDumps` into `LoggingService.ShowHexDumps`, or remove the dead setting surface.
-2. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
+1. Apply or remove dead settings fields such as `ShowFavoritesOnly` and legacy `VerboseMode`.
+2. Validate master server packet parsing against a fresh packet trace.

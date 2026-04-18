@@ -36,7 +36,6 @@ public class ServerQueryClient : IDisposable
 
             // Create and encode the challenge
             byte[] challenge = CreateServerChallenge();
-            _logger.LogHexDump(challenge, $"Server Challenge to {endpoint} (unencoded)");
 
             byte[]? encodedChallenge = HuffmanCodec.Instance.Encode(challenge);
             if (encodedChallenge == null)
@@ -46,7 +45,6 @@ public class ServerQueryClient : IDisposable
                 server.IsOnline = false;
                 return server;
             }
-            _logger.LogHexDump(encodedChallenge, $"Server Challenge to {endpoint} (encoded)");
 
             // Send challenge
             await udpClient.SendAsync(encodedChallenge, endpoint, cancellationToken);
@@ -69,7 +67,6 @@ public class ServerQueryClient : IDisposable
                     server.Ping = (int)(server.LastQueryTime - server.QuerySentTime).TotalMilliseconds;
 
                     _logger.Verbose($"Server {endpoint} responded: {result.Buffer.Length} bytes, ping: {server.Ping}ms");
-                    _logger.LogHexDump(result.Buffer, $"Server Response from {endpoint} (encoded)");
 
                     // Decode the response
                     byte[]? decoded = HuffmanCodec.Instance.Decode(result.Buffer);
@@ -78,7 +75,6 @@ public class ServerQueryClient : IDisposable
                         _logger.Warning($"Failed to decode response from {endpoint}");
                         continue;
                     }
-                    _logger.LogHexDump(decoded, $"Server Response from {endpoint} (decoded)");
 
                     // Check response type
                     using var ms = new MemoryStream(decoded);

@@ -94,7 +94,6 @@ public class MasterServerClient : IDisposable
             // Create and encode the challenge packet
             byte[] challenge = CreateMasterChallenge();
             _logger.Verbose($"Created challenge packet ({challenge.Length} bytes unencoded)");
-            _logger.LogHexDump(challenge, "Master Challenge (unencoded)");
 
             byte[]? encodedChallenge = HuffmanCodec.Instance.Encode(challenge);
             if (encodedChallenge == null)
@@ -102,7 +101,6 @@ public class MasterServerClient : IDisposable
                 throw new Exception("Failed to encode master server challenge");
             }
             _logger.Verbose($"Encoded challenge packet ({encodedChallenge.Length} bytes)");
-            _logger.LogHexDump(encodedChallenge, "Master Challenge (encoded)");
 
             // Send the challenge
             await _udpClient.SendAsync(encodedChallenge, masterEndpoint, cancellationToken);
@@ -118,7 +116,6 @@ public class MasterServerClient : IDisposable
                 {
                     var result = await _udpClient.ReceiveAsync(linkedCts.Token);
                     _logger.Verbose($"Received packet: {result.Buffer.Length} bytes from {result.RemoteEndPoint}");
-                    _logger.LogHexDump(result.Buffer, "Master Response (encoded)");
 
                     // Decode the response
                     byte[]? decoded = HuffmanCodec.Instance.Decode(result.Buffer);
@@ -127,7 +124,6 @@ public class MasterServerClient : IDisposable
                         _logger.Warning("Failed to decode master server response or response too short");
                         continue;
                     }
-                    _logger.LogHexDump(decoded, "Master Response (decoded)");
 
                     // Parse the response
                     var parseResult = ParseMasterResponse(decoded, servers, packetsReceived, ref expectedPackets, ref readLastPacket);

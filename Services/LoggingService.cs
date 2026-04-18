@@ -13,7 +13,6 @@ public class LoggingService
     public event EventHandler<LogEntry>? LogAdded;
     
     public bool VerboseMode { get; set; } = false;
-    public bool ShowHexDumps { get; set; } = false;
 
     private LoggingService()
     {
@@ -48,43 +47,6 @@ public class LoggingService
         {
             Log(message, LogLevel.Verbose);
         }
-    }
-
-    public void LogHexDump(byte[] data, string label)
-    {
-        if (!VerboseMode || !ShowHexDumps || data == null || data.Length == 0)
-            return;
-
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"[HEX] {label} ({data.Length} bytes):");
-        
-        const int bytesPerLine = 16;
-        for (int offset = 0; offset < data.Length; offset += bytesPerLine)
-        {
-            int lineSize = Math.Min(bytesPerLine, data.Length - offset);
-            
-            // Hex part
-            sb.Append($"  {offset:X8}: ");
-            for (int i = 0; i < lineSize; i++)
-            {
-                sb.Append($"{data[offset + i]:X2} ");
-            }
-            for (int i = lineSize; i < bytesPerLine; i++)
-            {
-                sb.Append("   ");
-            }
-            
-            // ASCII part
-            sb.Append("| ");
-            for (int i = 0; i < lineSize; i++)
-            {
-                char c = (char)data[offset + i];
-                sb.Append(c >= 0x20 && c <= 0x7E ? c : '.');
-            }
-            sb.AppendLine();
-        }
-        
-        Log(sb.ToString(), LogLevel.Verbose);
     }
 
     public void Info(string message) => Log(message, LogLevel.Info);

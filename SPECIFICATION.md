@@ -25,7 +25,7 @@ Status language used in this document:
 - **ServerQueryClient**: Queries individual servers, handles segmented responses and reassembly, and parses server payloads into `ServerInfo`.
 - **ServerBrowserService**: Coordinates master refresh and batch server queries with pipelined processing, keeps an in-memory server store, and provides filtering and summary metrics.
 - **SettingsService**: Loads/saves `AppSettings` to `settings.json`, connection history to `history.json`, and domain thread settings to `domain-settings.json` in the application base directory.
-- **LoggingService**: Singleton logging with verbose logging, a per-run `runtime.log` file beside the app binaries, and optional hexdump plumbing used across the protocol and UI layers.
+- **LoggingService**: Singleton logging with verbose logging and a per-run `runtime.log` file beside the app binaries.
 - **WadManager**: Manages WAD file discovery across configured search paths with hash verification and archived version management.
 - **WadDownloader**: Multi-threaded WAD downloading with parallel URL discovery, idgames Archive integration, and web search fallback.
 - **GameLauncher**: Handles launching Zandronum with proper arguments, WAD hash verification, and testing build downloads.
@@ -39,7 +39,6 @@ Status language used in this document:
 ## Implementation Status
 
 Unless noted otherwise, the feature descriptions below describe intended product behavior. Known current gaps worth keeping in the specification:
-- **Verbose hex dumps** are **Partial**: `LoggingService.ShowHexDumps` and protocol call sites exist, but the current main-window wiring only applies verbose logging.
 - **Cross-platform update asset selection** is **Partial**: the project targets Windows, Linux, and macOS, but the current download path expects Windows `win-x64` zip releases.
 
 ---
@@ -172,7 +171,6 @@ Server List Row Colors:
    - Toggle via View menu
    - Shows detailed network operations
     - Displays packet timing information and protocol troubleshooting details in the log panel
-    - Shows raw protocol data (hexdump option) as part of the intended diagnostics surface (`Partial`: `LoggingService` and protocol call sites support it, but current main-window wiring only applies verbose logging)
 
 4. **Settings**
    - Unified settings dialog
@@ -536,7 +534,7 @@ public enum ExtendedQueryFlags : uint
 ### MasterServerClient (summary)
 - `GetServerListAsync(CancellationToken)` sends a Huffman-encoded challenge and collects one or more responses, handling packet numbers and end-of-list markers.
 - Implements retry logic with configurable `MasterServerRetryCount` (default 3) and `QueryRetryDelayMs` between attempts.
-- Emits events: `ServerFound` (`ServerEndpointEventArgs`), `RefreshCompleted` (`MasterServerEventArgs`), and `RefreshFailed` (`MasterServerEventArgs`). The client logs hexdumps when verbose mode is enabled.
+- Emits events: `ServerFound` (`ServerEndpointEventArgs`), `RefreshCompleted` (`MasterServerEventArgs`), and `RefreshFailed` (`MasterServerEventArgs`).
 
 ### ServerQueryClient (summary)
 - `QueryServerAsync(IPEndPoint, CancellationToken)` queries a single server and returns a populated `ServerInfo` (or an error state on failure).
@@ -551,11 +549,9 @@ Note: `CreateServerChallenge()` currently writes `ExtendedQueryFlags.StandardQue
 - `Encode` will return `null` if encoding would expand data (by default) or if nodes are missing; `Decode` handles `0xFF`-prefixed unencoded payloads and normal Huffman-decoded payloads.
 
 ### Logging & Verbose Mode
-- `LoggingService.Instance` controls `VerboseMode` and `ShowHexDumps`.
+- `LoggingService.Instance` controls `VerboseMode`.
 - The current Avalonia main window applies `AppSettings.VerboseLogging` to `LoggingService.VerboseMode`.
 - Runtime log output is written to `runtime.log` under `AppContext.BaseDirectory`, and unhandled startup/UI/task exceptions are recorded there.
-- `ShowHexDumps` remains part of the persisted settings and logger API, but current main-window UI wiring for toggling/applying it is still partial.
-- `LogHexDump` returns early if `VerboseMode` is false, `ShowHexDumps` is false, or if the provided `data` is null or empty. When enabled, protocol clients output formatted hex + ASCII blocks for troubleshooting.
 
 ### Settings & Persistence
 - `SettingsService` persists `AppSettings` to `settings.json` in the application base directory (portable / next to executable).
@@ -587,7 +583,6 @@ public class AppSettings
 
     // View options (`VerboseMode` is retained as a legacy persisted field)
     public bool VerboseMode { get; set; }
-    public bool ShowHexDumps { get; set; }
     public bool ShowLogPanel { get; set; }
     public bool VerboseLogging { get; set; }
     public bool ColorizePlayerNames { get; set; } = true;
@@ -1215,7 +1210,7 @@ dotnet run --project ZScape.csproj
 
 ## Notes
 - Runtime configuration is stored in `settings.json`; connection history and learned domain-thread settings are stored in `history.json` and `domain-settings.json`.
-- The current Avalonia UI applies `VerboseLogging` to `LoggingService.VerboseMode`; `ShowHexDumps` remains part of the intended diagnostics surface but still needs dedicated UI wiring.
+- The current Avalonia UI applies `VerboseLogging` to `LoggingService.VerboseMode`.
 - Master server queries respect `MasterServerRetryCount` setting (default 3 attempts).
 - Server queries respect `ConsecutiveFailuresBeforeOffline` setting to mark servers offline.
 - WAD files are searched in priority order: executable folders > download path > configured search paths.

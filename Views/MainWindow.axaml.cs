@@ -62,6 +62,7 @@ public partial class MainWindow : Window
     // Custom control references (initialized after InitializeComponent)
     private LogPanelControl? _logControl;
     private MenuItem? ToggleFavoriteMenuItem;
+    private NotificationDebugWindow? _notificationDebugWindow;
 
     // Observable collections for data binding
     public ObservableCollection<ServerViewModel> Servers { get; private set; } = [];
@@ -83,6 +84,11 @@ public partial class MainWindow : Window
         DataContext = this;
 
         InitializeComponent();
+
+    #if DEBUG
+        NotificationDebugMenuItem.IsVisible = true;
+        NotificationDebugSeparator.IsVisible = true;
+    #endif
 
         // Set ItemsSource for controls (backup in case XAML binding didn't work)
         SetupItemsSources();
@@ -214,20 +220,38 @@ public partial class MainWindow : Window
             }
         });
 
-        // Column 1: Lock icon (fixed)
+        // Column 1: Legacy lock-icon spacer (kept at zero width to preserve column indices)
         ServerListView.AddColumn(new ListViewColumn
         {
             Header = "",
-            Width = 24,
+            Width = 0,
+            MinWidth = 0,
             IsFixedWidth = true,
+            CellContentFactory = () => new Border { Width = 0, Height = 0 }
+        });
+
+        // Column 2: Server Name with inline password icon (star-sized, resizable)
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "Server Name",
+            IsStar = true,
+            MinWidth = 100,
             CellContentFactory = () =>
             {
+                var panel = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Margin = new Thickness(4, 0, 4, 0)
+                };
+
                 var viewbox = new Viewbox
                 {
                     Width = 14,
                     Height = 14,
                     VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 0, 4, 0)
                 };
                 viewbox.Bind(Viewbox.IsVisibleProperty, new Avalonia.Data.Binding("IsPassworded"));
                 viewbox.Child = new Avalonia.Controls.Shapes.Path
@@ -235,18 +259,20 @@ public partial class MainWindow : Window
                     Fill = new SolidColorBrush(Avalonia.Media.Color.Parse("#FFCC00")),
                     Data = Avalonia.Media.Geometry.Parse("M 12 2 C 9.79 2 8 3.79 8 6 L 8 8 L 6 8 C 4.9 8 4 8.9 4 10 L 4 20 C 4 21.1 4.9 22 6 22 L 18 22 C 19.1 22 20 21.1 20 20 L 20 10 C 20 8.9 19.1 8 18 8 L 16 8 L 16 6 C 16 3.79 14.21 2 12 2 Z M 10 6 C 10 4.9 10.9 4 12 4 C 13.1 4 14 4.9 14 6 L 14 8 L 10 8 Z M 12 17 C 10.9 17 10 16.1 10 15 C 10 13.9 10.9 13 12 13 C 13.1 13 14 13.9 14 15 C 14 16.1 13.1 17 12 17 Z")
                 };
-                return viewbox;
-            }
-        });
+                Grid.SetColumn(viewbox, 0);
 
-        // Column 2: Server Name (star-sized, resizable)
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "Server Name",
-            IsStar = true,
-            MinWidth = 100,
-            BindingPath = "Name",
-            TextTrimming = TextTrimming.CharacterEllipsis,
+                var textBlock = new TextBlock
+                {
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                textBlock.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("Name"));
+                Grid.SetColumn(textBlock, 1);
+
+                panel.Children.Add(viewbox);
+                panel.Children.Add(textBlock);
+                return panel;
+            },
             SortClick = SortByName_Click
         });
 
@@ -1410,6 +1436,36 @@ public partial class MainWindow : Window
         }
 
         await aboutWindow.ShowDialog(this);
+    }
+
+    private void NotificationDebugMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+#if DEBUG
+        if (_notificationDebugWindow?.IsVisible == true)
+        {
+            _notificationDebugWindow.Activate();
+            return;
+        }
+
+        _notificationDebugWindow = new NotificationDebugWindow(
+            GetNotificationDebugPrimaryServer,
+            GetNotificationDebugServers);
+        _notificationDebugWindow.Closed += (_, _) => _notificationDebugWindow = null;
+        _notificationDebugWindow.Show(this);
+#endif
+    }
+
+    private ServerInfo? GetNotificationDebugPrimaryServer()
+    {
+        return _selectedServer ?? _browserService.Servers.FirstOrDefault();
+    }
+
+    private IReadOnlyList<ServerInfo> GetNotificationDebugServers()
+    {
+        return _browserService.Servers
+            .Where(server => server.IsOnline)
+            .Take(5)
+            .ToList();
     }
 
     #endregion
@@ -3029,6 +3085,11 @@ public partial class MainWindow : Window
     {
         Dispatcher.UIThread.Post(() =>
         {
+            if (e.IsTestAlert)
+            {
+                _logger.Info($"Notification test action received: {e.Action} ({e.Server?.Name ?? e.ServerAddress ?? "no server"})");
+            }
+
             FocusMainWindow();
 
             if (e.Action == ServerAlertAction.FocusWindow)
@@ -3041,7 +3102,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (e.Action == ServerAlertAction.Connect)
+            if (e.Action == ServerAlertAction.Connect && !e.IsTestAlert)
             {
                 _ = LaunchServerAsync(server);
             }

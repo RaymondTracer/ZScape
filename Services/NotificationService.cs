@@ -43,30 +43,41 @@ public class NotificationService : IDisposable
     /// </summary>
     /// <param name="server">The server that came online.</param>
     /// <param name="alertType">Whether this is a favorite or manual server alert.</param>
-    public void ShowServerAlert(ServerInfo server, ServerAlertType alertType)
+    /// <param name="displayModeOverride">Optional one-shot display mode override that does not alter saved settings.</param>
+    /// <param name="isTestAlert">True when this alert is a debug/test notification and should not trigger game launch behavior.</param>
+    public void ShowServerAlert(
+        ServerInfo server,
+        ServerAlertType alertType,
+        NotificationDisplayMode? displayModeOverride = null,
+        bool isTestAlert = false)
     {
         if (_disposed)
             return;
 
         RegisterKnownServer(server, alertType);
 
-        if (!TryShowNativeServerAlert(server, alertType))
+        var effectiveMode = GetEffectiveDisplayMode(displayModeOverride);
+
+        if (!TryShowNativeServerAlert(server, alertType, effectiveMode, isTestAlert))
         {
-            ShowCustomServerAlert(server, alertType);
+            ShowCustomServerAlert(server, alertType, isTestAlert);
         }
     }
 
     /// <summary>
     /// Shows a batch notification when multiple servers come online.
     /// </summary>
-    public void ShowMultipleServersAlert(IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers)
+    public void ShowMultipleServersAlert(
+        IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers,
+        NotificationDisplayMode? displayModeOverride = null,
+        bool isTestAlert = false)
     {
         if (_disposed || servers.Count == 0)
             return;
-        
+
         if (servers.Count == 1)
         {
-            ShowServerAlert(servers[0].Server, servers[0].Type);
+            ShowServerAlert(servers[0].Server, servers[0].Type, displayModeOverride, isTestAlert);
             return;
         }
 
@@ -75,10 +86,17 @@ public class NotificationService : IDisposable
             RegisterKnownServer(server, type);
         }
 
-        if (!TryShowNativeMultipleServersAlert(servers))
+        var effectiveMode = GetEffectiveDisplayMode(displayModeOverride);
+
+        if (!TryShowNativeMultipleServersAlert(servers, effectiveMode, isTestAlert))
         {
-            ShowCustomMultipleServersAlert(servers);
+            ShowCustomMultipleServersAlert(servers, isTestAlert);
         }
+    }
+
+    private static NotificationDisplayMode GetEffectiveDisplayMode(NotificationDisplayMode? displayModeOverride)
+    {
+        return displayModeOverride ?? SettingsService.Instance.Settings.AlertNotificationMode;
     }
 
     public void Dispose()
@@ -138,6 +156,7 @@ public class NotificationService : IDisposable
             TryGetArgument(args, "serverAddress", out var serverAddress);
             ServerInfo? server = null;
             ServerAlertType? alertType = null;
+            var isTestAlert = TryGetArgument(args, "test", out var testValue) && IsTruthyArgument(testValue);
 
             if (!string.IsNullOrEmpty(serverAddress) && _knownServers.TryGetValue(serverAddress, out var knownServer))
             {
@@ -150,7 +169,7 @@ public class NotificationService : IDisposable
                 alertType = parsedAlertType;
             }
 
-            AlertClicked?.Invoke(this, new ServerAlertEventArgs(server, alertType, action, serverAddress));
+            AlertClicked?.Invoke(this, new ServerAlertEventArgs(server, alertType, action, serverAddress, isTestAlert));
         }
         catch (Exception ex)
         {
@@ -171,12 +190,23 @@ public class NotificationService : IDisposable
             return false;
         }
     }
+
+    private static bool IsTruthyArgument(string value)
+    {
+        return value.Equals("1", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
 #endif
 
-    private bool TryShowNativeServerAlert(ServerInfo server, ServerAlertType alertType)
+    private bool TryShowNativeServerAlert(
+        ServerInfo server,
+        ServerAlertType alertType,
+        NotificationDisplayMode effectiveMode,
+        bool isTestAlert)
     {
 #if WINDOWS
-        if (_disposed || !OperatingSystem.IsWindows() || SettingsService.Instance.Settings.AlertNotificationMode != NotificationDisplayMode.Native)
+        if (_disposed || !OperatingSystem.IsWindows() || effectiveMode != NotificationDisplayMode.Native)
         {
             return false;
         }
@@ -185,20 +215,28 @@ public class NotificationService : IDisposable
         {
             var address = ServerRuleUtility.GetServerAddress(server);
             var title = alertType == ServerAlertType.Favorite ? "Favorite server online" : "Manual server online";
+            var testValue = isTestAlert ? "true" : "false";
 
             new ToastContentBuilder()
                 .AddArgument("serverAddress", address)
                 .AddArgument("alertType", alertType.ToString())
                 .AddArgument("action", ServerAlertAction.ShowServer.ToString())
+                .AddArgument("test", testValue)
                 .AddText(title)
                 .AddText(server.Name)
                 .AddText($"{server.CurrentPlayers}/{server.MaxClients} players on {server.Map} ({server.GameMode.Name})")
                 .AddButton(new ToastButton()
                     .SetContent("Connect")
-                    .AddArgument("action", ServerAlertAction.Connect.ToString()))
+                    .AddArgument("action", ServerAlertAction.Connect.ToString())
+                    .AddArgument("serverAddress", address)
+                    .AddArgument("alertType", alertType.ToString())
+                    .AddArgument("test", testValue))
                 .AddButton(new ToastButton()
                     .SetContent("Show Server")
-                    .AddArgument("action", ServerAlertAction.ShowServer.ToString()))
+                    .AddArgument("action", ServerAlertAction.ShowServer.ToString())
+                    .AddArgument("serverAddress", address)
+                    .AddArgument("alertType", alertType.ToString())
+                    .AddArgument("test", testValue))
                 .Show(toast =>
                 {
                     toast.Tag = address;
@@ -218,10 +256,13 @@ public class NotificationService : IDisposable
 #endif
     }
 
-    private bool TryShowNativeMultipleServersAlert(IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers)
+    private bool TryShowNativeMultipleServersAlert(
+        IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers,
+        NotificationDisplayMode effectiveMode,
+        bool isTestAlert)
     {
 #if WINDOWS
-        if (_disposed || !OperatingSystem.IsWindows() || SettingsService.Instance.Settings.AlertNotificationMode != NotificationDisplayMode.Native)
+        if (_disposed || !OperatingSystem.IsWindows() || effectiveMode != NotificationDisplayMode.Native)
         {
             return false;
         }
@@ -230,12 +271,14 @@ public class NotificationService : IDisposable
         {
             new ToastContentBuilder()
                 .AddArgument("action", ServerAlertAction.FocusWindow.ToString())
+                .AddArgument("test", isTestAlert ? "true" : "false")
                 .AddText("Servers online")
                 .AddText($"{servers.Count} favorite or manual servers are online")
                 .AddText(BuildServerSummary(servers.Select(entry => entry.Server)))
                 .AddButton(new ToastButton()
                     .SetContent("Show Window")
-                    .AddArgument("action", ServerAlertAction.FocusWindow.ToString()))
+                    .AddArgument("action", ServerAlertAction.FocusWindow.ToString())
+                    .AddArgument("test", isTestAlert ? "true" : "false"))
                 .Show(toast =>
                 {
                     toast.Group = "server-alerts";
@@ -254,7 +297,7 @@ public class NotificationService : IDisposable
 #endif
     }
 
-    private void ShowCustomServerAlert(ServerInfo server, ServerAlertType alertType)
+    private void ShowCustomServerAlert(ServerInfo server, ServerAlertType alertType, bool isTestAlert)
     {
         var title = alertType == ServerAlertType.Favorite ? "Favorite server online" : "Manual server online";
         var detail = $"{server.CurrentPlayers}/{server.MaxClients} players on {server.Map} ({server.GameMode.Name})";
@@ -268,10 +311,11 @@ public class NotificationService : IDisposable
                 new AlertActionDefinition("Show Server", ServerAlertAction.ShowServer, IsPrimary: false)
             ],
             server,
-            alertType);
+            alertType,
+            isTestAlert);
     }
 
-    private void ShowCustomMultipleServersAlert(IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers)
+    private void ShowCustomMultipleServersAlert(IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers, bool isTestAlert)
     {
         ShowCustomNotification(
             "Servers online",
@@ -281,7 +325,8 @@ public class NotificationService : IDisposable
                 new AlertActionDefinition("Show Window", ServerAlertAction.FocusWindow, IsPrimary: true)
             ],
             server: null,
-            alertType: null);
+            alertType: null,
+            isTestAlert);
     }
 
     private void ShowCustomNotification(
@@ -290,7 +335,8 @@ public class NotificationService : IDisposable
         string detail,
         IReadOnlyList<AlertActionDefinition> actions,
         ServerInfo? server,
-        ServerAlertType? alertType)
+        ServerAlertType? alertType,
+        bool isTestAlert)
     {
         if (_disposed)
         {
@@ -307,7 +353,12 @@ public class NotificationService : IDisposable
             var notificationWindow = new ServerAlertNotificationWindow(title, message, detail, actions);
             notificationWindow.ActionInvoked += (_, action) =>
             {
-                AlertClicked?.Invoke(this, new ServerAlertEventArgs(server, alertType, action, server is null ? null : ServerRuleUtility.GetServerAddress(server)));
+                AlertClicked?.Invoke(this, new ServerAlertEventArgs(
+                    server,
+                    alertType,
+                    action,
+                    server is null ? null : ServerRuleUtility.GetServerAddress(server),
+                    isTestAlert));
             };
             notificationWindow.Closed += (_, _) =>
             {
@@ -436,13 +487,20 @@ public class ServerAlertEventArgs : EventArgs
     public ServerAlertType? AlertType { get; }
     public ServerAlertAction Action { get; }
     public string? ServerAddress { get; }
+    public bool IsTestAlert { get; }
 
-    public ServerAlertEventArgs(ServerInfo? server, ServerAlertType? alertType, ServerAlertAction action, string? serverAddress)
+    public ServerAlertEventArgs(
+        ServerInfo? server,
+        ServerAlertType? alertType,
+        ServerAlertAction action,
+        string? serverAddress,
+        bool isTestAlert = false)
     {
         Server = server;
         AlertType = alertType;
         Action = action;
         ServerAddress = serverAddress;
+        IsTestAlert = isTestAlert;
     }
 }
 

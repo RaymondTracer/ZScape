@@ -66,7 +66,7 @@ This repository contains a desktop client that queries the Zandronum master serv
 - First-time setup wizard for initial configuration
 - Dark theme UI with custom control styling and dark title bars
 - Sortable columns with persistent sort settings
-- Verbose logging and optional hexdump output for protocol debugging
+- Verbose logging for protocol debugging
 - Persisted application settings (`settings.json`) using `SettingsService`
 - Shared UI components for consistent dialog appearance (`UIHelpers`)
 
@@ -109,7 +109,7 @@ The application will create and use `settings.json` in the application's base di
 - Use the quick search box or open the **Filter** dialog for advanced filtering (game mode, IWAD, WADs, map, country, ping, player count).
 - Click the star icon to mark servers as favorites. Use **Show Favorites Only** to filter to just favorites.
 - Use **Servers > Add Server** to manually add servers not in the master list.
-- Enable verbose logging and hexdumps in Settings for detailed protocol diagnostics.
+- Enable verbose logging for additional protocol diagnostics.
 - Missing WADs are detected automatically; use **Fetch WADs** to download them with the multi-threaded downloader.
 
 ---
@@ -124,7 +124,7 @@ Configuration options exposed in `AppSettings` include:
 - Window position, size, and splitter positions
 - Column widths and sorting preferences
 - Filter presets and current filter state
-- Verbose logging and hexdump toggles
+- Verbose logging and log panel toggles
 - Auto-refresh settings and interval (including favorites-only mode)
 - Query concurrency, retry attempts, and timing settings
 - WAD search paths and download concurrency settings
@@ -148,7 +148,7 @@ Key directories and files:
 - `Utilities/` — `AppConstants.cs`, `FormatUtils.cs`, `JsonUtils.cs`, `DarkModeHelper.cs`, `DoomColorCodes.cs`, `WadExtensions.cs`
 
 Testing & debugging tips:
-- Toggle `LoggingService.Instance.VerboseMode` and `ShowHexDumps` for protocol-level logs (visible in the application log panel when enabled).
+- Toggle `LoggingService.Instance.VerboseMode` for protocol-level logs (visible in the application log panel when enabled).
 - `ProtocolConstants` contains default timeout values aligned with `AppConstants`.
 
 ---
@@ -159,7 +159,7 @@ Testing & debugging tips:
 - Master server queries retry automatically (default 3 attempts with configurable delay).
 - Server queries time out after the configured `ServerQueryTimeout` (default 3000 ms). Increase timeout in settings if on a high-latency network.
 - Servers are marked offline after consecutive failures (configurable via `ConsecutiveFailuresBeforeOffline` setting, default 3).
-- If decoding issues appear, enable verbose logging and hexdumps in Settings and review raw payloads in the log panel.
+- If decoding issues appear, enable verbose logging and review the protocol status messages in the log panel.
 - WAD downloads support multiple sources with automatic fallback. If a download fails, alternate sources are tried automatically.
 - The application extracts various archive formats (zip, 7z, rar, tar) using SharpCompress - no external tools required.
 - Commercial IWADs (DOOM, DOOM2, Heretic, etc.) are in the forbidden list and won't be downloaded - you must obtain these yourself.
