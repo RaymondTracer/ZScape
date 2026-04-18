@@ -24,8 +24,33 @@ This audit covered the full workspace for:
 2. `Controls/ResizableListView.cs(662,36)` `CS8619` nullability mismatch
 3. `Views/WadDownloadDialog.axaml.cs(451,51)` `CS0067` event `LogEntry.PropertyChanged` is never used
 
-## Findings Status
+## High-Confidence Findings
 
-No active audit findings remain from this pass.
+### 1. Specification still describes updates as Windows-oriented partial behavior
 
-The previously suspicious master server parser was validated against Doomseeker's Zandronum master client behavior. The implementation and grouped-block packet shape are consistent; the confusion came from underspecified documentation and a misleading local code comment, which have now been corrected.
+Severity: Low
+
+`SPECIFICATION.md` still says the update installation/restart flow is partial because asset packaging is Windows-oriented, but the code and release workflow now publish runtime-specific release archives and select the matching asset for Windows, Linux, and macOS. This is a specification parity gap rather than a runtime bug.
+
+Relevant files:
+
+- `SPECIFICATION.md`
+- `Services/UpdateService.cs`
+- `.github/workflows/build.yml`
+
+### 2. Specification still says alert delivery falls back to logging
+
+Severity: Low
+
+`SPECIFICATION.md` still says native desktop notification delivery is partial and currently falls back to logging, but `NotificationService` now attempts native Windows toasts and falls back to the custom `ServerAlertNotificationWindow` popup path instead. This is stale spec text rather than missing functionality.
+
+Relevant files:
+
+- `SPECIFICATION.md`
+- `Services/NotificationService.cs`
+- `Views/ServerAlertNotificationWindow.cs`
+
+## Recommended Fix Order
+
+1. Update the specification's update-status note to match the current multi-runtime asset packaging and selection behavior.
+2. Update the specification's alert-delivery note to describe native toast plus custom-popup fallback instead of logging-only fallback.
