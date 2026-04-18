@@ -317,10 +317,14 @@ public partial class UnifiedSettingsDialog : Window
         HiddenServerRulesListBox.ItemsSource = _hiddenServerRules;
         _manualServers = new ObservableCollection<string>(Settings.ManualServers.Select(m => m.FullAddress));
         ManualServersListBox.ItemsSource = _manualServers;
+        PopulateFavoriteStarClickBehaviorComboBox();
         UpdateFavoriteRuleButtons();
         
         EnableFavoriteAlertsCheckBox.IsChecked = Settings.EnableFavoriteServerAlerts;
         EnableManualAlertsCheckBox.IsChecked = Settings.EnableManualServerAlerts;
+        PopulateAlertNotificationModeComboBox();
+        PopulateCustomNotificationCornerComboBox();
+        CustomNotificationDurationNumeric.Value = Settings.CustomNotificationDurationSeconds;
         ShowFavoritesColumnCheckBox.IsChecked = Settings.ShowFavoritesColumn;
         AlertMinPlayersNumeric.Value = Settings.AlertMinPlayers;
         AlertIntervalNumeric.Value = Settings.AlertCheckIntervalSeconds;
@@ -355,7 +359,6 @@ public partial class UnifiedSettingsDialog : Window
         // Downloads
         PopulateDownloadBehaviorComboBox();
         PopulateOptionalPwadModeComboBox();
-        PopulateAlertNotificationModeComboBox();
         MaxConcurrentDownloadsNumeric.Value = Settings.MaxConcurrentDownloads;
         MaxConcurrentDomainsNumeric.Value = Settings.MaxConcurrentDomains;
         MaxThreadsPerFileNumeric.Value = Settings.MaxThreadsPerFile;
@@ -421,6 +424,26 @@ public partial class UnifiedSettingsDialog : Window
             AlertNotificationModeComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
         }
         AlertNotificationModeComboBox.SelectedIndex = AppConstants.NotificationDisplayModeLabels.GetIndex(Settings.AlertNotificationMode);
+    }
+
+    private void PopulateCustomNotificationCornerComboBox()
+    {
+        CustomNotificationCornerComboBox.Items.Clear();
+        foreach (var option in AppConstants.CustomNotificationCornerLabels.Options)
+        {
+            CustomNotificationCornerComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
+        }
+        CustomNotificationCornerComboBox.SelectedIndex = AppConstants.CustomNotificationCornerLabels.GetIndex(Settings.CustomNotificationCorner);
+    }
+
+    private void PopulateFavoriteStarClickBehaviorComboBox()
+    {
+        FavoriteStarClickBehaviorComboBox.Items.Clear();
+        foreach (var option in AppConstants.FavoriteStarClickBehaviorLabels.Options)
+        {
+            FavoriteStarClickBehaviorComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
+        }
+        FavoriteStarClickBehaviorComboBox.SelectedIndex = AppConstants.FavoriteStarClickBehaviorLabels.GetIndex(Settings.FavoriteStarClickBehavior);
     }
 
     private void LoadDomainConfigs()
@@ -666,9 +689,12 @@ public partial class UnifiedSettingsDialog : Window
                 Port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 10666
             };
         }).ToList();
+        Settings.FavoriteStarClickBehavior = AppConstants.FavoriteStarClickBehaviorLabels.GetValue(FavoriteStarClickBehaviorComboBox.SelectedIndex);
         Settings.EnableFavoriteServerAlerts = EnableFavoriteAlertsCheckBox.IsChecked ?? false;
         Settings.EnableManualServerAlerts = EnableManualAlertsCheckBox.IsChecked ?? false;
         Settings.AlertNotificationMode = AppConstants.NotificationDisplayModeLabels.GetValue(AlertNotificationModeComboBox.SelectedIndex);
+        Settings.CustomNotificationCorner = AppConstants.CustomNotificationCornerLabels.GetValue(CustomNotificationCornerComboBox.SelectedIndex);
+        Settings.CustomNotificationDurationSeconds = CustomNotificationDurationNumeric.Value;
         Settings.ShowFavoritesColumn = ShowFavoritesColumnCheckBox.IsChecked ?? false;
         Settings.AlertMinPlayers = AlertMinPlayersNumeric.Value;
         Settings.AlertCheckIntervalSeconds = AlertIntervalNumeric.Value;
@@ -736,6 +762,12 @@ public partial class UnifiedSettingsDialog : Window
 
         _settingsService.Save();
         SettingsChanged = true;
+    }
+
+    private void TestCustomNotificationButton_Click(object? sender, RoutedEventArgs e)
+    {
+        var selectedCorner = AppConstants.CustomNotificationCornerLabels.GetValue(CustomNotificationCornerComboBox.SelectedIndex);
+        NotificationService.Instance.ShowCustomPreviewNotification(this, selectedCorner, CustomNotificationDurationNumeric.Value);
     }
 
     private void SaveDomainConfigs()

@@ -17,7 +17,8 @@ internal sealed class ServerAlertNotificationWindow : Window
         string title,
         string message,
         string detail,
-        IReadOnlyList<AlertActionDefinition> actions)
+        IReadOnlyList<AlertActionDefinition> actions,
+        int autoCloseSeconds)
     {
         Width = 420;
         Height = actions.Count > 1 ? 190 : 170;
@@ -105,10 +106,17 @@ internal sealed class ServerAlertNotificationWindow : Window
             }
         };
 
-        _autoCloseTimer.Interval = TimeSpan.FromSeconds(15);
+        var normalizedAutoCloseSeconds = Math.Max(0, autoCloseSeconds);
+        _autoCloseTimer.Interval = TimeSpan.FromSeconds(Math.Max(1, normalizedAutoCloseSeconds));
         _autoCloseTimer.Tick += (_, _) => Close();
 
-        Opened += (_, _) => _autoCloseTimer.Start();
+        Opened += (_, _) =>
+        {
+            if (normalizedAutoCloseSeconds > 0)
+            {
+                _autoCloseTimer.Start();
+            }
+        };
         Closed += (_, _) => _autoCloseTimer.Stop();
     }
 }

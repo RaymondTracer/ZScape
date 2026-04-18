@@ -511,6 +511,9 @@ public class AppSettings
     
     /// <summary>Whether to show only favorite servers.</summary>
     public bool ShowFavoritesOnly { get; set; }
+
+    /// <summary>How clicking the favorite star in the server list should behave for non-favorited servers.</summary>
+    public FavoriteStarClickBehavior FavoriteStarClickBehavior { get; set; } = FavoriteStarClickBehavior.AskEveryTime;
     
     /// <summary>Row height in pixels for the server list. Range: 18-60.</summary>
     public int ServerListRowHeight { get; set; } = 26;
@@ -527,6 +530,12 @@ public class AppSettings
 
     /// <summary>Preferred notification presentation. Native uses OS notifications when available, then falls back to custom popups.</summary>
     public NotificationDisplayMode AlertNotificationMode { get; set; } = NotificationDisplayMode.Native;
+
+    /// <summary>Screen corner used for custom in-app alert popups.</summary>
+    public CustomNotificationCorner CustomNotificationCorner { get; set; } = CustomNotificationCorner.BottomRight;
+
+    /// <summary>How long custom in-app alert popups stay visible in seconds. 0 means until dismissed.</summary>
+    public int CustomNotificationDurationSeconds { get; set; } = 15;
     
     /// <summary>Interval in seconds between alert checks when window is not focused.</summary>
     public int AlertCheckIntervalSeconds { get; set; } = 60;
@@ -679,6 +688,21 @@ public enum HistoryTrackingMode
     
     /// <summary>Track by both address and name. Records exact entries without merging.</summary>
     Both = 2
+}
+
+/// <summary>
+/// Defines how clicking the favorite star should add new favorites.
+/// </summary>
+public enum FavoriteStarClickBehavior
+{
+    /// <summary>Prompt the user to choose address or server name favorite behavior.</summary>
+    AskEveryTime = 0,
+
+    /// <summary>Add explicit IP:Port favorites directly from the star button.</summary>
+    Address = 1,
+
+    /// <summary>Add exact server-name favorites directly from the star button.</summary>
+    ServerName = 2
 }
 
 /// <summary>

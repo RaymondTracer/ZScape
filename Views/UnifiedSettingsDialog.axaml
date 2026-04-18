@@ -169,6 +169,18 @@
                             </Border>
 
                             <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="Star Button Behavior" FontWeight="Bold"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="Preferred action:" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="FavoriteStarClickBehaviorComboBox" Width="280" HorizontalAlignment="Left"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Controls whether clicking the favorite star adds an address favorite, adds an exact server-name favorite, or always asks which kind to create."
+                                               Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10">
                                 <StackPanel Spacing="5">
                                     <TextBlock Text="Server Alerts" FontWeight="Bold"/>
                                     <CheckBox x:Name="EnableFavoriteAlertsCheckBox" Content="Alert when favorite servers come online with players"/>
@@ -177,7 +189,17 @@
                                         <TextBlock Text="Notification style:" VerticalAlignment="Center"/>
                                         <ComboBox x:Name="AlertNotificationModeComboBox" Width="300" HorizontalAlignment="Left"/>
                                     </StackPanel>
-                                    <TextBlock Text="Native uses OS notification services when available and falls back to the custom popup if native delivery is unavailable."
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="Custom popup corner:" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="CustomNotificationCornerComboBox" Width="180" HorizontalAlignment="Left"/>
+                                        <Button Content="Test Custom Popup" Width="140" Click="TestCustomNotificationButton_Click"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="Custom popup duration (seconds):" VerticalAlignment="Center"/>
+                                        <controls:NumericSpinner x:Name="CustomNotificationDurationNumeric" Minimum="0" Maximum="600" Width="70"/>
+                                        <TextBlock Text="0 = unlimited" VerticalAlignment="Center" Foreground="Gray"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Native uses OS notification services when available and falls back to the custom popup if native delivery is unavailable. The corner, duration, and test button apply to the custom in-app popup."
                                                Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
                                     <CheckBox x:Name="ShowFavoritesColumnCheckBox" Content="Show favorites column in server list"/>
                                     <StackPanel Orientation="Horizontal" Spacing="10">

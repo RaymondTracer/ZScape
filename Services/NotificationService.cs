@@ -18,10 +18,16 @@ public class NotificationService : IDisposable
     public static NotificationService Instance => _instance.Value;
 
     private readonly Dictionary<string, (ServerInfo Server, ServerAlertType Type)> _knownServers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<ServerAlertNotificationWindow> _customWindows = [];
+    private readonly List<CustomNotificationEntry> _customWindows = [];
     private WeakReference<Window>? _ownerWindow;
     private bool _nativeActivationSubscribed;
     private bool _disposed;
+
+    private sealed record CustomNotificationEntry(
+        ServerAlertNotificationWindow Window,
+        Window? OwnerWindow,
+        CustomNotificationCorner Corner,
+        bool IsTestAlert);
 
     /// <summary>
     /// Event raised when user activates an alert action.
@@ -44,7 +50,7 @@ public class NotificationService : IDisposable
     /// <param name="server">The server that came online.</param>
     /// <param name="alertType">Whether this is a favorite or manual server alert.</param>
     /// <param name="displayModeOverride">Optional one-shot display mode override that does not alter saved settings.</param>
-    /// <param name="isTestAlert">True when this alert is a debug/test notification and should not trigger game launch behavior.</param>
+    /// <param name="isTestAlert">True when this alert is a test/preview notification and should not trigger game launch behavior.</param>
     public void ShowServerAlert(
         ServerInfo server,
         ServerAlertType alertType,
@@ -94,6 +100,35 @@ public class NotificationService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Shows a custom in-app notification preview without changing saved notification settings.
+    /// </summary>
+    public void ShowCustomPreviewNotification(
+        Window? ownerOverride = null,
+        CustomNotificationCorner? cornerOverride = null,
+        int? autoCloseSecondsOverride = null)
+    {
+        var effectiveCorner = cornerOverride ?? SettingsService.Instance.Settings.CustomNotificationCorner;
+        var effectiveDuration = Math.Max(0, autoCloseSecondsOverride ?? SettingsService.Instance.Settings.CustomNotificationDurationSeconds);
+        var durationText = effectiveDuration == 0
+            ? "It will stay visible until you dismiss it."
+            : $"It will dismiss automatically after {effectiveDuration} second{(effectiveDuration == 1 ? string.Empty : "s")}.";
+        var detail = $"Previewing the in-app popup in the {AppConstants.CustomNotificationCornerLabels.GetLabel(effectiveCorner)} corner. {durationText}";
+
+        ShowCustomNotification(
+            "Custom notification preview",
+            "This is how ZScape's in-app alert popup will appear.",
+            detail,
+            [],
+            server: null,
+            alertType: null,
+            isTestAlert: true,
+            ownerOverride,
+            cornerOverride,
+            autoCloseSecondsOverride,
+            replaceExistingTestNotifications: true);
+    }
+
     private static NotificationDisplayMode GetEffectiveDisplayMode(NotificationDisplayMode? displayModeOverride)
     {
         return displayModeOverride ?? SettingsService.Instance.Settings.AlertNotificationMode;
@@ -112,9 +147,9 @@ public class NotificationService : IDisposable
 
             Dispatcher.UIThread.Post(() =>
             {
-                foreach (var window in _customWindows.ToList())
+                foreach (var entry in _customWindows.ToList())
                 {
-                    window.Close();
+                    entry.Window.Close();
                 }
                 _customWindows.Clear();
             });
@@ -336,7 +371,11 @@ public class NotificationService : IDisposable
         IReadOnlyList<AlertActionDefinition> actions,
         ServerInfo? server,
         ServerAlertType? alertType,
-        bool isTestAlert)
+        bool isTestAlert,
+        Window? ownerOverride = null,
+        CustomNotificationCorner? cornerOverride = null,
+        int? autoCloseSecondsOverride = null,
+        bool replaceExistingTestNotifications = false)
     {
         if (_disposed)
         {
@@ -350,7 +389,17 @@ public class NotificationService : IDisposable
                 return;
             }
 
-            var notificationWindow = new ServerAlertNotificationWindow(title, message, detail, actions);
+            if (replaceExistingTestNotifications)
+            {
+                CloseCustomTestNotifications();
+            }
+
+            var ownerWindow = ResolveOwnerWindow(ownerOverride);
+            var corner = cornerOverride ?? SettingsService.Instance.Settings.CustomNotificationCorner;
+            var autoCloseSeconds = Math.Max(0, autoCloseSecondsOverride ?? SettingsService.Instance.Settings.CustomNotificationDurationSeconds);
+
+            var notificationWindow = new ServerAlertNotificationWindow(title, message, detail, actions, autoCloseSeconds);
+            var entry = new CustomNotificationEntry(notificationWindow, ownerWindow, corner, isTestAlert);
             notificationWindow.ActionInvoked += (_, action) =>
             {
                 AlertClicked?.Invoke(this, new ServerAlertEventArgs(
@@ -362,13 +411,13 @@ public class NotificationService : IDisposable
             };
             notificationWindow.Closed += (_, _) =>
             {
-                _customWindows.Remove(notificationWindow);
+                _customWindows.Remove(entry);
                 PositionCustomWindows();
             };
 
-            _customWindows.Add(notificationWindow);
+            _customWindows.Add(entry);
 
-            if (TryGetOwnerWindow(out var ownerWindow) && ownerWindow != null)
+            if (ownerWindow != null)
             {
                 notificationWindow.Show(ownerWindow);
             }
@@ -388,27 +437,58 @@ public class NotificationService : IDisposable
             return;
         }
 
-        Avalonia.PixelRect? workArea = null;
-        if (TryGetOwnerWindow(out var ownerWindow) && ownerWindow != null)
+        foreach (var group in _customWindows.GroupBy(entry => new { entry.OwnerWindow, entry.Corner }))
         {
-            workArea = ownerWindow.Screens.ScreenFromVisual(ownerWindow)?.WorkingArea;
-            if (workArea == null)
+            var bounds = GetWorkArea(group.Key.OwnerWindow) ?? new Avalonia.PixelRect(0, 0, 1920, 1080);
+            var stackFromLeft = group.Key.Corner is CustomNotificationCorner.TopLeft or CustomNotificationCorner.BottomLeft;
+            var stackFromTop = group.Key.Corner is CustomNotificationCorner.TopLeft or CustomNotificationCorner.TopRight;
+            var left = bounds.X + 16;
+            var right = bounds.X + bounds.Width - 16;
+            var top = bounds.Y + 16;
+            var bottom = bounds.Y + bounds.Height - 16;
+
+            var entries = group.ToList();
+            for (var index = 0; index < entries.Count; index++)
             {
-                workArea = ownerWindow.Screens.Primary?.WorkingArea;
+                var window = entries[index].Window;
+                var width = (int)(window.Width > 0 ? window.Width : Math.Max(window.Bounds.Width, 420));
+                var height = (int)(window.Height > 0 ? window.Height : Math.Max(window.Bounds.Height, 170));
+                var x = stackFromLeft ? left : right - width;
+                var y = stackFromTop
+                    ? top + (index * (height + 12))
+                    : bottom - height - (index * (height + 12));
+                window.Position = new Avalonia.PixelPoint(x, y);
             }
         }
+    }
 
-        var bounds = workArea ?? new Avalonia.PixelRect(0, 0, 1920, 1080);
-        var right = bounds.X + bounds.Width - 16;
-        var top = bounds.Y + 16;
-
-        for (var index = 0; index < _customWindows.Count; index++)
+    private void CloseCustomTestNotifications()
+    {
+        foreach (var entry in _customWindows.Where(entry => entry.IsTestAlert).ToList())
         {
-            var window = _customWindows[index];
-            var width = (int)(window.Width > 0 ? window.Width : Math.Max(window.Bounds.Width, 420));
-            var height = (int)(window.Height > 0 ? window.Height : Math.Max(window.Bounds.Height, 170));
-            window.Position = new Avalonia.PixelPoint(right - width, top + (index * (height + 12)));
+            entry.Window.Close();
         }
+    }
+
+    private Window? ResolveOwnerWindow(Window? ownerOverride)
+    {
+        if (ownerOverride != null)
+        {
+            return ownerOverride;
+        }
+
+        return TryGetOwnerWindow(out var ownerWindow) ? ownerWindow : null;
+    }
+
+    private static Avalonia.PixelRect? GetWorkArea(Window? ownerWindow)
+    {
+        if (ownerWindow == null)
+        {
+            return null;
+        }
+
+        return ownerWindow.Screens.ScreenFromVisual(ownerWindow)?.WorkingArea
+            ?? ownerWindow.Screens.Primary?.WorkingArea;
     }
 
     private bool TryGetOwnerWindow(out Window? ownerWindow)
@@ -466,6 +546,17 @@ public enum NotificationDisplayMode
 {
     Native,
     Custom
+}
+
+/// <summary>
+/// Screen corner used for custom in-app notification popups.
+/// </summary>
+public enum CustomNotificationCorner
+{
+    TopRight,
+    TopLeft,
+    BottomRight,
+    BottomLeft
 }
 
 /// <summary>

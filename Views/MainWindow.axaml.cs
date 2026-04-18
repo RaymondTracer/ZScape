@@ -61,8 +61,8 @@ public partial class MainWindow : Window
 
     // Custom control references (initialized after InitializeComponent)
     private LogPanelControl? _logControl;
-    private MenuItem? ToggleFavoriteMenuItem;
-    private NotificationDebugWindow? _notificationDebugWindow;
+    private MenuItem? ToggleAddressFavoriteMenuItem;
+    private MenuItem? ToggleNameFavoriteMenuItem;
 
     // Observable collections for data binding
     public ObservableCollection<ServerViewModel> Servers { get; private set; } = [];
@@ -84,11 +84,6 @@ public partial class MainWindow : Window
         DataContext = this;
 
         InitializeComponent();
-
-    #if DEBUG
-        NotificationDebugMenuItem.IsVisible = true;
-        NotificationDebugSeparator.IsVisible = true;
-    #endif
 
         // Set ItemsSource for controls (backup in case XAML binding didn't work)
         SetupItemsSources();
@@ -369,9 +364,13 @@ public partial class MainWindow : Window
         refreshItem.Click += RefreshServerMenuItem_Click;
         contextMenu.Items.Add(refreshItem);
 
-        ToggleFavoriteMenuItem = new MenuItem { Header = "_Add to Favorites" };
-        ToggleFavoriteMenuItem.Click += ToggleFavoriteMenuItem_Click;
-        contextMenu.Items.Add(ToggleFavoriteMenuItem);
+        ToggleAddressFavoriteMenuItem = new MenuItem { Header = "Add _Address to Favorites" };
+        ToggleAddressFavoriteMenuItem.Click += ToggleFavoriteAddressMenuItem_Click;
+        contextMenu.Items.Add(ToggleAddressFavoriteMenuItem);
+
+        ToggleNameFavoriteMenuItem = new MenuItem { Header = "Add Server _Name to Favorites" };
+        ToggleNameFavoriteMenuItem.Click += ToggleFavoriteNameMenuItem_Click;
+        contextMenu.Items.Add(ToggleNameFavoriteMenuItem);
 
         contextMenu.Items.Add(new Separator());
 
@@ -1039,18 +1038,183 @@ public partial class MainWindow : Window
     {
         if (_settings.Settings.FavoriteServers.Contains(address))
         {
-            _settings.Settings.FavoriteServers.Remove(address);
-            _logger.Info($"Removed explicit favorite: {address}");
+            RemoveExplicitFavorite(address);
         }
         else
         {
-            _settings.Settings.FavoriteServers.Add(address);
-            _logger.Info($"Added explicit favorite: {address}");
+            AddExplicitFavorite(address);
+        }
+    }
+
+    private void AddExplicitFavorite(string address)
+    {
+        if (!_settings.Settings.FavoriteServers.Add(address))
+        {
+            return;
         }
 
+        _logger.Info($"Added explicit favorite: {address}");
         _settings.Save();
         UpdateServerList();
     }
+
+    private void RemoveExplicitFavorite(string address)
+    {
+        if (!_settings.Settings.FavoriteServers.Remove(address))
+        {
+            return;
+        }
+
+        _logger.Info($"Removed explicit favorite: {address}");
+        _settings.Save();
+        UpdateServerList();
+    }
+
+    private bool HasExactFavoriteNameRule(ServerInfo server)
+    {
+        return HasExactFavoriteNameRule(ServerRuleUtility.GetComparableServerName(server));
+    }
+
+    private bool HasExactFavoriteNameRule(string comparableName)
+    {
+        if (string.IsNullOrWhiteSpace(comparableName))
+        {
+            return false;
+        }
+
+        return _settings.Settings.FavoriteServerNameRules.Any(rule =>
+            rule.Mode == TextMatchMode.Exact &&
+            rule.Pattern.Equals(comparableName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void AddExactFavoriteNameRule(ServerInfo server, bool rememberChoice = false)
+    {
+        var comparableName = ServerRuleUtility.GetComparableServerName(server);
+        if (string.IsNullOrWhiteSpace(comparableName))
+        {
+            return;
+        }
+
+        var changed = false;
+        if (!HasExactFavoriteNameRule(comparableName))
+        {
+            _settings.Settings.FavoriteServerNameRules.Add(new TextMatchRule
+            {
+                Pattern = comparableName,
+                Mode = TextMatchMode.Exact
+            });
+            _logger.Info($"Added favorite name rule: {comparableName}");
+            changed = true;
+        }
+
+        if (rememberChoice && _settings.Settings.FavoriteStarClickBehavior != FavoriteStarClickBehavior.ServerName)
+        {
+            _settings.Settings.FavoriteStarClickBehavior = FavoriteStarClickBehavior.ServerName;
+            _logger.Info("Favorite star clicks will now use server name favorites by default");
+            changed = true;
+        }
+
+        if (changed)
+        {
+            _settings.Save();
+            UpdateServerList();
+        }
+    }
+
+    private void RemoveExactFavoriteNameRule(ServerInfo server)
+    {
+        RemoveExactFavoriteNameRule(ServerRuleUtility.GetComparableServerName(server));
+    }
+
+    private void RemoveExactFavoriteNameRule(string comparableName)
+    {
+        if (string.IsNullOrWhiteSpace(comparableName))
+        {
+            return;
+        }
+
+        var removed = _settings.Settings.FavoriteServerNameRules.RemoveAll(rule =>
+            rule.Mode == TextMatchMode.Exact &&
+            rule.Pattern.Equals(comparableName, StringComparison.OrdinalIgnoreCase));
+
+        if (removed <= 0)
+        {
+            return;
+        }
+
+        _logger.Info($"Removed favorite name rule: {comparableName}");
+        _settings.Save();
+        UpdateServerList();
+    }
+
+    private void FavoriteByAddress(ServerInfo server, bool rememberChoice = false)
+    {
+        var address = ServerRuleUtility.GetServerAddress(server);
+        var changed = false;
+
+        if (_settings.Settings.FavoriteServers.Add(address))
+        {
+            _logger.Info($"Added explicit favorite: {address}");
+            changed = true;
+        }
+
+        if (rememberChoice && _settings.Settings.FavoriteStarClickBehavior != FavoriteStarClickBehavior.Address)
+        {
+            _settings.Settings.FavoriteStarClickBehavior = FavoriteStarClickBehavior.Address;
+            _logger.Info("Favorite star clicks will now use address favorites by default");
+            changed = true;
+        }
+
+        if (changed)
+        {
+            _settings.Save();
+            UpdateServerList();
+        }
+    }
+
+    private void ShowFavoriteChoiceMenu(Button button, ServerInfo server)
+    {
+        var comparableName = ServerRuleUtility.GetComparableServerName(server);
+        var contextMenu = new ContextMenu();
+
+        var favoriteAddressItem = new MenuItem { Header = "Favorite This _Address" };
+        favoriteAddressItem.Click += (_, _) => FavoriteByAddress(server);
+        contextMenu.Items.Add(favoriteAddressItem);
+
+        var favoriteNameItem = new MenuItem
+        {
+            Header = "Favorite This Server _Name",
+            IsEnabled = !string.IsNullOrWhiteSpace(comparableName)
+        };
+        favoriteNameItem.Click += (_, _) => AddExactFavoriteNameRule(server);
+        contextMenu.Items.Add(favoriteNameItem);
+
+        contextMenu.Items.Add(new Separator());
+
+        var favoriteAddressAlwaysItem = new MenuItem { Header = "Favorite Address and _Don't Ask Again" };
+        favoriteAddressAlwaysItem.Click += (_, _) => FavoriteByAddress(server, rememberChoice: true);
+        contextMenu.Items.Add(favoriteAddressAlwaysItem);
+
+        var favoriteNameAlwaysItem = new MenuItem
+        {
+            Header = "Favorite Server Name and D_on't Ask Again",
+            IsEnabled = !string.IsNullOrWhiteSpace(comparableName)
+        };
+        favoriteNameAlwaysItem.Click += (_, _) => AddExactFavoriteNameRule(server, rememberChoice: true);
+        contextMenu.Items.Add(favoriteNameAlwaysItem);
+
+        contextMenu.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(button.ContextMenu, contextMenu))
+            {
+                button.ContextMenu = null;
+            }
+        };
+
+        button.ContextMenu = contextMenu;
+        contextMenu.Open(button);
+    }
+
 
     private void UpdateStatusBar()
     {
@@ -1440,36 +1604,6 @@ public partial class MainWindow : Window
         await aboutWindow.ShowDialog(this);
     }
 
-    private void NotificationDebugMenuItem_Click(object? sender, RoutedEventArgs e)
-    {
-#if DEBUG
-        if (_notificationDebugWindow?.IsVisible == true)
-        {
-            _notificationDebugWindow.Activate();
-            return;
-        }
-
-        _notificationDebugWindow = new NotificationDebugWindow(
-            GetNotificationDebugPrimaryServer,
-            GetNotificationDebugServers);
-        _notificationDebugWindow.Closed += (_, _) => _notificationDebugWindow = null;
-        _notificationDebugWindow.Show(this);
-#endif
-    }
-
-    private ServerInfo? GetNotificationDebugPrimaryServer()
-    {
-        return _selectedServer ?? _browserService.Servers.FirstOrDefault();
-    }
-
-    private IReadOnlyList<ServerInfo> GetNotificationDebugServers()
-    {
-        return _browserService.Servers
-            .Where(server => server.IsOnline)
-            .Take(5)
-            .ToList();
-    }
-
     #endregion
 
     #region Event Handlers - Toolbar
@@ -1646,20 +1780,72 @@ public partial class MainWindow : Window
         UpdateServerList();
     }
 
-    private void ToggleFavoriteMenuItem_Click(object? sender, RoutedEventArgs e)
+    private void ToggleFavoriteAddressMenuItem_Click(object? sender, RoutedEventArgs e)
     {
         if (_selectedServer == null) return;
 
         ToggleExplicitFavorite(ServerRuleUtility.GetServerAddress(_selectedServer));
     }
 
+    private void ToggleFavoriteNameMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_selectedServer == null) return;
+
+        if (HasExactFavoriteNameRule(_selectedServer))
+        {
+            RemoveExactFavoriteNameRule(_selectedServer);
+        }
+        else
+        {
+            AddExactFavoriteNameRule(_selectedServer);
+        }
+    }
+
     private void FavoriteButton_Click(object? sender, RoutedEventArgs e)
     {
-        // Get the ServerViewModel from the button's DataContext
-        if (sender is Button button && button.DataContext is ServerViewModel vm)
+        if (sender is not Button button || button.DataContext is not ServerViewModel vm)
         {
-            ToggleExplicitFavorite(vm.AddressDisplay);
+            return;
         }
+
+        var server = vm.Server;
+        var address = ServerRuleUtility.GetServerAddress(server);
+
+        if (_settings.Settings.FavoriteServers.Contains(address))
+        {
+            RemoveExplicitFavorite(address);
+            e.Handled = true;
+            return;
+        }
+
+        if (HasExactFavoriteNameRule(server))
+        {
+            RemoveExactFavoriteNameRule(server);
+            e.Handled = true;
+            return;
+        }
+
+        if (GetFavoriteMatch(server).IsRuleFavorite)
+        {
+            ShowFavoriteChoiceMenu(button, server);
+            e.Handled = true;
+            return;
+        }
+
+        switch (_settings.Settings.FavoriteStarClickBehavior)
+        {
+            case FavoriteStarClickBehavior.Address:
+                FavoriteByAddress(server);
+                break;
+            case FavoriteStarClickBehavior.ServerName:
+                AddExactFavoriteNameRule(server);
+                break;
+            default:
+                ShowFavoriteChoiceMenu(button, server);
+                break;
+        }
+
+        e.Handled = true;
     }
 
     private async void AddServerMenuItem_Click(object? sender, RoutedEventArgs e)
@@ -1869,15 +2055,27 @@ public partial class MainWindow : Window
 
     private void ServerContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        // Update the favorite menu item text based on current server state
-        if (_selectedServer != null && ToggleFavoriteMenuItem != null)
+        if (_selectedServer != null)
         {
-            var favoriteMatch = GetFavoriteMatch(_selectedServer);
-            ToggleFavoriteMenuItem.Header = favoriteMatch.IsExplicitAddressFavorite
-                ? "_Remove from Favorites"
-                : favoriteMatch.IsRuleFavorite
-                    ? "_Add Address to Favorites"
-                    : "_Add to Favorites";
+            if (ToggleAddressFavoriteMenuItem != null)
+            {
+                var favoriteMatch = GetFavoriteMatch(_selectedServer);
+                ToggleAddressFavoriteMenuItem.Header = favoriteMatch.IsExplicitAddressFavorite
+                    ? "_Remove Address Favorite"
+                    : "Add _Address to Favorites";
+            }
+
+            if (ToggleNameFavoriteMenuItem != null)
+            {
+                var comparableName = ServerRuleUtility.GetComparableServerName(_selectedServer);
+                var hasExactNameRule = HasExactFavoriteNameRule(comparableName);
+                ToggleNameFavoriteMenuItem.Header = hasExactNameRule
+                    ? "Remove Server _Name Favorite"
+                    : GetFavoriteMatch(_selectedServer).IsRuleFavorite
+                        ? "Add Exact Server _Name Favorite"
+                        : "Add Server _Name to Favorites";
+                ToggleNameFavoriteMenuItem.IsEnabled = !string.IsNullOrWhiteSpace(comparableName);
+            }
         }
     }
 

@@ -264,6 +264,55 @@ public static class AppConstants
     }
 
     /// <summary>
+    /// Display labels for CustomNotificationCorner enum values.
+    /// </summary>
+    public static class CustomNotificationCornerLabels
+    {
+        public static readonly (Services.CustomNotificationCorner Value, string Label)[] Options =
+        [
+            (Services.CustomNotificationCorner.TopRight, "Top right"),
+            (Services.CustomNotificationCorner.TopLeft, "Top left"),
+            (Services.CustomNotificationCorner.BottomRight, "Bottom right"),
+            (Services.CustomNotificationCorner.BottomLeft, "Bottom left")
+        ];
+
+        public static string GetLabel(Services.CustomNotificationCorner corner) =>
+            Options.FirstOrDefault(o => o.Value == corner).Label ?? GetLabel(Services.CustomNotificationCorner.BottomRight);
+
+        public static Services.CustomNotificationCorner GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Services.CustomNotificationCorner.BottomRight;
+
+        public static int GetIndex(Services.CustomNotificationCorner corner) =>
+            Array.FindIndex(Options, o => o.Value == corner) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Services.CustomNotificationCorner.BottomRight);
+    }
+
+    /// <summary>
+    /// Display labels for FavoriteStarClickBehavior enum values.
+    /// </summary>
+    public static class FavoriteStarClickBehaviorLabels
+    {
+        public static readonly (Services.FavoriteStarClickBehavior Value, string Label)[] Options =
+        [
+            (Services.FavoriteStarClickBehavior.AskEveryTime, "Always ask when clicking the star"),
+            (Services.FavoriteStarClickBehavior.Address, "Prefer address favorites"),
+            (Services.FavoriteStarClickBehavior.ServerName, "Prefer server name favorites")
+        ];
+
+        public static string GetLabel(Services.FavoriteStarClickBehavior behavior) =>
+            Options.FirstOrDefault(o => o.Value == behavior).Label ?? GetLabel(Services.FavoriteStarClickBehavior.AskEveryTime);
+
+        public static Services.FavoriteStarClickBehavior GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Services.FavoriteStarClickBehavior.AskEveryTime;
+
+        public static int GetIndex(Services.FavoriteStarClickBehavior behavior) =>
+            Array.FindIndex(Options, o => o.Value == behavior) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Services.FavoriteStarClickBehavior.AskEveryTime);
+    }
+
+    /// <summary>
     /// Display labels for TextMatchMode enum values.
     /// </summary>
     public static class TextMatchModeLabels
