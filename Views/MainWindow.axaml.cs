@@ -1832,95 +1832,98 @@ public partial class MainWindow : Window
 
     private async Task LaunchServerAsync(ServerInfo server)
     {
-        var launcher = GameLauncher.Instance;
-
-        // Check if executable is configured
-        if (!launcher.IsExecutableConfigured(server))
+        try
         {
-            var exeType = server.IsTestingServer ? "Testing versions folder" : "Stable executable";
-            _logger.Warning($"Zandronum {exeType} not configured");
+            var launcher = GameLauncher.Instance;
 
-            var dialog = new Window
+            // Check if executable is configured
+            if (!launcher.IsExecutableConfigured(server))
             {
-                Title = "Zandronum Path Not Set",
-                Width = 400,
-                Height = 150,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Content = new StackPanel
+                var exeType = server.IsTestingServer ? "Testing versions folder" : "Stable executable";
+                _logger.Warning($"Zandronum {exeType} not configured");
+
+                var dialog = new Window
                 {
-                    Margin = new Thickness(20),
-                    Spacing = 15,
-                    Children =
+                    Title = "Zandronum Path Not Set",
+                    Width = 400,
+                    Height = 150,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Content = new StackPanel
                     {
-                        new TextBlock { Text = $"Zandronum {exeType} is not configured.\n\nWould you like to configure it now in Settings?", TextWrapping = TextWrapping.Wrap },
-                        new StackPanel
+                        Margin = new Thickness(20),
+                        Spacing = 15,
+                        Children =
                         {
-                            Orientation = Avalonia.Layout.Orientation.Horizontal,
-                            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                            Spacing = 10,
-                            Children =
+                            new TextBlock { Text = $"Zandronum {exeType} is not configured.\n\nWould you like to configure it now in Settings?", TextWrapping = TextWrapping.Wrap },
+                            new StackPanel
                             {
-                                new Button { Content = "Yes", Width = 80 },
-                                new Button { Content = "No", Width = 80 }
+                                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                                Spacing = 10,
+                                Children =
+                                {
+                                    new Button { Content = "Yes", Width = 80 },
+                                    new Button { Content = "No", Width = 80 }
+                                }
                             }
                         }
                     }
-                }
-            };
+                };
 
-            var openSettings = false;
-            if (dialog.Content is StackPanel sp && sp.Children.LastOrDefault() is StackPanel buttons)
-            {
-                if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { openSettings = true; dialog.Close(); };
-                if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
+                var openSettings = false;
+                if (dialog.Content is StackPanel sp && sp.Children.LastOrDefault() is StackPanel buttons)
+                {
+                    if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { openSettings = true; dialog.Close(); };
+                    if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
+                }
+
+                await dialog.ShowDialog(this);
+
+                if (openSettings)
+                {
+                    var settingsDialog = new UnifiedSettingsDialog();
+                    await settingsDialog.ShowDialog(this);
+                    if (settingsDialog.SettingsChanged)
+                    {
+                        LoadSettings(restoreWindowLayout: false);
+                        _wadManager.RefreshCache();
+                        UpdateRowHeights();
+                        UpdateServerList();
+                    }
+                }
+                return;
             }
 
-            await dialog.ShowDialog(this);
-
-            if (openSettings)
+            // For testing servers, check if the specific version is installed
+            if (server.IsTestingServer && !launcher.IsTestingVersionInstalled(server))
             {
-                var settingsDialog = new UnifiedSettingsDialog();
-                await settingsDialog.ShowDialog(this);
-                if (settingsDialog.SettingsChanged)
+                var hasArchive = !string.IsNullOrEmpty(server.TestingArchive);
+
+                if (hasArchive)
                 {
-                    LoadSettings(restoreWindowLayout: false);
-                    _wadManager.RefreshCache();
-                    UpdateRowHeights();
-                    UpdateServerList();
-                }
-            }
-            return;
-        }
+                    var confirmDownload = await ShowConfirmDialogAsync(
+                        "Testing Version Not Found",
+                        $"Testing version '{server.GameVersion}' is not installed.\n\nWould you like to download it now?");
 
-        // For testing servers, check if the specific version is installed
-        if (server.IsTestingServer && !launcher.IsTestingVersionInstalled(server))
-        {
-            var hasArchive = !string.IsNullOrEmpty(server.TestingArchive);
-
-            if (hasArchive)
-            {
-                var confirmDownload = await ShowConfirmDialogAsync(
-                    "Testing Version Not Found",
-                    $"Testing version '{server.GameVersion}' is not installed.\n\nWould you like to download it now?");
-
-                if (confirmDownload)
-                {
-                    if (!await DownloadTestingVersionAsync(server))
+                    if (confirmDownload)
+                    {
+                        if (!await DownloadTestingVersionAsync(server))
+                        {
+                            return;
+                        }
+                    }
+                    else
                     {
                         return;
                     }
                 }
                 else
                 {
+                    _logger.Warning($"Testing version '{server.GameVersion}' not installed and no download URL available");
                     return;
                 }
             }
-            else
-            {
-                _logger.Warning($"Testing version '{server.GameVersion}' not installed and no download URL available");
-                return;
-            }
-        }
+
 
         var pendingWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
         var optionalCandidateWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
@@ -2031,9 +2034,13 @@ public partial class MainWindow : Window
             }
             else if (optionalPwadMode == OptionalPwadDownloadMode.AskEachTime)
             {
+                var requiredSelectionWads = pendingWads.Values.Where(wad => !wad.IsOptional).OrderBy(wad => wad.FileName).ToList();
+                var optionalSelectionWads = optionalCandidateWads.Values.OrderBy(wad => wad.FileName).ToList();
+                _logger.Info($"Showing optional WAD selection dialog for {server.Address}:{server.Port}: {requiredSelectionWads.Count} required, {optionalSelectionWads.Count} optional.");
+
                 var selectionDialog = new OptionalWadSelectionDialog(
-                    pendingWads.Values.Where(wad => !wad.IsOptional).OrderBy(wad => wad.FileName).ToList(),
-                    optionalCandidateWads.Values.OrderBy(wad => wad.FileName).ToList(),
+                    requiredSelectionWads,
+                    optionalSelectionWads,
                     skippedOptionalPwads,
                     allowOptionalSelection: true);
 
@@ -2075,6 +2082,8 @@ public partial class MainWindow : Window
                 }
                 else
                 {
+                    _logger.Info($"Showing WAD review dialog for {server.Address}:{server.Port}: {requiredWads.Count} required, {optionalWads.Count} optional.");
+
                     var reviewDialog = new OptionalWadSelectionDialog(
                         requiredWads,
                         optionalWads,
@@ -2135,26 +2144,32 @@ public partial class MainWindow : Window
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
-        // Prompt for passwords if needed
-        string? connectPassword = null;
-        string? joinPassword = null;
+            // Prompt for passwords if needed
+            string? connectPassword = null;
+            string? joinPassword = null;
 
-        if (server.IsPassworded)
-        {
-            connectPassword = await PromptForPasswordAsync("Connect Password", "This server requires a password to connect:");
-            if (connectPassword == null) return;
+            if (server.IsPassworded)
+            {
+                connectPassword = await PromptForPasswordAsync("Connect Password", "This server requires a password to connect:");
+                if (connectPassword == null) return;
+            }
+
+            if (server.RequiresJoinPassword)
+            {
+                joinPassword = await PromptForPasswordAsync("Join Password", "This server requires a password to join the game:");
+                if (joinPassword == null) return;
+            }
+
+            // Launch the game
+            if (launcher.LaunchGame(server, connectPassword, joinPassword, optionalWadsExcludedFromLaunch))
+            {
+                _logger.Success($"Launched connection to {server.Name}");
+            }
         }
-
-        if (server.RequiresJoinPassword)
+        catch (Exception ex)
         {
-            joinPassword = await PromptForPasswordAsync("Join Password", "This server requires a password to join the game:");
-            if (joinPassword == null) return;
-        }
-
-        // Launch the game
-        if (launcher.LaunchGame(server, connectPassword, joinPassword, optionalWadsExcludedFromLaunch))
-        {
-            _logger.Success($"Launched connection to {server.Name}");
+            _logger.Exception($"Launch flow failed for {server.Address}:{server.Port}", ex);
+            _logger.Error($"Join failed unexpectedly. See {_logger.LogFilePath} for details.");
         }
     }
 

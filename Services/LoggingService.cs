@@ -7,17 +7,39 @@ public class LoggingService
 {
     public static LoggingService Instance { get; } = new();
 
+    private readonly object _fileLock = new();
+    private readonly string _logFilePath = Path.Combine(AppContext.BaseDirectory, "runtime.log");
+
     public event EventHandler<LogEntry>? LogAdded;
     
     public bool VerboseMode { get; set; } = false;
     public bool ShowHexDumps { get; set; } = false;
 
-    private LoggingService() { }
+    private LoggingService()
+    {
+        try
+        {
+            File.WriteAllText(_logFilePath, $"=== ZScape runtime log started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}");
+        }
+        catch
+        {
+            // Best-effort logging only.
+        }
+    }
+
+    public string LogFilePath => _logFilePath;
 
     public void Log(string message, LogLevel level = LogLevel.Info)
     {
         var entry = new LogEntry(message, level, DateTime.Now);
+        WriteToFile(entry.ToString());
         LogAdded?.Invoke(this, entry);
+    }
+
+    public void Exception(string context, Exception ex, LogLevel level = LogLevel.Error)
+    {
+        var prefix = string.IsNullOrWhiteSpace(context) ? "Unhandled exception" : context;
+        Log($"{prefix}{Environment.NewLine}{ex}", level);
     }
 
     public void Verbose(string message)
@@ -69,6 +91,21 @@ public class LoggingService
     public void Warning(string message) => Log(message, LogLevel.Warning);
     public void Error(string message) => Log(message, LogLevel.Error);
     public void Success(string message) => Log(message, LogLevel.Success);
+
+    private void WriteToFile(string message)
+    {
+        try
+        {
+            lock (_fileLock)
+            {
+                File.AppendAllText(_logFilePath, message + Environment.NewLine);
+            }
+        }
+        catch
+        {
+            // Best-effort logging only.
+        }
+    }
 }
 
 public class LogEntry : EventArgs

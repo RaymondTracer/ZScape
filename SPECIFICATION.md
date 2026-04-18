@@ -25,7 +25,7 @@ Status language used in this document:
 - **ServerQueryClient**: Queries individual servers, handles segmented responses and reassembly, and parses server payloads into `ServerInfo`.
 - **ServerBrowserService**: Coordinates master refresh and batch server queries with pipelined processing, keeps an in-memory server store, and provides filtering and summary metrics.
 - **SettingsService**: Loads/saves `AppSettings` to `settings.json`, connection history to `history.json`, and domain thread settings to `domain-settings.json` in the application base directory.
-- **LoggingService**: Singleton logging with verbose logging and optional hexdump plumbing used across the protocol and UI layers.
+- **LoggingService**: Singleton logging with verbose logging, a per-run `runtime.log` file beside the app binaries, and optional hexdump plumbing used across the protocol and UI layers.
 - **WadManager**: Manages WAD file discovery across configured search paths with hash verification and archived version management.
 - **WadDownloader**: Multi-threaded WAD downloading with parallel URL discovery, idgames Archive integration, and web search fallback.
 - **GameLauncher**: Handles launching Zandronum with proper arguments, WAD hash verification, and testing build downloads.
@@ -553,6 +553,7 @@ Note: `CreateServerChallenge()` currently writes `ExtendedQueryFlags.StandardQue
 ### Logging & Verbose Mode
 - `LoggingService.Instance` controls `VerboseMode` and `ShowHexDumps`.
 - The current Avalonia main window applies `AppSettings.VerboseLogging` to `LoggingService.VerboseMode`.
+- Runtime log output is written to `runtime.log` under `AppContext.BaseDirectory`, and unhandled startup/UI/task exceptions are recorded there.
 - `ShowHexDumps` remains part of the persisted settings and logger API, but current main-window UI wiring for toggling/applying it is still partial.
 - `LogHexDump` returns early if `VerboseMode` is false, `ShowHexDumps` is false, or if the provided `data` is null or empty. When enabled, protocol clients output formatted hex + ASCII blocks for troubleshooting.
 
