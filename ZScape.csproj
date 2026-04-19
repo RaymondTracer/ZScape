@@ -14,7 +14,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>packaging\assets\ZScape.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
-    <RuntimeIdentifiers>win-x64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">

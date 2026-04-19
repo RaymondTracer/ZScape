@@ -16,6 +16,8 @@ jobs:
         include:
         - os: windows-latest
           rid: win-x64
+        - os: windows-latest
+          rid: win-arm64
         - os: ubuntu-latest
           rid: linux-x64
         - os: ubuntu-latest
