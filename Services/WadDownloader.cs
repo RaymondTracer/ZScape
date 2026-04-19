@@ -92,11 +92,11 @@ public partial class WadDownloader : IDisposable
     /// </summary>
     public static readonly List<string> DefaultSites =
     [
-        "https://action.fapnow.xyz/zandronum/download.php?file=%WadName%",
-        "https://allfearthesentinel.com/zandronum/download.php?file=%WadName%",
-        "https://euroboros.net/zandronum/download.php?file=%WadName%",
-        "https://audrealms.org/zandronum/download.php?file=%WadName%",
-        "https://pizza-doom.it/wads/download.php?file=%WadName%",
+        "https://static.action.fapnow.xyz/wads/%WadName%",
+        "https://static.allfearthesentinel.com/wads/%WadName%",
+        "https://euroboros.net/zandronum/wads/%WadName%",
+        "https://wads.pizza-doom.it/%WadName%",
+        "https://static.audrealms.org/wads/%WadName%",
         "https://wads.firestick.games/%WadName%",
         "https://doomshack.org/wads/%WadName%",
     ];
