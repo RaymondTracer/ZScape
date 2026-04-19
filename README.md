@@ -2,7 +2,7 @@
 
 ZScape is an Avalonia desktop server browser for Zandronum. It queries the Zandronum master server, fetches detailed data from individual servers, helps locate missing WADs, and can launch either stable or testing Zandronum builds directly.
 
-The project targets .NET 10. It builds on Windows, Linux, and macOS, with the most polished integration currently on Windows.
+The project targets .NET 10 and supports Windows, Linux, and macOS.
 
 ---
 
@@ -28,7 +28,7 @@ The project targets .NET 10. It builds on Windows, Linux, and macOS, with the mo
 - Launch directly into Zandronum from the server list
 - Track favorites by server address or exact server name, plus add manual servers not present in the master list
 - Keep connection history and copy connect commands from the UI
-- Receive server alerts through native Windows notifications or custom in-app popup notifications
+- Receive server alerts through native Windows, Linux, or macOS notifications, or custom in-app popup notifications
 
 ### Filtering and Discovery
 - Filter by game mode, player counts, ping, map, IWAD, PWADs, and country
@@ -62,8 +62,8 @@ The project targets .NET 10. It builds on Windows, Linux, and macOS, with the mo
 
 Platform notes:
 
-- Windows is the primary runtime target and includes native toast notifications plus dark title-bar integration.
-- Linux and macOS builds are supported by the project file, but some desktop integrations are necessarily platform-specific.
+- Windows, Linux, and macOS are all supported runtime targets.
+- Native integrations are platform-specific: Windows uses toast notifications and dark title bars, Linux uses freedesktop desktop notifications, and macOS uses Notification Center notifications.
 
 ---
 

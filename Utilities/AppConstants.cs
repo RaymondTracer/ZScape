@@ -247,8 +247,8 @@ public static class AppConstants
     {
         public static readonly (Services.NotificationDisplayMode Value, string Label)[] Options =
         [
-            (Services.NotificationDisplayMode.Native, "Native notifications (fall back to custom popup)"),
-            (Services.NotificationDisplayMode.Custom, "Custom in-app popup notifications")
+            (Services.NotificationDisplayMode.Native, "Native OS notifications (fall back to custom popup)"),
+            (Services.NotificationDisplayMode.Custom, "Custom in-app popup notifications with action buttons")
         ];
 
         public static string GetLabel(Services.NotificationDisplayMode mode) =>

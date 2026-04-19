@@ -19,6 +19,8 @@ public class NotificationService : IDisposable
 
     private readonly Dictionary<string, (ServerInfo Server, ServerAlertType Type)> _knownServers = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<CustomNotificationEntry> _customWindows = [];
+    private readonly LinuxDesktopNotificationClient? _linuxNotificationClient;
+    private readonly MacOsNotificationClient? _macOsNotificationClient;
     private WeakReference<Window>? _ownerWindow;
     private bool _nativeActivationSubscribed;
     private bool _disposed;
@@ -37,6 +39,15 @@ public class NotificationService : IDisposable
     private NotificationService()
     {
         TrySubscribeNativeActivation();
+
+        if (OperatingSystem.IsLinux())
+        {
+            _linuxNotificationClient = new LinuxDesktopNotificationClient(RaiseAlertClicked);
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            _macOsNotificationClient = new MacOsNotificationClient();
+        }
     }
 
     public void AttachWindow(Window owner)
@@ -145,6 +156,8 @@ public class NotificationService : IDisposable
                 _nativeActivationSubscribed = false;
             }
 
+            _linuxNotificationClient?.Dispose();
+
             Dispatcher.UIThread.Post(() =>
             {
                 foreach (var entry in _customWindows.ToList())
@@ -155,6 +168,11 @@ public class NotificationService : IDisposable
             });
         }
         GC.SuppressFinalize(this);
+    }
+
+    private void RaiseAlertClicked(ServerAlertEventArgs args)
+    {
+        AlertClicked?.Invoke(this, args);
     }
 
     private void TrySubscribeNativeActivation()
@@ -240,8 +258,39 @@ public class NotificationService : IDisposable
         NotificationDisplayMode effectiveMode,
         bool isTestAlert)
     {
+        if (_disposed || effectiveMode != NotificationDisplayMode.Native)
+        {
+            return false;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return TryShowWindowsNativeServerAlert(server, alertType, isTestAlert);
+        }
+
+        var request = CreateSingleNativeNotificationRequest(server, alertType, isTestAlert);
+
+        if (OperatingSystem.IsLinux() && _linuxNotificationClient != null)
+        {
+            _ = ShowLinuxNativeAlertAsync(request);
+            return true;
+        }
+
+        if (OperatingSystem.IsMacOS() && _macOsNotificationClient != null)
+        {
+            return _macOsNotificationClient.TryShow(request);
+        }
+
+        return false;
+    }
+
+    private bool TryShowWindowsNativeServerAlert(
+        ServerInfo server,
+        ServerAlertType alertType,
+        bool isTestAlert)
+    {
 #if WINDOWS
-        if (_disposed || !OperatingSystem.IsWindows() || effectiveMode != NotificationDisplayMode.Native)
+        if (_disposed || !OperatingSystem.IsWindows())
         {
             return false;
         }
@@ -296,8 +345,38 @@ public class NotificationService : IDisposable
         NotificationDisplayMode effectiveMode,
         bool isTestAlert)
     {
+        if (_disposed || effectiveMode != NotificationDisplayMode.Native)
+        {
+            return false;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return TryShowWindowsNativeMultipleServersAlert(servers, isTestAlert);
+        }
+
+        var request = CreateMultipleNativeNotificationRequest(servers, isTestAlert);
+
+        if (OperatingSystem.IsLinux() && _linuxNotificationClient != null)
+        {
+            _ = ShowLinuxNativeAlertAsync(request);
+            return true;
+        }
+
+        if (OperatingSystem.IsMacOS() && _macOsNotificationClient != null)
+        {
+            return _macOsNotificationClient.TryShow(request);
+        }
+
+        return false;
+    }
+
+    private bool TryShowWindowsNativeMultipleServersAlert(
+        IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers,
+        bool isTestAlert)
+    {
 #if WINDOWS
-        if (_disposed || !OperatingSystem.IsWindows() || effectiveMode != NotificationDisplayMode.Native)
+        if (_disposed || !OperatingSystem.IsWindows())
         {
             return false;
         }
@@ -330,6 +409,75 @@ public class NotificationService : IDisposable
 #else
         return false;
 #endif
+    }
+
+    private async Task ShowLinuxNativeAlertAsync(NativeNotificationRequest request)
+    {
+        try
+        {
+            if (_linuxNotificationClient == null || !await _linuxNotificationClient.TryShowAsync(request))
+            {
+                ShowCustomNotification(request);
+            }
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Instance.Warning($"Linux native notification failed, using custom fallback: {ex.Message}");
+            ShowCustomNotification(request);
+        }
+    }
+
+    private void ShowCustomNotification(NativeNotificationRequest request)
+    {
+        ShowCustomNotification(
+            request.Title,
+            request.Message,
+            request.Detail,
+            request.Actions,
+            request.Server,
+            request.AlertType,
+            request.IsTestAlert);
+    }
+
+    private static NativeNotificationRequest CreateSingleNativeNotificationRequest(
+        ServerInfo server,
+        ServerAlertType alertType,
+        bool isTestAlert)
+    {
+        var title = alertType == ServerAlertType.Favorite ? "Favorite server online" : "Manual server online";
+        var detail = $"{server.CurrentPlayers}/{server.MaxClients} players on {server.Map} ({server.GameMode.Name})";
+
+        return new NativeNotificationRequest(
+            title,
+            server.Name,
+            detail,
+            [
+                new AlertActionDefinition("Connect", ServerAlertAction.Connect, IsPrimary: true),
+                new AlertActionDefinition("Show Server", ServerAlertAction.ShowServer, IsPrimary: false)
+            ],
+            server,
+            alertType,
+            ServerRuleUtility.GetServerAddress(server),
+            ServerAlertAction.ShowServer,
+            isTestAlert);
+    }
+
+    private static NativeNotificationRequest CreateMultipleNativeNotificationRequest(
+        IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers,
+        bool isTestAlert)
+    {
+        return new NativeNotificationRequest(
+            "Servers online",
+            $"{servers.Count} favorite or manual servers are online",
+            BuildServerSummary(servers.Select(entry => entry.Server)),
+            [
+                new AlertActionDefinition("Show Window", ServerAlertAction.FocusWindow, IsPrimary: true)
+            ],
+            null,
+            null,
+            null,
+            ServerAlertAction.FocusWindow,
+            isTestAlert);
     }
 
     private void ShowCustomServerAlert(ServerInfo server, ServerAlertType alertType, bool isTestAlert)
@@ -596,3 +744,14 @@ public class ServerAlertEventArgs : EventArgs
 }
 
 internal sealed record AlertActionDefinition(string Label, ServerAlertAction Action, bool IsPrimary);
+
+internal sealed record NativeNotificationRequest(
+    string Title,
+    string Message,
+    string Detail,
+    IReadOnlyList<AlertActionDefinition> Actions,
+    ServerInfo? Server,
+    ServerAlertType? AlertType,
+    string? ServerAddress,
+    ServerAlertAction DefaultAction,
+    bool IsTestAlert);
