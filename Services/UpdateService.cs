@@ -18,6 +18,7 @@ public class UpdateService
 
     private const string GitHubApiUrl = "https://api.github.com/repos/{0}/{1}/releases/latest";
     private const string UserAgent = "ZScape-UpdateChecker";
+    private const string AppExecutableName = "ZScape";
     
     private readonly HttpClient _httpClient;
     private readonly string _updateDirectory;
@@ -61,7 +62,7 @@ public class UpdateService
         _httpClient.DefaultRequestHeaders.Add("User-Agent", UserAgent);
         _httpClient.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
         
-        _updateDirectory = Path.Combine(AppContext.BaseDirectory, "updates");
+        _updateDirectory = Path.Combine(Path.GetTempPath(), "ZScape", "updates");
         
         // Get current version from assembly (InformationalVersion preserves semver suffix like -indev)
         var infoVersion = Assembly.GetExecutingAssembly()
@@ -223,7 +224,6 @@ public class UpdateService
     
     /// <summary>
     /// Install the downloaded update and restart the application.
-    /// Note: Platform-specific implementation needed for actual installation.
     /// </summary>
     public void InstallUpdate()
     {
@@ -251,7 +251,7 @@ public class UpdateService
         
         try
         {
-            var appDirectory = AppContext.BaseDirectory;
+            var installation = ResolveCurrentInstallation();
             var extractPath = Path.Combine(_updateDirectory, "extract");
             var updateScript = OperatingSystem.IsWindows() 
                 ? Path.Combine(_updateDirectory, "update.bat")
@@ -274,6 +274,8 @@ public class UpdateService
                     });
                 }
             }
+
+            var payload = ResolveExtractedPayload(extractPath);
             
             if (OperatingSystem.IsWindows())
             {
@@ -288,13 +290,13 @@ if ""%ERRORLEVEL%""==""0"" (
 )
 
 echo Installing update...
-xcopy /E /Y /I ""{extractPath}\*"" ""{appDirectory}""
+xcopy /E /Y /I ""{payload.SourcePath}\*"" ""{installation.ContentPath}""
 
 echo Cleaning up...
 rd /s /q ""{_updateDirectory}""
 
 echo Starting ZScape...
-start """" ""{Path.Combine(appDirectory, "ZScape.exe")}""
+start """" ""{installation.LaunchPath}""
 exit
 ";
                 File.WriteAllText(updateScript, scriptContent);
@@ -310,15 +312,7 @@ exit
             }
             else
             {
-                // Linux/macOS shell script
-                var appName = OperatingSystem.IsMacOS() ? "ZScape" : "ZScape";
-                var scriptContent = $@"#!/bin/bash
-sleep 2
-cp -rf ""{extractPath}""/* ""{appDirectory}""
-rm -rf ""{_updateDirectory}""
-chmod +x ""{Path.Combine(appDirectory, appName)}""
-""{Path.Combine(appDirectory, appName)}"" &
-";
+                var scriptContent = BuildUnixInstallScript(installation, payload);
                 File.WriteAllText(updateScript, scriptContent);
                 
                 // Make script executable
@@ -575,19 +569,32 @@ chmod +x ""{Path.Combine(appDirectory, appName)}""
 
         foreach (var token in GetCompatibleAssetTokens())
         {
-            var asset = release.Assets.FirstOrDefault(a =>
-                !string.IsNullOrWhiteSpace(a.Name) &&
-                !string.IsNullOrWhiteSpace(a.BrowserDownloadUrl) &&
-                a.Name.Contains(token, StringComparison.OrdinalIgnoreCase) &&
-                a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
-
-            if (asset != null)
+            foreach (var extension in GetCompatibleAssetExtensions())
             {
-                return asset;
+                var asset = release.Assets.FirstOrDefault(a =>
+                    !string.IsNullOrWhiteSpace(a.Name) &&
+                    !string.IsNullOrWhiteSpace(a.BrowserDownloadUrl) &&
+                    a.Name.Contains(token, StringComparison.OrdinalIgnoreCase) &&
+                    a.Name.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+
+                if (asset != null)
+                {
+                    return asset;
+                }
             }
         }
 
         return null;
+    }
+
+    private static IReadOnlyList<string> GetCompatibleAssetExtensions()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return [".zip"];
+        }
+
+        return [".tar.gz", ".tgz", ".zip"];
     }
 
     private static IReadOnlyList<string> GetCompatibleAssetTokens()
@@ -651,6 +658,135 @@ chmod +x ""{Path.Combine(appDirectory, appName)}""
 
         return names.Count > 0 ? string.Join(", ", names) : "none";
     }
+
+    private string BuildUnixInstallScript(CurrentInstallation installation, ExtractedUpdatePayload payload)
+    {
+        return OperatingSystem.IsMacOS()
+            ? BuildMacInstallScript(installation, payload)
+            : BuildLinuxInstallScript(installation, payload);
+    }
+
+    private string BuildLinuxInstallScript(CurrentInstallation installation, ExtractedUpdatePayload payload)
+    {
+        var scriptLines = new List<string>
+        {
+            "#!/bin/bash",
+            "set -e",
+            "sleep 2",
+            $"mkdir -p {QuoteShell(installation.ContentPath)}"
+        };
+
+        if (payload.IsAppBundle)
+        {
+            scriptLines.Add($"cp -a {QuoteShell(payload.SourcePath)}/. {QuoteShell(installation.ContentPath)}");
+        }
+        else
+        {
+            scriptLines.Add($"cp -a {QuoteShell(payload.SourcePath)}/. {QuoteShell(installation.ContentPath)}");
+        }
+
+        scriptLines.Add($"if [ -f {QuoteShell(installation.LaunchPath)} ]; then chmod +x {QuoteShell(installation.LaunchPath)}; fi");
+        scriptLines.Add($"rm -rf {QuoteShell(_updateDirectory)}");
+        scriptLines.Add($"{QuoteShell(installation.LaunchPath)} >/dev/null 2>&1 &");
+        scriptLines.Add(string.Empty);
+        return string.Join('\n', scriptLines);
+    }
+
+    private string BuildMacInstallScript(CurrentInstallation installation, ExtractedUpdatePayload payload)
+    {
+        var scriptLines = new List<string>
+        {
+            "#!/bin/bash",
+            "set -e",
+            "sleep 2"
+        };
+
+        if (payload.IsAppBundle)
+        {
+            var targetBundlePath = installation.IsMacAppBundle
+                ? installation.InstallRootPath
+                : Path.Combine(installation.ContentPath, Path.GetFileName(payload.SourcePath));
+            var parentDirectory = Path.GetDirectoryName(targetBundlePath) ?? installation.ContentPath;
+
+            scriptLines.Add($"mkdir -p {QuoteShell(parentDirectory)}");
+            scriptLines.Add($"rm -rf {QuoteShell(targetBundlePath)}");
+            scriptLines.Add($"ditto {QuoteShell(payload.SourcePath)} {QuoteShell(targetBundlePath)}");
+            scriptLines.Add($"rm -rf {QuoteShell(_updateDirectory)}");
+            scriptLines.Add($"open -n {QuoteShell(targetBundlePath)} >/dev/null 2>&1 &");
+        }
+        else
+        {
+            scriptLines.Add($"mkdir -p {QuoteShell(installation.ContentPath)}");
+            scriptLines.Add($"cp -a {QuoteShell(payload.SourcePath)}/. {QuoteShell(installation.ContentPath)}");
+            scriptLines.Add($"if [ -f {QuoteShell(installation.LaunchPath)} ]; then chmod +x {QuoteShell(installation.LaunchPath)}; fi");
+            scriptLines.Add($"rm -rf {QuoteShell(_updateDirectory)}");
+
+            if (installation.IsMacAppBundle)
+            {
+                scriptLines.Add($"open -n {QuoteShell(installation.InstallRootPath)} >/dev/null 2>&1 &");
+            }
+            else
+            {
+                scriptLines.Add($"{QuoteShell(installation.LaunchPath)} >/dev/null 2>&1 &");
+            }
+        }
+
+        scriptLines.Add(string.Empty);
+        return string.Join('\n', scriptLines);
+    }
+
+    private static CurrentInstallation ResolveCurrentInstallation()
+    {
+        var baseDirectory = Path.GetFullPath(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var processPath = Path.GetFullPath(Environment.ProcessPath ?? Path.Combine(baseDirectory, GetExecutableFileName()));
+
+        if (OperatingSystem.IsMacOS())
+        {
+            var macOsDirectory = new DirectoryInfo(baseDirectory);
+            if (macOsDirectory.Name.Equals("MacOS", StringComparison.OrdinalIgnoreCase)
+                && macOsDirectory.Parent?.Name.Equals("Contents", StringComparison.OrdinalIgnoreCase) == true
+                && macOsDirectory.Parent.Parent is DirectoryInfo appBundle
+                && appBundle.Name.EndsWith(".app", StringComparison.OrdinalIgnoreCase))
+            {
+                return new CurrentInstallation(
+                    appBundle.FullName,
+                    macOsDirectory.FullName,
+                    appBundle.FullName,
+                    true);
+            }
+        }
+
+        return new CurrentInstallation(
+            baseDirectory,
+            baseDirectory,
+            processPath,
+            false);
+    }
+
+    private static ExtractedUpdatePayload ResolveExtractedPayload(string extractPath)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            var bundlePath = Directory.EnumerateDirectories(extractPath, "*.app", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault();
+            if (!string.IsNullOrEmpty(bundlePath))
+            {
+                return new ExtractedUpdatePayload(Path.GetFullPath(bundlePath), true);
+            }
+        }
+
+        return new ExtractedUpdatePayload(Path.GetFullPath(extractPath), false);
+    }
+
+    private static string QuoteShell(string value)
+    {
+        return $"'{value.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+    }
+
+    private static string GetExecutableFileName()
+    {
+        return OperatingSystem.IsWindows() ? $"{AppExecutableName}.exe" : AppExecutableName;
+    }
     
     /// <summary>
     /// Load saved server state from a previous update restart.
@@ -685,6 +821,16 @@ chmod +x ""{Path.Combine(appDirectory, appName)}""
     
     #endregion
 }
+
+internal sealed record CurrentInstallation(
+    string InstallRootPath,
+    string ContentPath,
+    string LaunchPath,
+    bool IsMacAppBundle);
+
+internal sealed record ExtractedUpdatePayload(
+    string SourcePath,
+    bool IsAppBundle);
 
 /// <summary>
 /// Represents the server list state saved before an update restart.
