@@ -548,7 +548,10 @@ public class AppSettings
     public HistoryTrackingMode HistoryTrackingMode { get; set; } = HistoryTrackingMode.ByAddress;
     
     // Download Dialog
-    /// <summary>Behavior of the WAD download dialog after downloads complete.</summary>
+    /// <summary>
+    /// Behavior for missing WAD downloads when joining a server.
+    /// Most values control when the download dialog closes after a successful join download.
+    /// </summary>
     public DownloadDialogBehavior DownloadDialogBehavior { get; set; } = DownloadDialogBehavior.CloseOnSuccess;
 
     /// <summary>
@@ -706,7 +709,8 @@ public enum FavoriteStarClickBehavior
 }
 
 /// <summary>
-/// Defines how the WAD download dialog behaves after downloads complete.
+/// Defines how missing WAD downloads behave during server join.
+/// Most values control when the download dialog closes after a successful join download.
 /// </summary>
 public enum DownloadDialogBehavior
 {
@@ -721,9 +725,15 @@ public enum DownloadDialogBehavior
     
     /// <summary>Auto-close on success after a brief delay to show results.</summary>
     CloseOnSuccessAfterDelay = 3,
+
+    /// <summary>
+    /// Skip the review prompt for required WADs and begin downloading them immediately.
+    /// Optional PWADs still follow the separate optional PWAD policy.
+    /// </summary>
+    AutoDownloadRequiredWads = 4,
     
     /// <summary>Legacy value retained for settings compatibility; treated as CloseOnSuccess.</summary>
-    AlwaysClose = 4
+    AlwaysClose = 5
 }
 
 /// <summary>

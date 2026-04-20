@@ -281,6 +281,10 @@ public partial class WadDownloadDialog : Window
                     Close();
                 }
                 break;
+
+            case DownloadDialogBehavior.AutoDownloadRequiredWads:
+                Close();
+                break;
                 
             case DownloadDialogBehavior.AlwaysClose:
                 // Legacy setting: treat as immediate close on success only.

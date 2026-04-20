@@ -2179,54 +2179,56 @@ public partial class MainWindow : Window
             }
 
 
-        var pendingWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
-        var optionalCandidateWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
-        var optionalPwadMode = _settings.Settings.OptionalPwadDownloadMode;
-        var skippedOptionalPwads = GetSkippedOptionalPwadNames();
-        var downloadSelectionConfirmed = false;
-        var hasOptionalServerHashes = server.PWADs.Any(p => p.IsOptional && !string.IsNullOrEmpty(p.Hash));
-        var optionalHashMismatchesByName = new Dictionary<string, GameLauncher.WadHashMismatch>(StringComparer.OrdinalIgnoreCase);
-        var optionalWadsExcludedFromLaunch = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var optionalHashStateChanged = false;
-        var serverWadSourceUrl = Uri.TryCreate(server.Website, UriKind.Absolute, out var serverWebsiteUri)
-            ? serverWebsiteUri.ToString()
-            : null;
+            var pendingWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
+            var optionalCandidateWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
+            var downloadBehavior = _settings.Settings.DownloadDialogBehavior;
+            var autoDownloadRequiredWads = downloadBehavior == DownloadDialogBehavior.AutoDownloadRequiredWads;
+            var optionalPwadMode = _settings.Settings.OptionalPwadDownloadMode;
+            var skippedOptionalPwads = GetSkippedOptionalPwadNames();
+            var downloadSelectionConfirmed = false;
+            var hasOptionalServerHashes = server.PWADs.Any(p => p.IsOptional && !string.IsNullOrEmpty(p.Hash));
+            var optionalHashMismatchesByName = new Dictionary<string, GameLauncher.WadHashMismatch>(StringComparer.OrdinalIgnoreCase);
+            var optionalWadsExcludedFromLaunch = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var optionalHashStateChanged = false;
+            var serverWadSourceUrl = Uri.TryCreate(server.Website, UriKind.Absolute, out var serverWebsiteUri)
+                ? serverWebsiteUri.ToString()
+                : null;
 
-        void AddWadsToDictionary(Dictionary<string, WadInfo> target, IEnumerable<WadInfo> wads, bool isOptional)
-        {
-            foreach (var wad in wads)
+            void AddWadsToDictionary(Dictionary<string, WadInfo> target, IEnumerable<WadInfo> wads, bool isOptional)
             {
-                wad.ServerUrl ??= serverWadSourceUrl;
-                wad.IsOptional = isOptional;
-                target[wad.FileName] = wad;
-            }
-        }
-
-        void AddPendingWads(IEnumerable<WadInfo> wads, bool isOptional = false) =>
-            AddWadsToDictionary(pendingWads, wads, isOptional);
-
-        void AddOptionalCandidateWads(IEnumerable<WadInfo> wads) =>
-            AddWadsToDictionary(optionalCandidateWads, wads, isOptional: true);
-
-        void ResolveSelectedOptionalHashMismatches(IEnumerable<WadInfo> selectedOptionalWads)
-        {
-            var selectedOptionalNames = selectedOptionalWads
-                .Select(wad => wad.FileName)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var selectedMismatches = optionalHashMismatchesByName.Values
-                .Where(mismatch => selectedOptionalNames.Contains(mismatch.WadName))
-                .ToList();
-
-            if (selectedMismatches.Count == 0)
-            {
-                return;
+                foreach (var wad in wads)
+                {
+                    wad.ServerUrl ??= serverWadSourceUrl;
+                    wad.IsOptional = isOptional;
+                    target[wad.FileName] = wad;
+                }
             }
 
-            AddPendingWads(launcher.ResolveHashMismatches(selectedMismatches), isOptional: true);
-            _wadManager.RefreshCache();
-            optionalHashStateChanged = true;
-        }
+            void AddPendingWads(IEnumerable<WadInfo> wads, bool isOptional = false) =>
+                AddWadsToDictionary(pendingWads, wads, isOptional);
+
+            void AddOptionalCandidateWads(IEnumerable<WadInfo> wads) =>
+                AddWadsToDictionary(optionalCandidateWads, wads, isOptional: true);
+
+            void ResolveSelectedOptionalHashMismatches(IEnumerable<WadInfo> selectedOptionalWads)
+            {
+                var selectedOptionalNames = selectedOptionalWads
+                    .Select(wad => wad.FileName)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                var selectedMismatches = optionalHashMismatchesByName.Values
+                    .Where(mismatch => selectedOptionalNames.Contains(mismatch.WadName))
+                    .ToList();
+
+                if (selectedMismatches.Count == 0)
+                {
+                    return;
+                }
+
+                AddPendingWads(launcher.ResolveHashMismatches(selectedMismatches), isOptional: true);
+                _wadManager.RefreshCache();
+                optionalHashStateChanged = true;
+            }
 
         var (_, missingWads) = launcher.CheckRequiredWads(server);
         var (requiredWadsNeedingDownload, requiredCacheChanged) = launcher.ResolveMissingWadsByHash(missingWads);
@@ -2332,7 +2334,18 @@ public partial class MainWindow : Window
 
             if (!downloadSelectionConfirmed)
             {
-                if (!hasRequiredWads && optionalPwadMode == OptionalPwadDownloadMode.AlwaysDownload)
+                if (hasRequiredWads && autoDownloadRequiredWads)
+                {
+                    if (optionalWads.Count > 0)
+                    {
+                        _logger.Info($"Auto-downloading {requiredWads.Count} required WAD(s) and {optionalWads.Count} optional WAD(s) based on settings.");
+                    }
+                    else
+                    {
+                        _logger.Info($"Auto-downloading {requiredWads.Count} required WAD(s) based on settings.");
+                    }
+                }
+                else if (!hasRequiredWads && optionalPwadMode == OptionalPwadDownloadMode.AlwaysDownload)
                 {
                     _logger.Info($"Auto-downloading {optionalWads.Count} optional WAD(s) based on settings.");
                 }

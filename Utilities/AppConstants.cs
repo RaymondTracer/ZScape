@@ -201,7 +201,8 @@ public static class AppConstants
             (Services.DownloadDialogBehavior.StayOpen, "Stay Open"),
             (Services.DownloadDialogBehavior.CloseOnSuccess, "Close on Success"),
             (Services.DownloadDialogBehavior.CloseOnSuccessIfFocused, "Close on Success (if focused)"),
-            (Services.DownloadDialogBehavior.CloseOnSuccessAfterDelay, "Close on Success (after delay)")
+            (Services.DownloadDialogBehavior.CloseOnSuccessAfterDelay, "Close on Success (after delay)"),
+            (Services.DownloadDialogBehavior.AutoDownloadRequiredWads, "Always download required files")
         ];
         
         public static string GetLabel(Services.DownloadDialogBehavior behavior) =>
