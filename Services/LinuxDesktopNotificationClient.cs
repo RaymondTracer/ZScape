@@ -12,7 +12,7 @@ internal sealed class LinuxDesktopNotificationClient : IDisposable
     private const string DefaultActionKey = "default";
     private const int TimeoutMilliseconds = 10000;
 
-    private readonly Connection _connection = new(Address.Session);
+    private readonly Connection? _connection;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly Dictionary<uint, LinuxNotificationContext> _activeNotifications = [];
@@ -27,6 +27,12 @@ internal sealed class LinuxDesktopNotificationClient : IDisposable
     public LinuxDesktopNotificationClient(Action<ServerAlertEventArgs> alertInvoked)
     {
         _alertInvoked = alertInvoked;
+
+        var sessionAddress = Address.Session;
+        if (!string.IsNullOrWhiteSpace(sessionAddress))
+        {
+            _connection = new Connection(sessionAddress);
+        }
     }
 
     public async Task<bool> TryShowAsync(NativeNotificationRequest request)
@@ -100,6 +106,11 @@ internal sealed class LinuxDesktopNotificationClient : IDisposable
                 return;
             }
 
+            if (_connection == null)
+            {
+                throw new InvalidOperationException("D-Bus session address is unavailable.");
+            }
+
             await _connection.ConnectAsync();
 
             _actionSubscription = await _connection.AddMatchAsync(
@@ -116,9 +127,14 @@ internal sealed class LinuxDesktopNotificationClient : IDisposable
                 },
                 static (exception, signal, _, handlerState) =>
                 {
-                    var client = (LinuxDesktopNotificationClient)handlerState;
+                    if (handlerState is not LinuxDesktopNotificationClient client)
+                    {
+                        return;
+                    }
+
                     client.HandleActionInvoked(exception, signal);
                 },
+                ObserverFlags.None,
                 readerState: null,
                 handlerState: this,
                 emitOnCapturedContext: false);
@@ -137,9 +153,14 @@ internal sealed class LinuxDesktopNotificationClient : IDisposable
                 },
                 static (exception, signal, _, handlerState) =>
                 {
-                    var client = (LinuxDesktopNotificationClient)handlerState;
+                    if (handlerState is not LinuxDesktopNotificationClient client)
+                    {
+                        return;
+                    }
+
                     client.HandleNotificationClosed(exception, signal);
                 },
+                ObserverFlags.None,
                 readerState: null,
                 handlerState: this,
                 emitOnCapturedContext: false);
@@ -154,7 +175,8 @@ internal sealed class LinuxDesktopNotificationClient : IDisposable
 
     private async Task<uint> SendNotificationAsync(NativeNotificationRequest request)
     {
-        var writer = _connection.GetMessageWriter();
+        var connection = _connection ?? throw new InvalidOperationException("D-Bus session address is unavailable.");
+        var writer = connection.GetMessageWriter();
         writer.WriteMethodCallHeader(
             NotificationServiceName,
             NotificationPath,
@@ -171,7 +193,7 @@ internal sealed class LinuxDesktopNotificationClient : IDisposable
         writer.WriteDictionary(new Dictionary<string, VariantValue>());
         writer.WriteInt32(TimeoutMilliseconds);
 
-        return await _connection.CallMethodAsync(
+        return await connection.CallMethodAsync(
             writer.CreateMessage(),
             static (message, _) =>
             {

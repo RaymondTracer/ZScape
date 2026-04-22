@@ -659,7 +659,7 @@ public class ResizableListView : UserControl
         var rowHeightPath = RowHeightPath;
         var suppressHandCursor = SuppressHandCursor;
 
-        _itemsControl.ItemsPanel = new FuncTemplate<Panel>(() =>
+        _itemsControl.ItemsPanel = new FuncTemplate<Panel?>(() =>
             new VirtualizingStackPanel());
 
         _itemsControl.ItemTemplate = new FuncDataTemplate<object>((_, _) =>

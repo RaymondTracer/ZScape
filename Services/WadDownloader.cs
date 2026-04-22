@@ -1699,9 +1699,15 @@ public partial class WadDownloader : IDisposable
             segments.Add((start, end));
         }
         
-        var buffer = new byte[totalBytes];
         var downloadedBytes = new long[segments.Count];
         var failedSegments = new ConcurrentBag<(int SegmentIndex, bool IsConnectionLimit)>();
+        using var outputHandle = File.OpenHandle(
+            outputPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        RandomAccess.SetLength(outputHandle, totalBytes);
         
         long lastBytes = 0;
         var lastUpdate = DateTime.Now;
@@ -1727,7 +1733,7 @@ public partial class WadDownloader : IDisposable
         try
         {
             var downloadTasks = segments.Select((segment, index) =>
-                DownloadSegmentAsync(uri, segment.Start, segment.End, buffer, index, downloadedBytes, failedSegments, ct));
+                DownloadSegmentAsync(uri, segment.Start, segment.End, outputHandle, index, downloadedBytes, failedSegments, ct));
             
             await Task.WhenAll(downloadTasks);
             
@@ -1742,8 +1748,8 @@ public partial class WadDownloader : IDisposable
             {
                 throw new Exception($"{failedSegments.Count} segments failed to download");
             }
-            
-            await File.WriteAllBytesAsync(outputPath, buffer, ct);
+
+            task.BytesDownloaded = downloadedBytes.Sum();
         }
         finally
         {
@@ -1753,7 +1759,11 @@ public partial class WadDownloader : IDisposable
     }
     
     private async Task DownloadSegmentAsync(
-        Uri uri, long start, long end, byte[] buffer, int segmentIndex,
+        Uri uri,
+        long start,
+        long end,
+        Microsoft.Win32.SafeHandles.SafeFileHandle outputHandle,
+        int segmentIndex,
         long[] downloadedBytes, ConcurrentBag<(int, bool)> failedSegments, CancellationToken ct)
     {
         try
@@ -1772,7 +1782,7 @@ public partial class WadDownloader : IDisposable
             
             while ((bytesRead = await stream.ReadAsync(tempBuffer, ct)) > 0)
             {
-                Array.Copy(tempBuffer, 0, buffer, position, bytesRead);
+                await RandomAccess.WriteAsync(outputHandle, tempBuffer.AsMemory(0, bytesRead), position, ct);
                 position += bytesRead;
                 downloadedBytes[segmentIndex] = position - start;
             }
