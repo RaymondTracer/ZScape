@@ -202,6 +202,7 @@ public class GameLauncher
     public class WadHashMismatch
     {
         public string WadName { get; init; } = string.Empty;
+        public bool IsOptional { get; init; }
         public string LocalPath { get; init; } = string.Empty;
         public string LocalHash { get; init; } = string.Empty;
         public string ExpectedHash { get; init; } = string.Empty;
@@ -231,7 +232,7 @@ public class GameLauncher
     }
 
     /// <summary>
-    /// Verifies that all local WAD files match the server's expected hashes asynchronously with concurrent processing.
+    /// Verifies that all local PWAD files with advertised hashes match the server's expected hashes.
     /// </summary>
     /// <param name="server">The server to verify WADs for.</param>
     /// <param name="progress">Progress callback with per-file byte-level progress.</param>
@@ -242,7 +243,7 @@ public class GameLauncher
         IProgress<HashVerificationProgress>? progress,
         CancellationToken cancellationToken)
     {
-        return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, pwad => !pwad.IsOptional);
+        return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, _ => true);
     }
 
     /// <summary>
@@ -398,6 +399,7 @@ public class GameLauncher
                     mismatches.Add(new WadHashMismatch
                     {
                         WadName = item.Pwad.Name,
+                        IsOptional = item.Pwad.IsOptional,
                         LocalPath = item.LocalPath,
                         LocalHash = localHash,
                         ExpectedHash = expectedHash,

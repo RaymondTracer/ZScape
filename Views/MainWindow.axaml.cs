@@ -2238,14 +2238,27 @@ public partial class MainWindow : Window
             _wadManager.RefreshCache();
         }
 
-        var hasServerHashes = server.PWADs.Any(p => !p.IsOptional && !string.IsNullOrEmpty(p.Hash));
-        if (hasServerHashes)
+        var hasHashedPwads = server.PWADs.Any(p => !string.IsNullOrEmpty(p.Hash));
+        if (hasHashedPwads)
         {
             var hashMismatches = await VerifyWadHashesWithDialogAsync(server);
-            if (hashMismatches.Count > 0)
+            var requiredHashMismatches = hashMismatches.Where(mismatch => !mismatch.IsOptional).ToList();
+            if (requiredHashMismatches.Count > 0)
             {
-                AddPendingWads(launcher.ResolveHashMismatches(hashMismatches));
+                AddPendingWads(launcher.ResolveHashMismatches(requiredHashMismatches));
                 _wadManager.RefreshCache();
+            }
+
+            var optionalHashMismatches = hashMismatches.Where(mismatch => mismatch.IsOptional).ToList();
+            foreach (var mismatch in optionalHashMismatches)
+            {
+                optionalHashMismatchesByName[mismatch.WadName] = mismatch;
+                optionalWadsExcludedFromLaunch.Add(mismatch.WadName);
+            }
+
+            if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
+            {
+                AddOptionalCandidateWads(optionalHashMismatches.Select(mismatch => new WadInfo(mismatch.WadName, mismatch.ExpectedHash)));
             }
         }
 
@@ -2257,21 +2270,6 @@ public partial class MainWindow : Window
             if (optionalCacheChanged)
             {
                 _wadManager.RefreshCache();
-            }
-        }
-
-        if (hasOptionalServerHashes)
-        {
-            var optionalHashMismatches = await VerifyOptionalWadHashesWithDialogAsync(server);
-            foreach (var mismatch in optionalHashMismatches)
-            {
-                optionalHashMismatchesByName[mismatch.WadName] = mismatch;
-                optionalWadsExcludedFromLaunch.Add(mismatch.WadName);
-            }
-
-            if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
-            {
-                AddOptionalCandidateWads(optionalHashMismatches.Select(mismatch => new WadInfo(mismatch.WadName, mismatch.ExpectedHash)));
             }
         }
 
@@ -2392,16 +2390,6 @@ public partial class MainWindow : Window
                 {
                     _logger.Warning($"Still missing WADs: {string.Join(", ", stillMissing.Take(5).Select(w => w.Name))}");
                     return;
-                }
-
-                if (hasServerHashes)
-                {
-                    var remainingHashMismatches = await VerifyWadHashesWithDialogAsync(server);
-                    if (remainingHashMismatches.Count > 0)
-                    {
-                        _logger.Warning($"Still mismatched WADs: {string.Join(", ", remainingHashMismatches.Take(5).Select(w => w.WadName))}");
-                        return;
-                    }
                 }
             }
         }
