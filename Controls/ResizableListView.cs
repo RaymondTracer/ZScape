@@ -8,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using System;
 using System.Collections;
@@ -1127,6 +1128,8 @@ public class ResizableListView : UserControl
     /// </summary>
     private void UpdateSelectionVisuals()
     {
+        _selectedRow = null;
+
         foreach (var container in _itemsControl.GetRealizedContainers())
         {
             Border? b = null;
@@ -1139,6 +1142,8 @@ public class ResizableListView : UserControl
             if (b.DataContext != null && _selectedItems.Contains(b.DataContext))
             {
                 b.Background = SelectedRowBrush;
+                if (Equals(b.DataContext, _selectedItem))
+                    _selectedRow = b;
             }
             else if (b == _hoveredRow)
             {
@@ -1155,9 +1160,51 @@ public class ResizableListView : UserControl
     /// Scrolls the vertical <see cref="ScrollViewer"/> so that the row at the given
     /// index is visible. Uses <see cref="RowHeight"/> to compute the scroll offset.
     /// </summary>
+    private double GetViewportHeight()
+    {
+        double boundsHeight = _scrollViewer.Bounds.Height;
+        double viewportHeight = _scrollViewer.Viewport.Height;
+
+        if (boundsHeight > 0 && viewportHeight > 0)
+            return Math.Min(boundsHeight, viewportHeight);
+
+        return boundsHeight > 0 ? boundsHeight : viewportHeight;
+    }
+
+    private Border? FindRealizedRowBorder(object? item)
+    {
+        if (item == null)
+            return null;
+
+        foreach (var container in _itemsControl.GetRealizedContainers())
+        {
+            Border? border = null;
+            if (container is ContentPresenter presenter)
+                border = presenter.Child as Border;
+            border ??= container.FindDescendantOfType<Border>();
+
+            if (border?.DataContext != null && Equals(border.DataContext, item))
+                return border;
+        }
+
+        return null;
+    }
+
+    private double GetEstimatedItemExtent(int itemCount)
+    {
+        if (itemCount > 0 && _scrollViewer.Extent.Height > 0)
+        {
+            var extentPerItem = _scrollViewer.Extent.Height / itemCount;
+            if (extentPerItem > 0)
+                return extentPerItem;
+        }
+
+        return RowHeight;
+    }
+
     private void SetVerticalOffset(double offset)
     {
-        double viewportHeight = _scrollViewer.Viewport.Height;
+        double viewportHeight = GetViewportHeight();
         double maxOffset = Math.Max(0, _scrollViewer.Extent.Height - viewportHeight);
         double clampedOffset = Math.Clamp(offset, 0, maxOffset);
 
@@ -1167,63 +1214,46 @@ public class ResizableListView : UserControl
         _scrollViewer.Offset = _scrollViewer.Offset.WithY(clampedOffset);
     }
 
-    /// <summary>
-    /// Scrolls the vertical <see cref="ScrollViewer"/> by a fixed number of rows.
-    /// </summary>
-    private void ScrollViewportByRows(int rowDelta)
-    {
-        if (rowDelta == 0 || RowHeight <= 0)
-            return;
-
-        SetVerticalOffset(_scrollViewer.Offset.Y + (rowDelta * RowHeight));
-    }
-
-    /// <summary>
-    /// Returns true when the row is fully visible in the current viewport.
-    /// </summary>
-    private bool IsItemFullyVisible(int index)
-    {
-        double viewportHeight = _scrollViewer.Viewport.Height;
-        if (viewportHeight <= 0 || RowHeight <= 0)
-            return true;
-
-        double targetTop = index * RowHeight;
-        double targetBottom = targetTop + RowHeight;
-        double currentOffset = _scrollViewer.Offset.Y;
-        double viewportBottom = currentOffset + viewportHeight;
-
-        return targetTop >= currentOffset - ScrollAlignmentTolerance
-            && targetBottom <= viewportBottom + ScrollAlignmentTolerance;
-    }
-
-    /// <summary>
-    /// Returns true when the current row is aligned with the top or bottom edge
-    /// of the viewport for keyboard step-scrolling.
-    /// </summary>
-    private bool IsItemAtViewportEdge(int index, Key key)
-    {
-        double viewportHeight = _scrollViewer.Viewport.Height;
-        if (viewportHeight <= 0 || RowHeight <= 0)
-            return false;
-
-        double targetTop = index * RowHeight;
-        double targetBottom = targetTop + RowHeight;
-        double currentOffset = _scrollViewer.Offset.Y;
-        double viewportBottom = currentOffset + viewportHeight;
-
-        return key switch
-        {
-            Key.Up => Math.Abs(targetTop - currentOffset) <= ScrollAlignmentTolerance,
-            Key.Down => Math.Abs(targetBottom - viewportBottom) <= ScrollAlignmentTolerance,
-            _ => false
-        };
-    }
-
     private void ScrollItemIntoView(int index)
     {
+        var items = GetItemsList();
+        if (items != null && index >= 0 && index < items.Count)
+        {
+            var targetItem = items[index];
+            var realizedRow = FindRealizedRowBorder(items[index]);
+            if (realizedRow != null)
+            {
+                realizedRow.BringIntoView();
+                return;
+            }
+
+            double itemExtent = GetEstimatedItemExtent(items.Count);
+            if (itemExtent > 0)
+            {
+                double estimatedTop = index * itemExtent;
+                double estimatedBottom = estimatedTop + itemExtent;
+                double estimatedViewportHeight = GetViewportHeight();
+                double estimatedOffset = _scrollViewer.Offset.Y;
+
+                if (estimatedTop < estimatedOffset)
+                    SetVerticalOffset(estimatedTop);
+                else if (estimatedBottom > estimatedOffset + estimatedViewportHeight)
+                    SetVerticalOffset(estimatedBottom - estimatedViewportHeight);
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!Equals(_selectedItem, targetItem))
+                    return;
+
+                FindRealizedRowBorder(targetItem)?.BringIntoView();
+            }, DispatcherPriority.Loaded);
+            return;
+        }
+
         double targetTop = index * RowHeight;
         double targetBottom = targetTop + RowHeight;
-        double viewportHeight = _scrollViewer.Viewport.Height;
+        double viewportHeight = GetViewportHeight();
         double currentOffset = _scrollViewer.Offset.Y;
 
         if (targetTop < currentOffset)
@@ -1252,14 +1282,11 @@ public class ResizableListView : UserControl
                 int newIndex = currentIndex > 0 ? currentIndex - 1 : 0;
                 if (newIndex == currentIndex)
                 {
-                    if (currentIndex >= 0 && !IsItemFullyVisible(currentIndex))
+                    if (currentIndex >= 0)
                         ScrollItemIntoView(currentIndex);
                     e.Handled = true;
                     break;
                 }
-
-                if (currentIndex >= 0 && IsItemAtViewportEdge(currentIndex, Key.Up))
-                    ScrollViewportByRows(-1);
 
                 SelectByIndex(items, newIndex, e.KeyModifiers);
                 e.Handled = true;
@@ -1270,14 +1297,11 @@ public class ResizableListView : UserControl
                 int newIndex = currentIndex < items.Count - 1 ? currentIndex + 1 : items.Count - 1;
                 if (newIndex == currentIndex)
                 {
-                    if (currentIndex >= 0 && !IsItemFullyVisible(currentIndex))
+                    if (currentIndex >= 0)
                         ScrollItemIntoView(currentIndex);
                     e.Handled = true;
                     break;
                 }
-
-                if (currentIndex >= 0 && IsItemAtViewportEdge(currentIndex, Key.Down))
-                    ScrollViewportByRows(1);
 
                 SelectByIndex(items, newIndex, e.KeyModifiers);
                 e.Handled = true;
