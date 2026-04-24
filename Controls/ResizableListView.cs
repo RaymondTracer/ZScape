@@ -1202,6 +1202,17 @@ public class ResizableListView : UserControl
         return RowHeight;
     }
 
+    private int GetPageSelectionStep(int itemCount)
+    {
+        double itemExtent = GetEstimatedItemExtent(itemCount);
+        double viewportHeight = GetViewportHeight();
+        if (itemExtent <= 0 || viewportHeight <= 0)
+            return 1;
+
+        int visibleItems = (int)Math.Floor(viewportHeight / itemExtent);
+        return Math.Max(1, visibleItems - 1);
+    }
+
     private void SetVerticalOffset(double offset)
     {
         double viewportHeight = GetViewportHeight();
@@ -1263,8 +1274,9 @@ public class ResizableListView : UserControl
     }
 
     /// <summary>
-    /// Handles keyboard navigation: Up/Down to move selection, Home/End to jump,
-    /// Shift+Arrow to extend selection in multi-mode, Enter to activate, Ctrl+A to select all.
+    /// Handles keyboard navigation: Up/Down to move selection, PageUp/PageDown to move
+    /// by one viewport, Home/End to jump, Shift+Arrow to extend selection in multi-mode,
+    /// Enter to activate, Ctrl+A to select all.
     /// </summary>
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
@@ -1274,6 +1286,7 @@ public class ResizableListView : UserControl
         if (items == null || items.Count == 0) return;
 
         int currentIndex = _selectedItem != null ? items.IndexOf(_selectedItem) : -1;
+        int pageStep = GetPageSelectionStep(items.Count);
 
         switch (e.Key)
         {
@@ -1303,6 +1316,24 @@ public class ResizableListView : UserControl
                     break;
                 }
 
+                SelectByIndex(items, newIndex, e.KeyModifiers);
+                e.Handled = true;
+                break;
+            }
+            case Key.PageUp:
+            {
+                int newIndex = currentIndex >= 0
+                    ? Math.Max(0, currentIndex - pageStep)
+                    : 0;
+                SelectByIndex(items, newIndex, e.KeyModifiers);
+                e.Handled = true;
+                break;
+            }
+            case Key.PageDown:
+            {
+                int newIndex = currentIndex >= 0
+                    ? Math.Min(items.Count - 1, currentIndex + pageStep)
+                    : 0;
                 SelectByIndex(items, newIndex, e.KeyModifiers);
                 e.Handled = true;
                 break;
