@@ -131,38 +131,6 @@ public partial class UnifiedSettingsDialog : Window
             }
         });
 
-        // DL Lim (editable number)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "DL Lim",
-            Width = 50,
-            MinWidth = 35,
-            IsFixedWidth = true,
-            CellContentFactory = () =>
-            {
-                var tb = new TextBox();
-                tb.Classes.Add("editCellNum");
-                tb.Bind(TextBox.TextProperty, new Binding("MaxConcurrentDownloads") { Mode = BindingMode.TwoWay });
-                return tb;
-            }
-        });
-
-        // Initial (editable number)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "Initial",
-            Width = 50,
-            MinWidth = 35,
-            IsFixedWidth = true,
-            CellContentFactory = () =>
-            {
-                var tb = new TextBox();
-                tb.Classes.Add("editCellNum");
-                tb.Bind(TextBox.TextProperty, new Binding("InitialThreads") { Mode = BindingMode.TwoWay });
-                return tb;
-            }
-        });
-
         // Seg KB (editable number)
         DomainListView.AddColumn(new ListViewColumn
         {
@@ -195,45 +163,6 @@ public partial class UnifiedSettingsDialog : Window
                 };
                 cb.Bind(CheckBox.IsCheckedProperty, new Binding("AdaptiveLearning") { Mode = BindingMode.TwoWay });
                 return cb;
-            }
-        });
-
-        // OK count (read-only)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "OK",
-            BindingPath = "SuccessCount",
-            Width = 40,
-            MinWidth = 30,
-            IsFixedWidth = true,
-            ContentAlignment = HorizontalAlignment.Center,
-            Foreground = new SolidColorBrush(Color.Parse("#888"))
-        });
-
-        // Fail count (read-only)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "Fail",
-            BindingPath = "FailureCount",
-            Width = 40,
-            MinWidth = 30,
-            IsFixedWidth = true,
-            ContentAlignment = HorizontalAlignment.Center,
-            Foreground = new SolidColorBrush(Color.Parse("#888"))
-        });
-
-        // Notes (editable text, star-sized)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "Notes",
-            IsStar = true,
-            MinWidth = 60,
-            CellContentFactory = () =>
-            {
-                var tb = new TextBox { Margin = new Thickness(2, 0, 4, 0) };
-                tb.Classes.Add("editCell");
-                tb.Bind(TextBox.TextProperty, new Binding("Notes") { Mode = BindingMode.TwoWay });
-                return tb;
             }
         });
 
@@ -455,13 +384,8 @@ public partial class UnifiedSettingsDialog : Window
             display.InitializeFromSettings(
                 config.Key,
                 config.Value.MaxThreads,
-                config.Value.MaxConcurrentDownloads,
-                config.Value.InitialThreads,
                 config.Value.MinSegmentSizeKb,
                 config.Value.AdaptiveLearning,
-                config.Value.SuccessCount,
-                config.Value.FailureCount,
-                config.Value.Notes ?? "",
                 _domainConfigs.Count
             );
             _domainConfigs.Add(display);
@@ -783,14 +707,8 @@ public partial class UnifiedSettingsDialog : Window
             domainSettings[domain] = new DomainSettings
             {
                 MaxThreads = item.MaxThreads,
-                MaxConcurrentDownloads = item.MaxConcurrentDownloads,
-                InitialThreads = item.InitialThreads,
                 MinSegmentSizeKb = item.MinSegmentSizeKb,
-                AdaptiveLearning = item.AdaptiveLearning,
-                SuccessCount = item.SuccessCount,
-                FailureCount = item.FailureCount,
-                Notes = string.IsNullOrWhiteSpace(item.Notes) ? null : item.Notes,
-                LastUpdated = DateTime.UtcNow
+                AdaptiveLearning = item.AdaptiveLearning
             };
         }
         SettingsService.Instance.SaveDomainSettings();
@@ -1291,13 +1209,8 @@ public partial class UnifiedSettingsDialog : Window
         display.InitializeFromSettings(
             "example.com",
             0,       // MaxThreads: 0 = use global default
-            0,       // MaxConcurrentDownloads: 0 = unlimited
-            2,       // InitialThreads
             256,     // MinSegmentSizeKb
             true,    // AdaptiveLearning
-            0,       // SuccessCount
-            0,       // FailureCount
-            "",      // Notes
             _domainConfigs.Count  // Index
         );
         _domainConfigs.Add(display);
@@ -1412,13 +1325,8 @@ public partial class UnifiedSettingsDialog : Window
     {
         private string _domain = "";
         private int _maxThreads;
-        private int _maxConcurrentDownloads;
-        private int _initialThreads;
         private int _minSegmentSizeKb;
         private bool _adaptiveLearning;
-        private int _successCount;
-        private int _failureCount;
-        private string _notes = "";
         private int _index;
         
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
@@ -1426,19 +1334,13 @@ public partial class UnifiedSettingsDialog : Window
         /// <summary>
         /// Initializes all fields from settings without triggering property setters' side effects.
         /// </summary>
-        public void InitializeFromSettings(string domain, int maxThreads, int maxConcurrentDownloads,
-            int initialThreads, int minSegmentSizeKb, bool adaptiveLearning,
-            int successCount, int failureCount, string notes, int index)
+        public void InitializeFromSettings(string domain, int maxThreads,
+            int minSegmentSizeKb, bool adaptiveLearning, int index)
         {
             _domain = domain;
             _maxThreads = maxThreads;
-            _maxConcurrentDownloads = maxConcurrentDownloads;
-            _initialThreads = initialThreads;
             _minSegmentSizeKb = minSegmentSizeKb;
             _adaptiveLearning = adaptiveLearning;
-            _successCount = successCount;
-            _failureCount = failureCount;
-            _notes = notes;
             _index = index;
         }
         
@@ -1455,19 +1357,6 @@ public partial class UnifiedSettingsDialog : Window
             set { _maxThreads = Math.Max(0, value); OnPropertyChanged(nameof(MaxThreads)); }
         }
         
-        /// <summary>Max concurrent downloads from this domain. 0 = unlimited.</summary>
-        public int MaxConcurrentDownloads
-        {
-            get => _maxConcurrentDownloads;
-            set { _maxConcurrentDownloads = Math.Max(0, value); OnPropertyChanged(nameof(MaxConcurrentDownloads)); }
-        }
-        
-        public int InitialThreads
-        {
-            get => _initialThreads;
-            set { _initialThreads = Math.Clamp(value, 1, 32); OnPropertyChanged(nameof(InitialThreads)); }
-        }
-        
         public int MinSegmentSizeKb
         {
             get => _minSegmentSizeKb;
@@ -1478,24 +1367,6 @@ public partial class UnifiedSettingsDialog : Window
         {
             get => _adaptiveLearning;
             set { _adaptiveLearning = value; OnPropertyChanged(nameof(AdaptiveLearning)); }
-        }
-        
-        public int SuccessCount
-        {
-            get => _successCount;
-            set { _successCount = value; OnPropertyChanged(nameof(SuccessCount)); }
-        }
-        
-        public int FailureCount
-        {
-            get => _failureCount;
-            set { _failureCount = value; OnPropertyChanged(nameof(FailureCount)); }
-        }
-        
-        public string Notes
-        {
-            get => _notes;
-            set { _notes = value ?? ""; OnPropertyChanged(nameof(Notes)); }
         }
         
         public int Index

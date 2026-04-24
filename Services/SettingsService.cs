@@ -464,9 +464,6 @@ public class AppSettings
     /// <summary>Global maximum threads per file. 0 = no global limit (use per-domain settings).</summary>
     public int MaxThreadsPerFile { get; set; } = 0;
     
-    /// <summary>Default initial threads for probing new domains.</summary>
-    public int DefaultInitialThreads { get; set; } = 2;
-    
     /// <summary>Default minimum segment size in KB for new domains.</summary>
     public int DefaultMinSegmentSizeKb { get; set; } = 256;
     

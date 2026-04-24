@@ -83,12 +83,22 @@ public class WadDownloadTask
     /// <summary>
     /// List of alternate URLs to try if current source fails.
     /// </summary>
-    public List<(string Url, long Size)> AlternateUrls { get; set; } = [];
+    public List<(string Url, long Size, string? DownloadedFileName)> AlternateUrls { get; set; } = [];
+
+    /// <summary>
+    /// Sources already exhausted for this task and should not be retried.
+    /// </summary>
+    public HashSet<string> ExhaustedUrls { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     
     /// <summary>
     /// Number of retry attempts made.
     /// </summary>
     public int RetryCount { get; set; }
+
+    /// <summary>
+    /// Whether the current source should be abandoned immediately instead of retried.
+    /// </summary>
+    public bool SkipSourceRetry { get; set; }
     
     /// <summary>
     /// Maximum retries per source before trying next alternate.

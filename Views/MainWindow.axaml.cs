@@ -1247,16 +1247,19 @@ public partial class MainWindow : Window
         if (ServerDetailsText == null) return;
 
         var sb = new System.Text.StringBuilder();
+        var version = string.IsNullOrWhiteSpace(server.GameVersion) ? "Unknown" : server.GameVersion;
         sb.AppendLine($"Server: {DoomColorCodes.StripColorCodes(server.Name)}");
         sb.AppendLine($"Address: {server.Address}:{server.Port}");
         sb.AppendLine($"Map: {server.Map}");
         sb.AppendLine($"Mode: {server.GameMode.Name}");
         sb.AppendLine($"Players: {server.CurrentPlayers}/{server.MaxPlayers}");
         sb.AppendLine($"Ping: {server.Ping}ms");
+        sb.AppendLine($"Version: {version}");
         sb.AppendLine($"IWAD: {server.IWAD}");
 
         if (server.IsPassworded) sb.AppendLine("Password Protected: Yes");
-        if (server.IsTestingServer) sb.AppendLine($"Testing Version: {server.GameVersion}");
+        if (server.IsTestingServer) sb.AppendLine("Testing Server: Yes");
+        if (!string.IsNullOrWhiteSpace(server.Website)) sb.AppendLine($"URL: {server.Website}");
 
         ServerDetailsText.Text = sb.ToString();
     }

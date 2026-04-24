@@ -117,6 +117,8 @@ public class ListViewSortEventArgs : EventArgs
 /// </summary>
 public class ResizableListView : UserControl
 {
+    private const double ScrollAlignmentTolerance = 0.5;
+
     // Dark theme colors matching the app theme
     private static readonly IBrush HeaderBackground = new SolidColorBrush(Color.Parse("#2D2D30"));
     private static readonly IBrush HeaderBorderBrush = new SolidColorBrush(Color.Parse("#3F3F46"));
@@ -1153,6 +1155,70 @@ public class ResizableListView : UserControl
     /// Scrolls the vertical <see cref="ScrollViewer"/> so that the row at the given
     /// index is visible. Uses <see cref="RowHeight"/> to compute the scroll offset.
     /// </summary>
+    private void SetVerticalOffset(double offset)
+    {
+        double viewportHeight = _scrollViewer.Viewport.Height;
+        double maxOffset = Math.Max(0, _scrollViewer.Extent.Height - viewportHeight);
+        double clampedOffset = Math.Clamp(offset, 0, maxOffset);
+
+        if (Math.Abs(clampedOffset - _scrollViewer.Offset.Y) <= ScrollAlignmentTolerance)
+            return;
+
+        _scrollViewer.Offset = _scrollViewer.Offset.WithY(clampedOffset);
+    }
+
+    /// <summary>
+    /// Scrolls the vertical <see cref="ScrollViewer"/> by a fixed number of rows.
+    /// </summary>
+    private void ScrollViewportByRows(int rowDelta)
+    {
+        if (rowDelta == 0 || RowHeight <= 0)
+            return;
+
+        SetVerticalOffset(_scrollViewer.Offset.Y + (rowDelta * RowHeight));
+    }
+
+    /// <summary>
+    /// Returns true when the row is fully visible in the current viewport.
+    /// </summary>
+    private bool IsItemFullyVisible(int index)
+    {
+        double viewportHeight = _scrollViewer.Viewport.Height;
+        if (viewportHeight <= 0 || RowHeight <= 0)
+            return true;
+
+        double targetTop = index * RowHeight;
+        double targetBottom = targetTop + RowHeight;
+        double currentOffset = _scrollViewer.Offset.Y;
+        double viewportBottom = currentOffset + viewportHeight;
+
+        return targetTop >= currentOffset - ScrollAlignmentTolerance
+            && targetBottom <= viewportBottom + ScrollAlignmentTolerance;
+    }
+
+    /// <summary>
+    /// Returns true when the current row is aligned with the top or bottom edge
+    /// of the viewport for keyboard step-scrolling.
+    /// </summary>
+    private bool IsItemAtViewportEdge(int index, Key key)
+    {
+        double viewportHeight = _scrollViewer.Viewport.Height;
+        if (viewportHeight <= 0 || RowHeight <= 0)
+            return false;
+
+        double targetTop = index * RowHeight;
+        double targetBottom = targetTop + RowHeight;
+        double currentOffset = _scrollViewer.Offset.Y;
+        double viewportBottom = currentOffset + viewportHeight;
+
+        return key switch
+        {
+            Key.Up => Math.Abs(targetTop - currentOffset) <= ScrollAlignmentTolerance,
+            Key.Down => Math.Abs(targetBottom - viewportBottom) <= ScrollAlignmentTolerance,
+            _ => false
+        };
+    }
+
     private void ScrollItemIntoView(int index)
     {
         double targetTop = index * RowHeight;
@@ -1161,9 +1227,9 @@ public class ResizableListView : UserControl
         double currentOffset = _scrollViewer.Offset.Y;
 
         if (targetTop < currentOffset)
-            _scrollViewer.Offset = _scrollViewer.Offset.WithY(targetTop);
+            SetVerticalOffset(targetTop);
         else if (targetBottom > currentOffset + viewportHeight)
-            _scrollViewer.Offset = _scrollViewer.Offset.WithY(targetBottom - viewportHeight);
+            SetVerticalOffset(targetBottom - viewportHeight);
     }
 
     /// <summary>
@@ -1184,6 +1250,17 @@ public class ResizableListView : UserControl
             case Key.Up:
             {
                 int newIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+                if (newIndex == currentIndex)
+                {
+                    if (currentIndex >= 0 && !IsItemFullyVisible(currentIndex))
+                        ScrollItemIntoView(currentIndex);
+                    e.Handled = true;
+                    break;
+                }
+
+                if (currentIndex >= 0 && IsItemAtViewportEdge(currentIndex, Key.Up))
+                    ScrollViewportByRows(-1);
+
                 SelectByIndex(items, newIndex, e.KeyModifiers);
                 e.Handled = true;
                 break;
@@ -1191,6 +1268,17 @@ public class ResizableListView : UserControl
             case Key.Down:
             {
                 int newIndex = currentIndex < items.Count - 1 ? currentIndex + 1 : items.Count - 1;
+                if (newIndex == currentIndex)
+                {
+                    if (currentIndex >= 0 && !IsItemFullyVisible(currentIndex))
+                        ScrollItemIntoView(currentIndex);
+                    e.Handled = true;
+                    break;
+                }
+
+                if (currentIndex >= 0 && IsItemAtViewportEdge(currentIndex, Key.Down))
+                    ScrollViewportByRows(1);
+
                 SelectByIndex(items, newIndex, e.KeyModifiers);
                 e.Handled = true;
                 break;
