@@ -45,7 +45,7 @@ The project targets .NET 10 and supports Windows, Linux, and macOS.
 - Adapt download concurrency per domain and persist the learned settings
 
 ### Testing Builds, Updates, and Housekeeping
-- Auto-download and install server-provided testing builds when required
+- Download and install testing builds when required
 - Manage installed testing versions from the dedicated dialog
 - Copy base Zandronum `.ini` files into newly installed testing builds
 - Consolidate screenshots from stable and testing installs into one folder
