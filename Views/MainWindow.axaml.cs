@@ -2685,19 +2685,49 @@ public partial class MainWindow : Window
         var progressWindow = new Window
         {
             Title = $"Downloading {server.GameVersion}",
-            Width = 450,
-            Height = 150,
+            Width = 480,
+            Height = 210,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             CanResize = false
         };
 
-        var statusLabel = new TextBlock { Text = "Starting download...", Margin = new Thickness(20, 20, 20, 5) };
-        var progressBar = new ProgressBar { Margin = new Thickness(20, 5, 20, 5), Height = 20, Minimum = 0, Maximum = 100 };
+        var statusLabel = new TextBlock
+        {
+            Text = "Starting download...",
+            Margin = new Thickness(20, 20, 20, 4),
+            FontSize = 14,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var progressDetailLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var speedLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var etaLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var threadsLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 6),
+            Foreground = Brushes.LightGray
+        };
+        var progressBar = new ProgressBar { Margin = new Thickness(20, 4, 20, 5), Height = 20, Minimum = 0, Maximum = 100 };
         var cancelButton = new Button { Content = "Cancel", Width = 100, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center, Margin = new Thickness(0, 10, 0, 0) };
 
         progressWindow.Content = new StackPanel
         {
-            Children = { statusLabel, progressBar, cancelButton }
+            Children = { statusLabel, progressDetailLabel, speedLabel, etaLabel, threadsLabel, progressBar, cancelButton }
         };
 
         var cancelled = false;
@@ -2705,12 +2735,30 @@ public partial class MainWindow : Window
 
         var result = false;
 
-        void OnProgress(object? sender, (string Message, int Progress) e)
+        void OnProgress(object? sender, GameLauncher.TestingBuildDownloadProgress e)
         {
             Dispatcher.UIThread.Post(() =>
             {
-                statusLabel.Text = e.Message;
-                progressBar.Value = e.Progress;
+                statusLabel.Text = e.Status;
+                progressBar.Value = e.ProgressPercent;
+
+                progressDetailLabel.Text = e.TotalBytes > 0
+                    ? $"Transferred: {FormatUtils.FormatBytes(e.DownloadedBytes)} / {FormatUtils.FormatBytes(e.TotalBytes)}"
+                    : e.DownloadedBytes > 0
+                        ? $"Transferred: {FormatUtils.FormatBytes(e.DownloadedBytes)}"
+                        : string.Empty;
+
+                speedLabel.Text = e.BytesPerSecond > 0
+                    ? $"Speed: {FormatUtils.FormatSpeed(e.BytesPerSecond)}"
+                    : string.Empty;
+
+                etaLabel.Text = e.EstimatedTimeRemaining.HasValue
+                    ? $"ETA: {FormatDownloadEta(e.EstimatedTimeRemaining.Value)}"
+                    : string.Empty;
+
+                threadsLabel.Text = e.ThreadCount > 1
+                    ? $"Threads: {e.ThreadCount}"
+                    : string.Empty;
             });
         }
 
@@ -2737,6 +2785,26 @@ public partial class MainWindow : Window
         launcher.DownloadProgress -= OnProgress;
 
         return result && !cancelled;
+    }
+
+    private static string FormatDownloadEta(TimeSpan eta)
+    {
+        if (eta < TimeSpan.Zero)
+        {
+            eta = TimeSpan.Zero;
+        }
+
+        if (eta.TotalHours >= 1)
+        {
+            return $"{(int)eta.TotalHours}:{eta.Minutes:D2}:{eta.Seconds:D2}";
+        }
+
+        if (eta.TotalMinutes >= 1)
+        {
+            return $"{(int)eta.TotalMinutes}:{eta.Seconds:D2}";
+        }
+
+        return $"{Math.Max(1, (int)Math.Ceiling(eta.TotalSeconds))}s";
     }
 
     private async Task<string?> PromptForPasswordAsync(string title, string message)

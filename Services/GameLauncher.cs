@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http;
 using SharpCompress.Archives;
 using SharpCompress.Common;
@@ -15,13 +17,15 @@ namespace ZScape.Services;
 public class GameLauncher
 {
     private static readonly Lazy<GameLauncher> _instance = new(() => new GameLauncher());
+    private static readonly Uri TestingArchiveBaseUri = new("https://zandronum.com/", UriKind.Absolute);
     public static GameLauncher Instance => _instance.Value;
 
+    private readonly DomainThreadConfig _domainConfig = DomainThreadConfig.Instance;
     private readonly HttpClient _httpClient = new();
 
     public event EventHandler<string>? LaunchError;
     public event EventHandler<string>? LaunchSuccess;
-    public event EventHandler<(string Message, int Progress)>? DownloadProgress;
+    public event EventHandler<TestingBuildDownloadProgress>? DownloadProgress;
 
     private GameLauncher() 
     {
@@ -229,6 +233,20 @@ public class GameLauncher
         /// Key = filename, Value = (bytesProcessed, totalBytes)
         /// </summary>
         public Dictionary<string, (long BytesProcessed, long TotalBytes)>? FileProgress { get; init; }
+    }
+
+    /// <summary>
+    /// Progress information for testing build downloads.
+    /// </summary>
+    public class TestingBuildDownloadProgress
+    {
+        public string Status { get; init; } = string.Empty;
+        public int ProgressPercent { get; init; }
+        public long DownloadedBytes { get; init; }
+        public long TotalBytes { get; init; }
+        public double BytesPerSecond { get; init; }
+        public TimeSpan? EstimatedTimeRemaining { get; init; }
+        public int ThreadCount { get; init; } = 1;
     }
 
     /// <summary>
@@ -742,6 +760,13 @@ public class GameLauncher
             return false;
         }
 
+        var archiveUri = ResolveTestingArchiveUri(server.TestingArchive);
+        if (archiveUri == null)
+        {
+            LaunchError?.Invoke(this, $"Invalid testing archive URL: {server.TestingArchive}");
+            return false;
+        }
+
         var versionFolder = GetTestingVersionFolder(server);
         if (string.IsNullOrEmpty(versionFolder))
         {
@@ -749,56 +774,65 @@ public class GameLauncher
             return false;
         }
 
-        LoggingService.Instance.Info($"Downloading testing version from: {server.TestingArchive}");
-        DownloadProgress?.Invoke(this, ("Starting download...", 0));
+        LoggingService.Instance.Info($"Downloading testing version from: {archiveUri}");
+        DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+        {
+            Status = "Starting download...",
+            ProgressPercent = 0
+        });
 
         try
         {
-            // Download the archive
-            using var response = await _httpClient.GetAsync(server.TestingArchive, HttpCompletionOption.ResponseHeadersRead);
+            using var response = await _httpClient.GetAsync(archiveUri, HttpCompletionOption.ResponseHeadersRead);
             response.EnsureSuccessStatusCode();
 
             var totalBytes = response.Content.Headers.ContentLength ?? -1;
             var tempFile = Path.GetTempFileName();
 
-            await using (var contentStream = await response.Content.ReadAsStreamAsync())
-            await using (var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, AppConstants.BufferSizes.FileStreamBuffer, true))
+            try
             {
-                var buffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
-                var totalRead = 0L;
-                int bytesRead;
-
-                while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
-                {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                    totalRead += bytesRead;
-
-                    if (totalBytes > 0)
-                    {
-                        var percent = (int)((totalRead * 100) / totalBytes);
-                        var sizeMB = totalRead / 1024.0 / 1024.0;
-                        var totalMB = totalBytes / 1024.0 / 1024.0;
-                        DownloadProgress?.Invoke(this, ($"Downloading: {sizeMB:F1} / {totalMB:F1} MB", percent));
-                    }
-                }
+                await DownloadTestingArchiveAsync(archiveUri, tempFile, totalBytes, response);
+            }
+            catch
+            {
+                try { File.Delete(tempFile); } catch { }
+                throw;
             }
 
-            DownloadProgress?.Invoke(this, ("Extracting...", 90));
+            DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+            {
+                Status = "Extracting...",
+                ProgressPercent = 90,
+                DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
+                TotalBytes = totalBytes > 0 ? totalBytes : 0
+            });
 
             // Create version folder
             Directory.CreateDirectory(versionFolder);
 
             // Extract archive
-            await Task.Run(() => ExtractArchive(tempFile, versionFolder, server.TestingArchive));
+            await Task.Run(() => ExtractArchive(tempFile, versionFolder, archiveUri.AbsoluteUri));
 
             // Clean up temp file
             try { File.Delete(tempFile); } catch { }
 
             // Copy configuration files from base Zandronum directory (matches Doomseeker behavior)
-            DownloadProgress?.Invoke(this, ("Copying configuration files...", 95));
+            DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+            {
+                Status = "Copying configuration files...",
+                ProgressPercent = 95,
+                DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
+                TotalBytes = totalBytes > 0 ? totalBytes : 0
+            });
             await Task.Run(() => CopyConfigFilesToTestingVersion(versionFolder));
 
-            DownloadProgress?.Invoke(this, ("Complete!", 100));
+            DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+            {
+                Status = "Complete!",
+                ProgressPercent = 100,
+                DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
+                TotalBytes = totalBytes > 0 ? totalBytes : 0
+            });
             LoggingService.Instance.Info($"Testing version {server.GameVersion} installed to: {versionFolder}");
 
             return IsTestingVersionInstalled(server);
@@ -810,6 +844,260 @@ public class GameLauncher
             LoggingService.Instance.Error(error);
             return false;
         }
+    }
+
+    private async Task DownloadTestingArchiveAsync(Uri archiveUri, string outputPath, long totalBytes, HttpResponseMessage initialResponse)
+    {
+        var domain = archiveUri.Host;
+        var (domainMaxThreads, minSegmentSizeKb, _, _) = _domainConfig.GetEffectiveThreadSettings(domain);
+        var threadCount = CalculateOptimalThreads(totalBytes, domainMaxThreads, minSegmentSizeKb);
+        var minSegmentSizeBytes = minSegmentSizeKb * 1024L;
+        var supportsRange = totalBytes > 0 && threadCount > 1 && await TestRangeRequestAsync(archiveUri);
+
+        if (supportsRange && totalBytes > minSegmentSizeBytes * 2)
+        {
+            LoggingService.Instance.Verbose($"Using {threadCount} threads for testing build download from {domain}.");
+            initialResponse.Dispose();
+            await MultiThreadedDownloadTestingArchiveAsync(archiveUri, outputPath, totalBytes, threadCount);
+            _domainConfig.UpdateThreadCount(domain, threadCount);
+            return;
+        }
+
+        await SingleThreadDownloadTestingArchiveAsync(archiveUri, outputPath, totalBytes, initialResponse);
+    }
+
+    private async Task SingleThreadDownloadTestingArchiveAsync(Uri archiveUri, string outputPath, long totalBytes, HttpResponseMessage? response)
+    {
+        using var ownedResponse = response is null
+            ? await _httpClient.GetAsync(archiveUri, HttpCompletionOption.ResponseHeadersRead)
+            : null;
+        using var activeResponse = response ?? ownedResponse!;
+
+        activeResponse.EnsureSuccessStatusCode();
+
+        var resolvedTotalBytes = totalBytes > 0 ? totalBytes : activeResponse.Content.Headers.ContentLength ?? -1;
+        await using var contentStream = await activeResponse.Content.ReadAsStreamAsync();
+        await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, AppConstants.BufferSizes.FileStreamBuffer, true);
+
+        var buffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
+        var totalRead = 0L;
+        var stopwatch = Stopwatch.StartNew();
+        var lastUpdate = Stopwatch.StartNew();
+        var lastBytes = 0L;
+        int bytesRead;
+
+        while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
+        {
+            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+            totalRead += bytesRead;
+
+            if (lastUpdate.ElapsedMilliseconds >= AppConstants.UiIntervals.UiUpdateThrottleMs ||
+                (resolvedTotalBytes > 0 && totalRead >= resolvedTotalBytes))
+            {
+                var elapsedSeconds = Math.Max(lastUpdate.Elapsed.TotalSeconds, 0.001);
+                var speed = (totalRead - lastBytes) / elapsedSeconds;
+                ReportTestingDownloadProgress(totalRead, resolvedTotalBytes, speed, threadCount: 1);
+                lastBytes = totalRead;
+                lastUpdate.Restart();
+            }
+        }
+
+        var finalElapsedSeconds = Math.Max(stopwatch.Elapsed.TotalSeconds, 0.001);
+        var finalSpeed = totalRead / finalElapsedSeconds;
+        ReportTestingDownloadProgress(totalRead, resolvedTotalBytes, finalSpeed, threadCount: 1);
+    }
+
+    private async Task MultiThreadedDownloadTestingArchiveAsync(Uri archiveUri, string outputPath, long totalBytes, int threadCount)
+    {
+        var segmentSize = (long)Math.Ceiling((double)totalBytes / threadCount);
+        var segments = new List<(long Start, long End)>();
+
+        for (long start = 0; start < totalBytes; start += segmentSize)
+        {
+            var end = Math.Min(start + segmentSize - 1, totalBytes - 1);
+            segments.Add((start, end));
+        }
+
+        var downloadedBytes = new long[segments.Count];
+        var failedSegments = new ConcurrentBag<(int SegmentIndex, bool IsConnectionLimit)>();
+        using var outputHandle = File.OpenHandle(
+            outputPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        RandomAccess.SetLength(outputHandle, totalBytes);
+
+        var lastUpdate = Stopwatch.StartNew();
+        var lastBytes = 0L;
+        using var progressTimer = new System.Timers.Timer(AppConstants.UiIntervals.UiUpdateThrottleMs);
+        progressTimer.Elapsed += (_, _) =>
+        {
+            var currentBytes = downloadedBytes.Sum();
+            var elapsedSeconds = Math.Max(lastUpdate.Elapsed.TotalSeconds, 0.001);
+            var speed = (currentBytes - lastBytes) / elapsedSeconds;
+            ReportTestingDownloadProgress(currentBytes, totalBytes, speed, threadCount);
+            lastBytes = currentBytes;
+            lastUpdate.Restart();
+        };
+
+        progressTimer.Start();
+
+        try
+        {
+            var downloadTasks = segments.Select((segment, index) =>
+                DownloadTestingArchiveSegmentAsync(archiveUri, segment.Start, segment.End, outputHandle, index, downloadedBytes, failedSegments));
+
+            await Task.WhenAll(downloadTasks);
+
+            var connectionLimitFailures = failedSegments.Count(f => f.IsConnectionLimit);
+            if (connectionLimitFailures > segments.Count * 0.3)
+            {
+                _domainConfig.ReduceThreadCount(archiveUri.Host, threadCount);
+                throw new Exception($"Testing build download hit connection limits with {threadCount} threads.");
+            }
+
+            if (!failedSegments.IsEmpty)
+            {
+                throw new Exception($"{failedSegments.Count} download segments failed.");
+            }
+        }
+        finally
+        {
+            progressTimer.Stop();
+        }
+
+        var finalBytes = downloadedBytes.Sum();
+        ReportTestingDownloadProgress(finalBytes, totalBytes, 0, threadCount);
+    }
+
+    private async Task DownloadTestingArchiveSegmentAsync(
+        Uri archiveUri,
+        long start,
+        long end,
+        Microsoft.Win32.SafeHandles.SafeFileHandle outputHandle,
+        int segmentIndex,
+        long[] downloadedBytes,
+        ConcurrentBag<(int SegmentIndex, bool IsConnectionLimit)> failedSegments)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, archiveUri);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(start, end);
+
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+
+            await using var stream = await response.Content.ReadAsStreamAsync();
+            long position = start;
+            var buffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
+            int bytesRead;
+
+            while ((bytesRead = await stream.ReadAsync(buffer)) > 0)
+            {
+                await RandomAccess.WriteAsync(outputHandle, buffer.AsMemory(0, bytesRead), position);
+                position += bytesRead;
+                downloadedBytes[segmentIndex] = position - start;
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            var isConnectionLimit = ex.StatusCode == HttpStatusCode.TooManyRequests ||
+                                    ex.StatusCode == HttpStatusCode.ServiceUnavailable ||
+                                    ex.InnerException is System.Net.Sockets.SocketException;
+            failedSegments.Add((segmentIndex, isConnectionLimit));
+        }
+        catch
+        {
+            failedSegments.Add((segmentIndex, false));
+        }
+    }
+
+    private async Task<bool> TestRangeRequestAsync(Uri archiveUri)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Head, archiveUri);
+            using var response = await _httpClient.SendAsync(request);
+            if (response.IsSuccessStatusCode && response.Headers.AcceptRanges.Contains("bytes"))
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // Fall back to GET probe below.
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, archiveUri);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            return response.IsSuccessStatusCode && response.Headers.AcceptRanges.Contains("bytes");
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int CalculateOptimalThreads(long totalBytes, int domainMaxThreads, int minSegmentSizeKb)
+    {
+        if (totalBytes <= 0)
+        {
+            return 1;
+        }
+
+        var minSegmentSize = minSegmentSizeKb * 1024L;
+        var maxBySegmentSize = (int)Math.Max(1, totalBytes / minSegmentSize);
+        var maxByFileSize = totalBytes switch
+        {
+            < 1_000_000 => 4,
+            < 5_000_000 => 16,
+            < 20_000_000 => 32,
+            < 50_000_000 => 64,
+            < 100_000_000 => 128,
+            _ => domainMaxThreads
+        };
+
+        return Math.Max(1, Math.Min(Math.Min(maxByFileSize, domainMaxThreads), maxBySegmentSize));
+    }
+
+    private void ReportTestingDownloadProgress(long downloadedBytes, long totalBytes, double bytesPerSecond, int threadCount)
+    {
+        TimeSpan? estimatedTimeRemaining = null;
+        if (totalBytes > 0 && bytesPerSecond > 0 && downloadedBytes < totalBytes)
+        {
+            estimatedTimeRemaining = TimeSpan.FromSeconds((totalBytes - downloadedBytes) / bytesPerSecond);
+        }
+
+        DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+        {
+            Status = "Downloading...",
+            ProgressPercent = totalBytes > 0 ? (int)((downloadedBytes * 100) / totalBytes) : 0,
+            DownloadedBytes = downloadedBytes,
+            TotalBytes = totalBytes > 0 ? totalBytes : 0,
+            BytesPerSecond = bytesPerSecond,
+            EstimatedTimeRemaining = estimatedTimeRemaining,
+            ThreadCount = threadCount
+        });
+    }
+
+    private static Uri? ResolveTestingArchiveUri(string archivePath)
+    {
+        if (string.IsNullOrWhiteSpace(archivePath))
+        {
+            return null;
+        }
+
+        if (Uri.TryCreate(archivePath, UriKind.Absolute, out var absoluteUri))
+        {
+            return absoluteUri;
+        }
+
+        return Uri.TryCreate(TestingArchiveBaseUri, archivePath, out var relativeUri)
+            ? relativeUri
+            : null;
     }
 
     /// <summary>
