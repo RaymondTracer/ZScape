@@ -703,7 +703,7 @@ public class GameLauncher
     /// Strips extraneous data after the version number (e.g., OS info, mod names).
     /// Example: "3.3-alpha-r260112-1855 (TSPGv32) on Linux 6.8.0-58-generic" -> "3.3-alpha-r260112-1855"
     /// </summary>
-    private static string ExtractCoreVersion(string fullVersion)
+    public static string ExtractCoreVersion(string fullVersion)
     {
         if (string.IsNullOrEmpty(fullVersion))
         {
@@ -833,7 +833,7 @@ public class GameLauncher
                 DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
                 TotalBytes = totalBytes > 0 ? totalBytes : 0
             });
-            LoggingService.Instance.Info($"Testing version {server.GameVersion} installed to: {versionFolder}");
+            LoggingService.Instance.Info($"Testing version {ExtractCoreVersion(server.GameVersion)} installed to: {versionFolder}");
 
             return IsTestingVersionInstalled(server);
         }

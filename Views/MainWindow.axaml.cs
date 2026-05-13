@@ -1247,7 +1247,7 @@ public partial class MainWindow : Window
         if (ServerDetailsText == null) return;
 
         var sb = new System.Text.StringBuilder();
-        var version = string.IsNullOrWhiteSpace(server.GameVersion) ? "Unknown" : server.GameVersion;
+        var version = string.IsNullOrWhiteSpace(server.GameVersion) ? "Unknown" : GameLauncher.ExtractCoreVersion(server.GameVersion);
         sb.AppendLine($"Server: {DoomColorCodes.StripColorCodes(server.Name)}");
         sb.AppendLine($"Address: {server.Address}:{server.Port}");
         sb.AppendLine($"Map: {server.Map}");
@@ -2158,9 +2158,10 @@ public partial class MainWindow : Window
 
                 if (hasArchive)
                 {
+                    var coreVersion = GameLauncher.ExtractCoreVersion(server.GameVersion);
                     var confirmDownload = await ShowConfirmDialogAsync(
                         "Testing Version Not Found",
-                        $"Testing version '{server.GameVersion}' is not installed.\n\nWould you like to download it now?");
+                        $"Testing version '{coreVersion}' is not installed.\n\nWould you like to download it now?");
 
                     if (confirmDownload)
                     {
@@ -2176,7 +2177,7 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    _logger.Warning($"Testing version '{server.GameVersion}' not installed and no download URL available");
+                    _logger.Warning($"Testing version '{GameLauncher.ExtractCoreVersion(server.GameVersion)}' not installed and no download URL available");
                     return;
                 }
             }
@@ -2684,7 +2685,7 @@ public partial class MainWindow : Window
 
         var progressWindow = new Window
         {
-            Title = $"Downloading {server.GameVersion}",
+            Title = $"Downloading {GameLauncher.ExtractCoreVersion(server.GameVersion)}",
             Width = 480,
             Height = 210,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
