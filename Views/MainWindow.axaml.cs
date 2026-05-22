@@ -1709,6 +1709,56 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void LaunchGameMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        await ShowLaunchGameDialogAsync();
+    }
+
+    private async void LaunchGameButton_Click(object? sender, RoutedEventArgs e)
+    {
+        await ShowLaunchGameDialogAsync();
+    }
+
+    /// <summary>
+    /// Shows the Launch Game dialog for playing offline or hosting a server.
+    /// </summary>
+    private async Task ShowLaunchGameDialogAsync()
+    {
+        var dialog = new LaunchGameDialog();
+        await dialog.ShowDialog(this);
+
+        if (!dialog.Confirmed || string.IsNullOrEmpty(dialog.SelectedIwadPath))
+            return;
+
+        var launcher = GameLauncher.Instance;
+        var pwadPaths = dialog.SelectedPwadPaths;
+
+        if (dialog.IsHostMode)
+        {
+            launcher.LaunchHost(
+                exePath: dialog.SelectedExePath,
+                iwadPath: dialog.SelectedIwadPath,
+                pwadPaths: pwadPaths,
+                skill: dialog.GetSkill(),
+                maxPlayers: dialog.GetMaxPlayers(),
+                maxClients: dialog.GetMaxClients(),
+                isDedicated: dialog.IsDedicated,
+                map: dialog.GetMap(),
+                serverName: dialog.GetServerName(),
+                password: dialog.GetServerPassword(),
+                joinPassword: dialog.GetJoinPassword());
+        }
+        else
+        {
+            launcher.LaunchOffline(
+                exePath: dialog.SelectedExePath,
+                iwadPath: dialog.SelectedIwadPath,
+                pwadPaths: pwadPaths,
+                skill: dialog.GetSkill(),
+                map: dialog.GetMap());
+        }
+    }
+
     private async void DownloadWadsMenuItem_Click(object? sender, RoutedEventArgs e)
     {
         if (_selectedServer == null) return;

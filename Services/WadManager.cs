@@ -360,6 +360,74 @@ public class WadManager
         var baseName = Path.GetFileNameWithoutExtension(wadName);
         return ForbiddenWads.Contains(baseName);
     }
+
+    /// <summary>
+    /// Known IWAD filename patterns that identify a WAD as an IWAD.
+    /// Used to filter the full WAD cache down to IWADs only.
+    /// </summary>
+    private static readonly string[] IwadFilePatterns =
+    [
+        "doom.wad", "doom1.wad", "doom2.wad", "doomu.wad",
+        "freedoom1.wad", "freedoom2.wad", "freedm.wad",
+        "plutonia.wad", "tnt.wad",
+        "heretic.wad", "hexen.wad", "hexdd.wad",
+        "strife1.wad",
+        "chex.wad", "chex3.wad", "hacx.wad",
+        "nerve.wad",
+        "sigil.wad", "sigil_shreds.wad", "sigil_shreds_compat.wad"
+    ];
+
+    /// <summary>
+    /// Enumerates all IWADs found in the WAD cache.
+    /// Returns a list of (display name, full path) pairs sorted alphabetically.
+    /// </summary>
+    public List<(string DisplayName, string FullPath)> EnumerateIwads()
+    {
+        var iwads = new List<(string, string)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (fileName, fullPath) in _wadCache)
+        {
+            if (!seen.Add(fileName))
+                continue;
+
+            var match = IwadFilePatterns.FirstOrDefault(pattern =>
+                fileName.Equals(pattern, StringComparison.OrdinalIgnoreCase));
+
+            if (match != null)
+            {
+                iwads.Add((Path.GetFileNameWithoutExtension(fileName), fullPath));
+            }
+        }
+
+        // Also scan for any .wad file whose basename matches an IWAD pattern
+        var searchPaths = GetSearchRootsInPriorityOrder();
+        foreach (var searchPath in searchPaths)
+        {
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(searchPath, "*.wad", SearchOption.TopDirectoryOnly))
+                {
+                    var fileName = Path.GetFileName(file);
+                    if (!seen.Add(fileName))
+                        continue;
+
+                    var match = IwadFilePatterns.FirstOrDefault(pattern =>
+                        fileName.Equals(pattern, StringComparison.OrdinalIgnoreCase));
+
+                    if (match != null)
+                    {
+                        iwads.Add((Path.GetFileNameWithoutExtension(fileName), file));
+                    }
+                }
+            }
+            catch { /* Ignore access errors */ }
+        }
+
+        return iwads
+            .OrderBy(i => i.Item1, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
     
     /// <summary>
     /// Gets all WADs in the cache.

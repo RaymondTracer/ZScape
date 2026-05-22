@@ -1,0 +1,180 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
+        x:Class="ZScape.Views.LaunchGameDialog"
+        Title="Launch Game"
+        Width="550" Height="600"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False"
+        ExtendClientAreaToDecorationsHint="False">
+
+    <Grid Margin="15" RowDefinitions="*,45">
+        <ScrollViewer Grid.Row="0"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Spacing="10" Margin="0,0,0,10">
+                <!-- Config Presets -->
+                <StackPanel Spacing="5">
+                    <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                        <TextBlock Grid.Column="0" Text="Configuration" FontWeight="Bold" FontSize="12"
+                                   VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" x:Name="SaveConfigButton" Content="Save..."
+                                Width="70" Height="24" FontSize="11"
+                                Click="SaveConfigButton_Click"/>
+                        <Button Grid.Column="2" x:Name="ClearConfigButton" Content="Clear"
+                                Width="50" Height="24" FontSize="11" Margin="5,0,0,0"
+                                Click="ClearConfigButton_Click"/>
+                        <Button Grid.Column="3" x:Name="DeleteConfigButton" Content="Delete"
+                                Width="55" Height="24" FontSize="11" Margin="5,0,0,0"
+                                Click="DeleteConfigButton_Click"/>
+                    </Grid>
+                    <controls:PersistentComboBox x:Name="ConfigPresetComboBox" Width="465"
+                              HorizontalAlignment="Left" SelectedIndex="0"
+                              SelectionChanged="ConfigPresetComboBox_SelectionChanged"/>
+                </StackPanel>
+
+                <!-- Mode Selection -->
+                <StackPanel Spacing="5">
+                    <TextBlock Text="Launch Mode" FontWeight="Bold" FontSize="12"/>
+                    <StackPanel Orientation="Horizontal" Spacing="20">
+                        <RadioButton x:Name="OfflineModeRadio" Content="Play _Offline"
+                                     IsChecked="True" GroupName="LaunchMode"
+                                     Click="LaunchModeRadio_Click"/>
+                        <RadioButton x:Name="HostModeRadio" Content="_Host Server"
+                                     GroupName="LaunchMode"
+                                     Click="LaunchModeRadio_Click"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Host Server Options (visible only when Host mode selected) -->
+                <StackPanel x:Name="HostOptionsPanel" Spacing="5" IsVisible="False">
+                    <TextBlock Text="Server Type" FontWeight="Bold" FontSize="12"/>
+                    <StackPanel Orientation="Horizontal" Spacing="20">
+                        <RadioButton x:Name="ListenServerRadio" Content="_Listen Server (play + host)"
+                                     IsChecked="True" GroupName="ServerType"/>
+                        <RadioButton x:Name="DedicatedServerRadio" Content="_Dedicated Server (host only)"
+                                     GroupName="ServerType"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Zandronum Version -->
+                <StackPanel Spacing="5">
+                    <TextBlock Text="Zandronum Version" FontWeight="Bold" FontSize="12"/>
+                    <controls:PersistentComboBox x:Name="VersionComboBox" Width="465"
+                              HorizontalAlignment="Left" SelectedIndex="0"
+                              SelectionChanged="VersionComboBox_SelectionChanged"/>
+                </StackPanel>
+
+                <!-- IWAD Selection -->
+                <StackPanel Spacing="5">
+                    <TextBlock Text="IWAD" FontWeight="Bold" FontSize="12"/>
+                    <controls:PersistentComboBox x:Name="IwadComboBox" Width="465"
+                              HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- PWAD Selection -->
+                <StackPanel Spacing="5">
+                    <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto">
+                        <TextBlock Grid.Column="0" Text="PWADs" FontWeight="Bold" FontSize="12"
+                                   VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" x:Name="AddPwadButton" Content="Add..."
+                                Width="55" Height="24" FontSize="11"
+                                Click="AddPwadButton_Click"/>
+                        <Button Grid.Column="2" x:Name="RemovePwadButton" Content="Remove"
+                                Width="55" Height="24" FontSize="11" Margin="5,0,0,0"
+                                IsEnabled="False" Click="RemovePwadButton_Click"/>
+                        <Button Grid.Column="3" x:Name="MoveUpPwadButton" Content="Up"
+                                Width="35" Height="24" FontSize="11" Margin="5,0,0,0"
+                                IsEnabled="False" Click="MoveUpPwadButton_Click"/>
+                        <Button Grid.Column="4" x:Name="MoveDownPwadButton" Content="Down"
+                                Width="45" Height="24" FontSize="11" Margin="2,0,0,0"
+                                IsEnabled="False" Click="MoveDownPwadButton_Click"/>
+                    </Grid>
+                    <ListBox x:Name="PwadsListBox" Height="60" SelectionMode="Single"/>
+                    <Grid ColumnDefinitions="100,*">
+                        <TextBlock Grid.Column="0" Text="Selected path:" FontSize="11"
+                                   VerticalAlignment="Center" Foreground="Gray"/>
+                        <TextBox Grid.Column="1" x:Name="PwadEditTextBox"
+                                 Width="365" HorizontalAlignment="Left"
+                                 TextChanged="PwadEditTextBox_TextChanged"/>
+                    </Grid>
+                </StackPanel>
+
+                <!-- Map -->
+                <StackPanel Spacing="5">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="Map (optional)" FontSize="12"/>
+                    </Grid>
+                    <TextBox x:Name="MapTextBox" Watermark="e.g. MAP01, E1M1" Width="465"
+                             HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- Skill -->
+                <StackPanel Spacing="5">
+                    <TextBlock Text="Skill Level" FontSize="12"/>
+                    <controls:PersistentComboBox x:Name="SkillComboBox" Width="180"
+                              HorizontalAlignment="Left"
+                              SelectedIndex="2">
+                        <ComboBoxItem Content="1 - I'm Too Young to Die"/>
+                        <ComboBoxItem Content="2 - Hey, Not Too Rough"/>
+                        <ComboBoxItem Content="3 - Hurt Me Plenty"/>
+                        <ComboBoxItem Content="4 - Ultra-Violence"/>
+                        <ComboBoxItem Content="5 - Nightmare!"/>
+                    </controls:PersistentComboBox>
+                </StackPanel>
+
+                <!-- Max Players (host only) -->
+                <StackPanel x:Name="MaxPlayersPanel" Spacing="5">
+                    <TextBlock Text="Max Players" FontSize="12"/>
+                    <controls:NumericSpinner x:Name="MaxPlayersNumeric"
+                                   Minimum="1" Maximum="64" Value="8"
+                                   Width="80" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- Max Clients (host only) -->
+                <StackPanel x:Name="MaxClientsPanel" Spacing="5" IsVisible="False">
+                    <TextBlock Text="Max Clients (total connections including spectators)" FontSize="12"/>
+                    <controls:NumericSpinner x:Name="MaxClientsNumeric"
+                                   Minimum="2" Maximum="64" Value="32"
+                                   Width="80" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- Server Name / Password (host only) -->
+                <StackPanel x:Name="HostAdvancedPanel" Spacing="5" IsVisible="False">
+                    <Grid ColumnDefinitions="100,*">
+                        <TextBlock Grid.Column="0" Text="Server Name:" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="ServerNameTextBox"
+                                 Watermark="My Server" Width="365"
+                                 HorizontalAlignment="Left"/>
+                    </Grid>
+                    <Grid ColumnDefinitions="100,*">
+                        <TextBlock Grid.Column="0" Text="Password:" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="ServerPasswordTextBox"
+                                 Watermark="(optional)" Width="200" PasswordChar="*"
+                                 HorizontalAlignment="Left"/>
+                    </Grid>
+                    <Grid ColumnDefinitions="100,*">
+                        <TextBlock Grid.Column="0" Text="Join Password:" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="JoinPasswordTextBox"
+                                 Watermark="(optional)" Width="200" PasswordChar="*"
+                                 HorizontalAlignment="Left"/>
+                    </Grid>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Buttons -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,10,Auto">
+            <TextBlock Grid.Column="0" x:Name="StatusLabel"
+                       Text="" VerticalAlignment="Center"
+                       Foreground="Gray"/>
+            <Button Grid.Column="1" x:Name="LaunchButton" Content="_Launch"
+                    Width="80" Height="30" IsEnabled="False"
+                    Click="LaunchButton_Click"/>
+            <Button Grid.Column="3" x:Name="CancelButton" Content="Cancel"
+                    Width="80" Height="30"
+                    Click="CancelButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

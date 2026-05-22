@@ -1273,4 +1273,177 @@ public class GameLauncher
         var args = BuildCommandLine(server, null, null);
         return $"\"{exePath}\" {args}";
     }
+
+    /// <summary>
+    /// Launches Zandronum in offline (single-player) mode with the given IWAD and PWADs.
+    /// </summary>
+    /// <param name="exePath">Full path to the Zandronum executable, or null for the stable configured path.</param>
+    public bool LaunchOffline(string? exePath, string iwadPath, IReadOnlyList<string> pwadPaths, int skill, string? map)
+    {
+        exePath ??= SettingsService.Instance.Settings.ZandronumPath;
+        if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
+        {
+            LaunchError?.Invoke(this, "Zandronum executable not configured. Please set it in Settings.");
+            return false;
+        }
+
+        var args = new List<string>
+        {
+            $"-iwad \"{iwadPath}\""
+        };
+
+        if (pwadPaths.Count > 0)
+        {
+            args.Add($"-file {string.Join(" ", pwadPaths.Select(p => $"\"{p}\""))}");
+        }
+
+        if (skill >= 0 && skill <= 4)
+        {
+            args.Add($"-skill {skill}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(map))
+        {
+            args.Add($"+map \"{map}\"");
+        }
+
+        var argString = string.Join(" ", args);
+        LoggingService.Instance.Verbose($"Launching offline: {exePath} {argString}");
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = exePath,
+                Arguments = argString,
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(exePath)
+            };
+            Process.Start(startInfo);
+
+            var msg = "Launched Zandronum in offline mode";
+            LaunchSuccess?.Invoke(this, msg);
+            LoggingService.Instance.Info(msg);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var error = $"Failed to launch Zandronum offline: {ex.Message}";
+            LaunchError?.Invoke(this, error);
+            LoggingService.Instance.Error(error);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Launches Zandronum as a host server (listen or dedicated).
+    /// For dedicated servers, tries zandronum-server.exe first, falling back to zandronum.exe -host.
+    /// </summary>
+    /// <param name="exePath">Full path to the Zandronum executable, or null for the stable configured path.</param>
+    public bool LaunchHost(
+        string? exePath,
+        string iwadPath,
+        IReadOnlyList<string> pwadPaths,
+        int skill,
+        int maxPlayers,
+        int maxClients,
+        bool isDedicated,
+        string? map,
+        string? serverName,
+        string? password,
+        string? joinPassword)
+    {
+        exePath ??= SettingsService.Instance.Settings.ZandronumPath;
+        if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
+        {
+            LaunchError?.Invoke(this, "Zandronum executable not configured. Please set it in Settings.");
+            return false;
+        }
+
+        string resolvedExePath;
+        var args = new List<string>();
+
+        if (isDedicated)
+        {
+            var exeDir = Path.GetDirectoryName(exePath) ?? "";
+            var dedicatedExe = Path.Combine(exeDir, "zandronum-server.exe");
+            if (File.Exists(dedicatedExe))
+            {
+                resolvedExePath = dedicatedExe;
+            }
+            else
+            {
+                resolvedExePath = exePath;
+                args.Add("-host");
+            }
+        }
+        else
+        {
+            resolvedExePath = exePath;
+            args.Add("-host");
+        }
+
+        args.Add($"-iwad \"{iwadPath}\"");
+
+        if (pwadPaths.Count > 0)
+        {
+            args.Add($"-file {string.Join(" ", pwadPaths.Select(p => $"\"{p}\""))}");
+        }
+
+        if (skill >= 0 && skill <= 4)
+        {
+            args.Add($"-skill {skill}");
+        }
+
+        args.Add($"+sv_maxplayers {maxPlayers}");
+        args.Add($"+sv_maxclients {maxClients}");
+
+        if (!string.IsNullOrWhiteSpace(map))
+        {
+            args.Add($"+map \"{map}\"");
+        }
+
+        if (!string.IsNullOrWhiteSpace(serverName))
+        {
+            args.Add($"+sv_hostname \"{serverName}\"");
+        }
+
+        if (!string.IsNullOrWhiteSpace(password))
+        {
+            args.Add($"+sv_password \"{password}\"");
+        }
+
+        if (!string.IsNullOrWhiteSpace(joinPassword))
+        {
+            args.Add($"+sv_joinpassword \"{joinPassword}\"");
+        }
+
+        var argString = string.Join(" ", args);
+        LoggingService.Instance.Verbose($"Launching host: {resolvedExePath} {argString}");
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = resolvedExePath,
+                Arguments = argString,
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(resolvedExePath)
+            };
+            Process.Start(startInfo);
+
+            var mode = isDedicated ? "dedicated server" : "listen server";
+            var msg = $"Launched Zandronum as {mode}";
+            LaunchSuccess?.Invoke(this, msg);
+            LoggingService.Instance.Info(msg);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var error = $"Failed to launch Zandronum host: {ex.Message}";
+            LaunchError?.Invoke(this, error);
+            LoggingService.Instance.Error(error);
+            return false;
+        }
+    }
 }

@@ -26,6 +26,8 @@
         <!-- Menu Bar -->
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
+                <MenuItem Header="_Launch Game..." Click="LaunchGameMenuItem_Click" />
+                <Separator />
                 <MenuItem Header="_Refresh" Click="RefreshMenuItem_Click" InputGesture="F5" />
                 <MenuItem Header="_Stop" x:Name="StopMenuItem" Click="StopMenuItem_Click" IsEnabled="False" />
                 <Separator />
@@ -80,6 +82,7 @@
                           SelectionChanged="GameModeComboBox_SelectionChanged" Padding="4,2" />
                 <Button Content="Advanced Filter..." Click="AdvancedFilterButton_Click" Padding="8,2" />
                 <Button Content="History" Click="HistoryButton_Click" Padding="8,2" />
+                <Button Content="Launch Game..." Click="LaunchGameButton_Click" Padding="8,2" />
             </StackPanel>
         </Border>
         

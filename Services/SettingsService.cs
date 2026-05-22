@@ -89,6 +89,7 @@ public class SettingsService
         settings.DownloadSites ??= [];
         settings.FavoriteServerNameRules = NormalizeRules(settings.FavoriteServerNameRules);
         settings.HiddenServerNameRules = NormalizeRules(settings.HiddenServerNameRules);
+        settings.SavedLaunchGameConfigs ??= [];
 
         NormalizeFilter(settings.CurrentFilter);
         foreach (var preset in settings.FilterPresets)
@@ -603,6 +604,12 @@ public class AppSettings
     
     /// <summary>GitHub repository name for update checks.</summary>
     public string GitHubRepo { get; set; } = "ZScape";
+
+    /// <summary>Last-used settings from the Launch Game dialog. Persisted across sessions.</summary>
+    public LaunchGameConfig? LastLaunchGameConfig { get; set; }
+
+    /// <summary>Named saved launch-game configurations.</summary>
+    public List<NamedLaunchGameConfig> SavedLaunchGameConfigs { get; set; } = [];
 }
 
 /// <summary>
