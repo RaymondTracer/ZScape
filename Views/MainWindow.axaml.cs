@@ -4,11 +4,13 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -31,6 +33,7 @@ public partial class MainWindow : Window
     private readonly WadManager _wadManager = WadManager.Instance;
     private readonly NotificationService _notificationService = NotificationService.Instance;
     private readonly ScreenshotMonitorService _screenshotMonitor = ScreenshotMonitorService.Instance;
+    private readonly ZandronumStableReleaseService _stableReleaseService = ZandronumStableReleaseService.Instance;
     private readonly DispatcherTimer _autoRefreshTimer = new();
     private readonly DispatcherTimer _favoritesRefreshTimer = new();
     private readonly DispatcherTimer _countdownTimer = new();
@@ -116,10 +119,12 @@ public partial class MainWindow : Window
         // Load settings after UI is ready
         Dispatcher.UIThread.Post(async () =>
         {
+            UpdateServerState? setupPrefetchedServerState = null;
+
             // Check for first-time setup
             if (!_settings.SettingsFileExists)
             {
-                await ShowFirstTimeSetupAsync();
+                setupPrefetchedServerState = await ShowFirstTimeSetupAsync();
             }
 
             // Auto-detect paths if not configured
@@ -131,7 +136,15 @@ public partial class MainWindow : Window
             // Start screenshot monitoring
             _screenshotMonitor.StartMonitoring();
 
-            if (_settings.Settings.RefreshOnLaunch)
+            if (setupPrefetchedServerState != null)
+            {
+                _logger.Info("Using server list prefetched during first-time setup...");
+                await _browserService.ResumeFromStateAsync(setupPrefetchedServerState);
+                UpdateAutoRefreshStatus();
+                UpdateServerList();
+                UpdateStatusBar();
+            }
+            else if (_settings.Settings.RefreshOnLaunch)
             {
                 _ = RefreshServersAsync();
             }
@@ -1247,7 +1260,7 @@ public partial class MainWindow : Window
         if (ServerDetailsText == null) return;
 
         var sb = new System.Text.StringBuilder();
-        var version = string.IsNullOrWhiteSpace(server.GameVersion) ? "Unknown" : GameLauncher.ExtractCoreVersion(server.GameVersion);
+        var version = string.IsNullOrWhiteSpace(server.GameVersion) ? "Unknown" : server.GameVersion;
         sb.AppendLine($"Server: {DoomColorCodes.StripColorCodes(server.Name)}");
         sb.AppendLine($"Address: {server.Address}:{server.Port}");
         sb.AppendLine($"Map: {server.Map}");
@@ -1258,7 +1271,6 @@ public partial class MainWindow : Window
         sb.AppendLine($"IWAD: {server.IWAD}");
 
         if (server.IsPassworded) sb.AppendLine("Password Protected: Yes");
-        if (server.IsTestingServer) sb.AppendLine("Testing Server: Yes");
         if (!string.IsNullOrWhiteSpace(server.Website)) sb.AppendLine($"URL: {server.Website}");
 
         ServerDetailsText.Text = sb.ToString();
@@ -2201,6 +2213,39 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (!server.IsTestingServer)
+            {
+                var requiredStableVersion = launcher.GetRequiredStableVersion(server);
+                if (!string.IsNullOrEmpty(requiredStableVersion) && !launcher.IsStableVersionInstalled(server))
+                {
+                    var installedStableVersion = _stableReleaseService.TryGetInstalledStableVersion(_settings.Settings.ZandronumPath, out var detectedVersion, out _)
+                        ? detectedVersion
+                        : null;
+
+                    var stableVersionMessage = string.IsNullOrEmpty(installedStableVersion)
+                        ? $"Stable version '{requiredStableVersion}' is not installed.\n\nWould you like to download it now into the separate StableVersions folder?"
+                        : _stableReleaseService.CompareStableVersions(requiredStableVersion, installedStableVersion) > 0
+                            ? $"This server requires stable version '{requiredStableVersion}', but your configured stable install is '{installedStableVersion}'.\n\nWould you like to download '{requiredStableVersion}' now into the separate StableVersions folder?"
+                            : $"This server requires older stable version '{requiredStableVersion}', but your configured stable install is '{installedStableVersion}'.\n\nWould you like to download '{requiredStableVersion}' now into the separate StableVersions folder?";
+
+                    var confirmDownload = await ShowConfirmDialogAsync(
+                        "Stable Version Not Found",
+                        stableVersionMessage);
+
+                    if (confirmDownload)
+                    {
+                        if (!await DownloadStableVersionAsync(requiredStableVersion))
+                        {
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        return;
+                    }
+                }
+            }
+
             // For testing servers, check if the specific version is installed
             if (server.IsTestingServer && !launcher.IsTestingVersionInstalled(server))
             {
@@ -2838,6 +2883,232 @@ public partial class MainWindow : Window
         return result && !cancelled;
     }
 
+    private async Task<bool> DownloadStableVersionAsync(string version)
+    {
+        if (!_stableReleaseService.TryCreateReleaseManifestForVersion(version, out var release, out var errorMessage))
+        {
+            await ShowMessageAsync("Stable Download Unavailable", errorMessage ?? "Automatic stable installs are not available on this platform yet.");
+            return false;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = release.DownloadUrl,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync("Browser Launch Failed", $"Could not open the official Zandronum download in your browser:\n{ex.Message}");
+            return false;
+        }
+
+        var readyToExtract = await ShowConfirmDialogAsync(
+            "Choose Downloaded Archive",
+            $"Your browser should now be downloading the official Zandronum {release.Version} archive. Save it wherever you want.\n\nClick Yes when the download finishes and you are ready to let ZScape extract it.");
+
+        if (!readyToExtract)
+        {
+            return false;
+        }
+
+        var archiveFiles = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = $"Select the downloaded Zandronum {release.Version} archive",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Zandronum Archive") { Patterns = _stableReleaseService.GetArchivePickerPatterns(release) },
+                new FilePickerFileType("All Files") { Patterns = ["*"] }
+            ]
+        });
+
+        if (archiveFiles.Count == 0)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_settings.Settings.ZandronumPath) || !File.Exists(_settings.Settings.ZandronumPath))
+        {
+            await ShowMessageAsync("Stable Path Missing", "ZScape needs your configured stable Zandronum executable before it can place archived stable builds.");
+            return false;
+        }
+
+        var installDirectory = _stableReleaseService.GetArchivedVersionInstallPath(_settings.Settings.ZandronumPath, release.Version);
+        if (string.IsNullOrEmpty(installDirectory))
+        {
+            await ShowMessageAsync("Stable Install Folder Unavailable", "ZScape could not determine where to store the requested stable version.");
+            return false;
+        }
+
+        if (Directory.Exists(installDirectory) && Directory.EnumerateFileSystemEntries(installDirectory).Any())
+        {
+            var confirmed = await ShowConfirmDialogAsync(
+                "Overwrite Existing Folder",
+                $"{installDirectory}\n\nalready exists and is not empty. Replace it with a fresh Zandronum {release.Version} install?");
+
+            if (!confirmed)
+            {
+                return false;
+            }
+
+            try
+            {
+                Directory.Delete(installDirectory, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync("Unable To Replace Folder", $"Could not clear the existing install folder:\n{ex.Message}");
+                return false;
+            }
+        }
+
+        var archivePath = archiveFiles[0].Path.LocalPath;
+        var installResult = await ShowStableInstallProgressAsync(release, archivePath, installDirectory);
+        if (installResult == null)
+        {
+            return false;
+        }
+
+        await ShowMessageAsync(
+            "Zandronum Installed",
+            $"Zandronum {installResult.Version} was installed successfully.\n\nExecutable:\n{installResult.ExecutablePath}");
+
+        return true;
+    }
+
+    private async Task<ZandronumStableReleaseService.InstallResult?> ShowStableInstallProgressAsync(
+        ZandronumStableReleaseService.ReleaseManifest release,
+        string archivePath,
+        string installDirectory)
+    {
+        var progressWindow = new Window
+        {
+            Title = $"Installing Zandronum {release.Version}",
+            Width = 480,
+            Height = 220,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowInTaskbar = false
+        };
+
+        var statusLabel = new TextBlock
+        {
+            Text = "Preparing extraction...",
+            Margin = new Thickness(20, 20, 20, 4),
+            FontSize = 14,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var progressDetailLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var speedLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var etaLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 6),
+            Foreground = Brushes.LightGray
+        };
+        var progressBar = new ProgressBar
+        {
+            Margin = new Thickness(20, 4, 20, 5),
+            Height = 20,
+            Minimum = 0,
+            Maximum = 100
+        };
+        var cancelButton = new Button
+        {
+            Content = "Cancel",
+            Width = 100,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+
+        progressWindow.Content = new StackPanel
+        {
+            Children = { statusLabel, progressDetailLabel, speedLabel, etaLabel, progressBar, cancelButton }
+        };
+
+        using var cts = new CancellationTokenSource();
+        var cancelled = false;
+        Exception? failure = null;
+        ZandronumStableReleaseService.InstallResult? result = null;
+
+        cancelButton.Click += (_, _) =>
+        {
+            cancelled = true;
+            cancelButton.IsEnabled = false;
+            statusLabel.Text = "Cancelling...";
+            cts.Cancel();
+        };
+
+        var progress = new Progress<ZandronumStableReleaseService.InstallProgress>(update =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                statusLabel.Text = update.Status;
+                progressBar.Value = update.ProgressPercent;
+
+                progressDetailLabel.Text = update.TotalBytes > 0
+                    ? $"Transferred: {FormatUtils.FormatBytes(update.DownloadedBytes)} / {FormatUtils.FormatBytes(update.TotalBytes)}"
+                    : update.DownloadedBytes > 0
+                        ? $"Transferred: {FormatUtils.FormatBytes(update.DownloadedBytes)}"
+                        : string.Empty;
+
+                speedLabel.Text = update.BytesPerSecond > 0
+                    ? $"Speed: {FormatUtils.FormatSpeed(update.BytesPerSecond)}"
+                    : string.Empty;
+
+                etaLabel.Text = update.EstimatedTimeRemaining.HasValue
+                    ? $"ETA: {FormatDownloadEta(update.EstimatedTimeRemaining.Value)}"
+                    : string.Empty;
+            });
+        });
+
+        progressWindow.Opened += async (_, _) =>
+        {
+            try
+            {
+                result = await _stableReleaseService.InstallFromArchiveAsync(release, archivePath, installDirectory, progress, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+            finally
+            {
+                if (progressWindow.IsVisible)
+                {
+                    progressWindow.Close();
+                }
+            }
+        };
+
+        await progressWindow.ShowDialog(this);
+
+        if (failure != null)
+        {
+            await ShowMessageAsync("Install Failed", failure.Message);
+            return null;
+        }
+
+        return cancelled ? null : result;
+    }
+
     private static string FormatDownloadEta(TimeSpan eta)
     {
         if (eta < TimeSpan.Zero)
@@ -2856,6 +3127,66 @@ public partial class MainWindow : Window
         }
 
         return $"{Math.Max(1, (int)Math.Ceiling(eta.TotalSeconds))}s";
+    }
+
+    private async Task ShowMessageAsync(string title, string message)
+    {
+        var messageLineCount = message.Split('\n').Length;
+        var isLargeMessage = messageLineCount > 4 || message.Length > 160;
+
+        var contentGrid = new Grid
+        {
+            Margin = new Thickness(20),
+            RowDefinitions = new RowDefinitions("*,Auto")
+        };
+
+        var messageBlock = new TextBlock
+        {
+            Text = message,
+            TextWrapping = TextWrapping.WrapWithOverflow
+        };
+
+        var messageScrollViewer = new ScrollViewer
+        {
+            Content = messageBlock,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = isLargeMessage ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled
+        };
+        Grid.SetRow(messageScrollViewer, 0);
+        contentGrid.Children.Add(messageScrollViewer);
+
+        var dialog = new Window
+        {
+            Title = title,
+            Width = isLargeMessage ? 620 : 400,
+            Height = isLargeMessage ? Math.Min(520, 170 + (messageLineCount * 22)) : 170,
+            MinWidth = 400,
+            MinHeight = 170,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = isLargeMessage,
+            Content = contentGrid
+        };
+
+        var button = new Button
+        {
+            Content = "OK",
+            Width = 80,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Margin = new Thickness(0, 15, 0, 0)
+        };
+        button.Click += (_, _) => dialog.Close();
+
+        var buttonPanel = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Margin = new Thickness(0, 15, 0, 0),
+            Children = { button }
+        };
+        Grid.SetRow(buttonPanel, 1);
+        contentGrid.Children.Add(buttonPanel);
+
+        await dialog.ShowDialog(this);
     }
 
     private async Task<string?> PromptForPasswordAsync(string title, string message)
@@ -3274,7 +3605,7 @@ public partial class MainWindow : Window
         return foundPaths;
     }
 
-    private async Task ShowFirstTimeSetupAsync()
+    private async Task<UpdateServerState?> ShowFirstTimeSetupAsync()
     {
         var dialog = new FirstTimeSetupDialog();
         var result = await dialog.ShowDialog<bool?>(this);
@@ -3284,6 +3615,8 @@ public partial class MainWindow : Window
         {
             Environment.Exit(0);
         }
+
+        return dialog.PrefetchedServerState;
     }
 
     private async Task CheckForUpdatesAsync()

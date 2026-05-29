@@ -664,6 +664,36 @@ public class GameLauncher
     }
 
     /// <summary>
+    /// Checks whether the exact stable version required by a non-testing server is installed.
+    /// Falls back to the configured stable executable when the server does not report a stable version.
+    /// </summary>
+    public bool IsStableVersionInstalled(ServerInfo server)
+    {
+        if (server.IsTestingServer)
+        {
+            return false;
+        }
+
+        var exePath = ResolveStableExecutablePath(server);
+        return !string.IsNullOrEmpty(exePath) && File.Exists(exePath);
+    }
+
+    /// <summary>
+    /// Gets the normalized stable version required by a non-testing server, if one can be extracted.
+    /// </summary>
+    public string? GetRequiredStableVersion(ServerInfo server)
+    {
+        if (server.IsTestingServer)
+        {
+            return null;
+        }
+
+        return ZandronumStableReleaseService.Instance.TryExtractStableVersion(server.GameVersion, out var version)
+            ? version
+            : null;
+    }
+
+    /// <summary>
     /// Gets the folder path for a specific testing version.
     /// </summary>
     public string? GetTestingVersionFolder(ServerInfo server)
@@ -743,8 +773,31 @@ public class GameLauncher
         {
             return GetTestingExePath(server) ?? string.Empty;
         }
-        
-        return settings.ZandronumPath;
+
+        return ResolveStableExecutablePath(server) ?? string.Empty;
+    }
+
+    private string? ResolveStableExecutablePath(ServerInfo server)
+    {
+        var configuredStablePath = SettingsService.Instance.Settings.ZandronumPath;
+        if (string.IsNullOrEmpty(configuredStablePath) || !File.Exists(configuredStablePath))
+        {
+            return null;
+        }
+
+        var stableReleaseService = ZandronumStableReleaseService.Instance;
+        if (!stableReleaseService.TryExtractStableVersion(server.GameVersion, out var requiredVersion))
+        {
+            return configuredStablePath;
+        }
+
+        if (stableReleaseService.TryGetInstalledStableVersion(configuredStablePath, out var configuredVersion, out _) &&
+            stableReleaseService.CompareStableVersions(configuredVersion, requiredVersion) == 0)
+        {
+            return configuredStablePath;
+        }
+
+        return stableReleaseService.GetInstalledArchivedExecutablePath(configuredStablePath, requiredVersion);
     }
 
     /// <summary>
