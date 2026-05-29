@@ -249,10 +249,16 @@ public class ServerQueryClient : IDisposable
 
     private byte[] ReassembleSegments(Dictionary<int, SegmentData> segments, int totalSize)
     {
+        if (segments.Count < segments.Keys.DefaultIfEmpty(-1).Max() + 1)
+        {
+            _logger.Warning($"Segment reassembly incomplete: got {segments.Count} segments, data may be corrupted");
+        }
         byte[] result = new byte[totalSize];
         foreach (var segment in segments.Values)
         {
-            Array.Copy(segment.Data, 0, result, segment.Offset, segment.Data.Length);
+            int copyLength = Math.Min(segment.Data.Length, result.Length - segment.Offset);
+            if (copyLength > 0)
+                Array.Copy(segment.Data, 0, result, segment.Offset, copyLength);
         }
         return result;
     }
@@ -391,6 +397,9 @@ public class ServerQueryClient : IDisposable
             {
                 for (int i = 0; i < server.CurrentPlayers; i++)
                 {
+                    // Guard: need at least: name (variable) + score(2) + ping(2) + spectator(1) + bot(1) + team?(1) + time(1)
+                    if (ms.Position >= ms.Length) break;
+
                     var player = new PlayerInfo
                     {
                         Name = ReadNullTerminatedString(reader),
@@ -400,13 +409,14 @@ public class ServerQueryClient : IDisposable
                         IsBot = reader.ReadByte() != 0
                     };
 
-                    if (hasTeams)
+                    if (hasTeams && ms.Position < ms.Length)
                     {
                         player.Team = reader.ReadByte();
                     }
 
                     // Skip time on server
-                    reader.ReadByte();
+                    if (ms.Position < ms.Length)
+                        reader.ReadByte();
 
                     server.Players.Add(player);
                 }
@@ -415,11 +425,14 @@ public class ServerQueryClient : IDisposable
             if ((flags & (uint)ProtocolConstants.QueryFlags.TeamInfoNumber) != 0)
             {
                 server.NumTeams = reader.ReadByte();
+                // Ensure Teams list can hold all reported teams
+                while (server.Teams.Count < server.NumTeams)
+                    server.Teams.Add(new TeamInfo());
             }
 
             if ((flags & (uint)ProtocolConstants.QueryFlags.TeamInfoName) != 0)
             {
-                for (int i = 0; i < server.NumTeams && i < server.Teams.Length; i++)
+                for (int i = 0; i < server.NumTeams && i < server.Teams.Count; i++)
                 {
                     server.Teams[i].Name = ReadNullTerminatedString(reader);
                 }
@@ -427,7 +440,7 @@ public class ServerQueryClient : IDisposable
 
             if ((flags & (uint)ProtocolConstants.QueryFlags.TeamInfoColor) != 0)
             {
-                for (int i = 0; i < server.NumTeams && i < server.Teams.Length; i++)
+                for (int i = 0; i < server.NumTeams && i < server.Teams.Count; i++)
                 {
                     uint colorRgb = reader.ReadUInt32();
                     // Convert RGB to hex string for cross-platform compatibility
@@ -437,7 +450,7 @@ public class ServerQueryClient : IDisposable
 
             if ((flags & (uint)ProtocolConstants.QueryFlags.TeamInfoScore) != 0)
             {
-                for (int i = 0; i < server.NumTeams && i < server.Teams.Length; i++)
+                for (int i = 0; i < server.NumTeams && i < server.Teams.Count; i++)
                 {
                     server.Teams[i].Score = reader.ReadInt16();
                 }
@@ -544,13 +557,30 @@ public class ServerQueryClient : IDisposable
 
     private string ReadNullTerminatedString(BinaryReader reader)
     {
-        var bytes = new List<byte>();
-        byte b;
-        while (reader.BaseStream.Position < reader.BaseStream.Length && (b = reader.ReadByte()) != 0)
+        byte[]? rentedBuffer = null;
+        try
         {
-            bytes.Add(b);
+            rentedBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(256);
+            int count = 0;
+            byte b;
+            while (reader.BaseStream.Position < reader.BaseStream.Length && (b = reader.ReadByte()) != 0)
+            {
+                if (count >= rentedBuffer.Length)
+                {
+                    var newBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(rentedBuffer.Length * 2);
+                    Array.Copy(rentedBuffer, newBuffer, count);
+                    System.Buffers.ArrayPool<byte>.Shared.Return(rentedBuffer);
+                    rentedBuffer = newBuffer;
+                }
+                rentedBuffer[count++] = b;
+            }
+            return count > 0 ? Encoding.UTF8.GetString(rentedBuffer, 0, count) : string.Empty;
         }
-        return Encoding.UTF8.GetString(bytes.ToArray());
+        finally
+        {
+            if (rentedBuffer != null)
+                System.Buffers.ArrayPool<byte>.Shared.Return(rentedBuffer);
+        }
     }
 
     public void Dispose()

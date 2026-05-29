@@ -238,6 +238,7 @@ public class MasterServerClient : IDisposable
          while (blockOrEndMarker != ProtocolConstants.MasterResponseEndPart && 
              blockOrEndMarker != ProtocolConstants.MasterResponseEnd)
         {
+            if (ms.Position >= ms.Length) return MasterResponseResult.Bad;
             byte numServersInBlock = reader.ReadByte();
             
             while (numServersInBlock > 0)
