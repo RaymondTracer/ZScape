@@ -53,14 +53,36 @@ public class ThemeService
         if (Application.Current is { } app)
         {
             app.RequestedThemeVariant = newVariant;
-            LoadThemeStyle(app, GetThemeUri(theme));
+            if (theme == AppTheme.Light)
+                EnsureLightThemeLoaded(app);
+            else
+                RemoveLightTheme(app);
         }
 
         ThemeChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public string GetThemeUri(AppTheme theme) =>
-        _builtInThemeUris.TryGetValue(theme, out var uri) ? uri : BuiltInDarkUri;
+    /// <summary>
+    /// DarkTheme is loaded statically in App.axaml. We only need to add/remove
+    /// LightTheme to toggle between them, since LightTheme's keys override Dark's.
+    /// </summary>
+    private void EnsureLightThemeLoaded(Application app)
+    {
+        if (_loadedThemeStyle != null) return;
+        var styleInclude = new StyleInclude(new Uri("avares://ZScape/"))
+        {
+            Source = new Uri(BuiltInLightUri)
+        };
+        app.Styles.Add(styleInclude);
+        _loadedThemeStyle = styleInclude;
+    }
+
+    private void RemoveLightTheme(Application app)
+    {
+        if (_loadedThemeStyle == null) return;
+        app.Styles.Remove(_loadedThemeStyle);
+        _loadedThemeStyle = null;
+    }
 
     /// <summary>
     /// Applies theme from persisted settings.
@@ -69,28 +91,6 @@ public class ThemeService
     {
         var settings = SettingsService.Instance.Settings;
         ApplyTheme(settings.Theme, settings.Accent);
-    }
-
-    public static IReadOnlyList<(AppTheme Theme, string Name)> GetBuiltInThemes() =>
-    [
-        (AppTheme.Dark, "Dark"),
-        (AppTheme.Light, "Light"),
-    ];
-
-    private void LoadThemeStyle(Application app, string sourceUri)
-    {
-        if (_loadedThemeStyle != null)
-        {
-            app.Styles.Remove(_loadedThemeStyle);
-            _loadedThemeStyle = null;
-        }
-
-        var styleInclude = new StyleInclude(new Uri("avares://ZScape/"))
-        {
-            Source = new Uri(sourceUri)
-        };
-        app.Styles.Add(styleInclude);
-        _loadedThemeStyle = styleInclude;
     }
 
     /// <summary>

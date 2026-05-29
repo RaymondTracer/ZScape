@@ -4,6 +4,7 @@
              RequestedThemeVariant="Dark">
     <Application.Styles>
         <FluentTheme />
-        <!-- Themes are loaded at runtime by ThemeService -->
+        <StyleInclude Source="avares://ZScape/Themes/DarkTheme.axaml" />
+        <!-- LightTheme is swapped in at runtime by ThemeService -->
     </Application.Styles>
 </Application>
