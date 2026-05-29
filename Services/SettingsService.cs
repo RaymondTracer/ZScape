@@ -282,16 +282,7 @@ public class SettingsService
     public void Save()
     {
         if (_isLoading) return;
-
-        try
-        {
-            var json = JsonSerializer.Serialize(_settings, JsonUtils.DefaultOptions);
-            File.WriteAllText(_settingsPath, json);
-        }
-        catch (Exception ex)
-        {
-            LoggingService.Instance.Warning($"Failed to save settings: {ex.Message}");
-        }
+        AtomicWriteJson(_settingsPath, _settings);
     }
     
     /// <summary>
@@ -299,15 +290,7 @@ public class SettingsService
     /// </summary>
     public void SaveHistory()
     {
-        try
-        {
-            var json = JsonSerializer.Serialize(_historyData, JsonUtils.DefaultOptions);
-            File.WriteAllText(_historyPath, json);
-        }
-        catch (Exception ex)
-        {
-            LoggingService.Instance.Warning($"Failed to save history: {ex.Message}");
-        }
+        AtomicWriteJson(_historyPath, _historyData);
     }
     
     /// <summary>
@@ -315,14 +298,38 @@ public class SettingsService
     /// </summary>
     public void SaveDomainSettings()
     {
+        AtomicWriteJson(_domainSettingsPath, _domainSettingsData);
+    }
+
+    private static void AtomicWriteJson<T>(string filePath, T data)
+    {
         try
         {
-            var json = JsonSerializer.Serialize(_domainSettingsData, JsonUtils.DefaultOptions);
-            File.WriteAllText(_domainSettingsPath, json);
+            var json = JsonSerializer.Serialize(data, JsonUtils.DefaultOptions);
+            var dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            var tempPath = filePath + ".tmp";
+            var backupPath = filePath + ".bak";
+
+            // Write to temp file first
+            File.WriteAllText(tempPath, json);
+
+            // If original exists, make a backup before replacing
+            if (File.Exists(filePath))
+            {
+                if (File.Exists(backupPath))
+                    File.Delete(backupPath);
+                File.Move(filePath, backupPath);
+            }
+
+            // Atomically replace original with temp
+            File.Move(tempPath, filePath);
         }
         catch (Exception ex)
         {
-            LoggingService.Instance.Warning($"Failed to save domain settings: {ex.Message}");
+            LoggingService.Instance.Warning($"Failed to save {Path.GetFileName(filePath)}: {ex.Message}");
         }
     }
 

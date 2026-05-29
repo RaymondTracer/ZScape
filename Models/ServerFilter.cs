@@ -185,11 +185,11 @@ public class ServerFilter
         }
 
         // Game mode include
-        if (IncludeGameModes.Count > 0 && !IncludeGameModes.Contains(server.GameMode.Type))
+        if (IncludeGameModes.Count > 0 && !IncludeGameModes.Contains(server.GameMode?.Type ?? GameModeType.Unknown))
             return false;
 
         // Game mode exclude
-        if (ExcludeGameModes.Contains(server.GameMode.Type))
+        if (ExcludeGameModes.Contains(server.GameMode?.Type ?? GameModeType.Unknown))
             return false;
 
         // Required IWAD

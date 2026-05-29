@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using ZScape.Models;
 using ZScape.Utilities;
@@ -12,7 +13,8 @@ public class WadManager
     private static WadManager? _instance;
     public static WadManager Instance => _instance ??= new WadManager();
     
-    private readonly Dictionary<string, string> _wadCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _wadCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _fileNameIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _searchPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _executableFolders = new(StringComparer.OrdinalIgnoreCase);
     private string _downloadPath = string.Empty;
@@ -137,6 +139,7 @@ public class WadManager
     public void RefreshCache()
     {
         _wadCache.Clear();
+        _fileNameIndex.Clear();
         var searchRoots = GetSearchRootsInPriorityOrder();
         
         // Log configured paths for debugging
@@ -220,6 +223,7 @@ public class WadManager
                     // Don't overwrite if already found (first path wins)
                     if (_wadCache.TryAdd(fileName, file))
                     {
+                        _fileNameIndex.TryAdd(fileName, file);
                         count++;
                     }
                 }
@@ -242,14 +246,13 @@ public class WadManager
         if (string.IsNullOrWhiteSpace(wadName))
             return null;
         
-        // Check cache first (case-insensitive key lookup)
-        var cacheKey = wadName.ToLowerInvariant();
-        if (_wadCache.TryGetValue(cacheKey, out var cachedPath))
+        // Check cache first (case-insensitive key lookup via dictionary comparer)
+        if (_wadCache.TryGetValue(wadName, out var cachedPath))
         {
             if (File.Exists(cachedPath))
                 return cachedPath;
             // File was deleted, remove from cache
-            _wadCache.Remove(cacheKey);
+            _wadCache.TryRemove(wadName, out _);
         }
         
         // Build list of paths to search in priority order:
@@ -262,10 +265,18 @@ public class WadManager
         foreach (var searchPath in pathsToSearch)
         {
             // First try direct path (case-insensitive on Windows, but we handle it explicitly)
+            // Check the filename index first (case-insensitive, includes subdirectories)
+            if (_fileNameIndex.TryGetValue(wadName, out var indexedPath) && File.Exists(indexedPath))
+            {
+                _wadCache[wadName] = indexedPath;
+                return indexedPath;
+            }
+
+            // Fall back to direct lookup and slow enumeration if index misses
             var match = FindFileIgnoreCase(searchPath, wadName);
             if (match != null)
             {
-                _wadCache[cacheKey] = match;
+                _wadCache[wadName] = match;
                 return match;
             }
             
@@ -276,7 +287,7 @@ public class WadManager
                 {
                     if (Path.GetFileName(file).Equals(wadName, StringComparison.OrdinalIgnoreCase))
                     {
-                        _wadCache[cacheKey] = file;
+                        _wadCache[wadName] = file;
                         return file;
                     }
                 }

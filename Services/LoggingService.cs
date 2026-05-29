@@ -14,11 +14,15 @@ public class LoggingService
     
     public bool VerboseMode { get; set; } = false;
 
+    private const long MaxLogFileSize = 10 * 1024 * 1024; // 10 MB
+    private const int MaxLogFiles = 3;
+
     private LoggingService()
     {
         try
         {
-            File.WriteAllText(_logFilePath, $"=== ZScape runtime log started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}");
+            RotateLogIfNeeded();
+            File.AppendAllText(_logFilePath, $"=== ZScape runtime log started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}");
         }
         catch
         {
@@ -60,12 +64,48 @@ public class LoggingService
         {
             lock (_fileLock)
             {
+                RotateLogIfNeeded();
                 File.AppendAllText(_logFilePath, message + Environment.NewLine);
             }
         }
         catch
         {
             // Best-effort logging only.
+        }
+    }
+
+    private void RotateLogIfNeeded()
+    {
+        try
+        {
+            if (!File.Exists(_logFilePath)) return;
+            var info = new FileInfo(_logFilePath);
+            if (info.Length < MaxLogFileSize) return;
+
+            var dir = Path.GetDirectoryName(_logFilePath) ?? ".";
+            var baseName = Path.GetFileNameWithoutExtension(_logFilePath);
+            var ext = Path.GetExtension(_logFilePath);
+
+            // Shift existing backups: runtime.2.log -> runtime.3.log, runtime.1.log -> runtime.2.log
+            for (int i = MaxLogFiles - 1; i >= 1; i--)
+            {
+                var oldPath = Path.Combine(dir, $"{baseName}.{i}{ext}");
+                var newPath = Path.Combine(dir, $"{baseName}.{i + 1}{ext}");
+                if (File.Exists(oldPath))
+                {
+                    if (File.Exists(newPath)) File.Delete(newPath);
+                    File.Move(oldPath, newPath);
+                }
+            }
+
+            // Rename current log to .1
+            var backupPath = Path.Combine(dir, $"{baseName}.1{ext}");
+            if (File.Exists(backupPath)) File.Delete(backupPath);
+            File.Move(_logFilePath, backupPath);
+        }
+        catch
+        {
+            // Best-effort rotation only.
         }
     }
 }

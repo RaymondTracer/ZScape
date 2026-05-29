@@ -14,7 +14,7 @@ namespace ZScape.Services;
 /// Handles launching Zandronum to connect to servers, including automatic
 /// downloading of testing versions.
 /// </summary>
-public class GameLauncher
+public class GameLauncher : IDisposable
 {
     private static readonly Lazy<GameLauncher> _instance = new(() => new GameLauncher());
     private static readonly Uri TestingArchiveBaseUri = new("https://zandronum.com/", UriKind.Absolute);
@@ -22,6 +22,7 @@ public class GameLauncher
 
     private readonly DomainThreadConfig _domainConfig = DomainThreadConfig.Instance;
     private readonly HttpClient _httpClient = new();
+    private bool _disposed;
 
     public event EventHandler<string>? LaunchError;
     public event EventHandler<string>? LaunchSuccess;
@@ -1498,5 +1499,15 @@ public class GameLauncher
             LoggingService.Instance.Error(error);
             return false;
         }
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            _httpClient?.Dispose();
+            _disposed = true;
+        }
+        GC.SuppressFinalize(this);
     }
 }
