@@ -341,7 +341,7 @@ public partial class MainWindow : Window
             SortClick = SortByAddress_Click
         });
 
-        ServerListView.Build(ListViewOverflowMode.AutoScroll);
+        ServerListView.Build(ListViewOverflowMode.Fill);
         ServerListView.ItemsSource = Servers;
 
         // Set up context menu on the scroll viewer
@@ -678,18 +678,24 @@ public partial class MainWindow : Window
             }
             if (SearchBox != null) SearchBox.Text = settings.SearchText ?? "";
 
-            // Splitter positions - only on initial load
+            // Splitter positions - restore as proportional star heights
             var mainGrid = MainContentGrid;
-            if (mainGrid != null && mainGrid.RowDefinitions.Count >= 3 && settings.MainSplitterDistance > 0)
+            if (mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
             {
-                mainGrid.RowDefinitions[0].Height = new GridLength(settings.MainSplitterDistance, GridUnitType.Pixel);
-                mainGrid.RowDefinitions[2].Height = new GridLength(settings.DetailsSplitterDistance > 0 ? settings.DetailsSplitterDistance : 250, GridUnitType.Pixel);
-            }
-
-            // Log panel height - only restore if log panel is visible
-            if (settings.ShowLogPanel && settings.LogSplitterDistance > 0 && mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
-            {
-                mainGrid.RowDefinitions[4].Height = new GridLength(settings.LogSplitterDistance, GridUnitType.Pixel);
+                if (settings.MainSplitterDistance > 0 && settings.DetailsSplitterDistance > 0)
+                {
+                    var totalHeight = settings.MainSplitterDistance + settings.DetailsSplitterDistance + (settings.LogSplitterDistance > 0 ? settings.LogSplitterDistance : 100);
+                    if (totalHeight > 0)
+                    {
+                        var serverRatio = (double)settings.MainSplitterDistance / totalHeight;
+                        var detailsRatio = (double)settings.DetailsSplitterDistance / totalHeight;
+                        var logRatio = settings.LogSplitterDistance > 0 ? (double)settings.LogSplitterDistance / totalHeight : 1.0 - serverRatio - detailsRatio;
+                        if (logRatio < 0.05) logRatio = 0.05;
+                        mainGrid.RowDefinitions[0].Height = new GridLength(Math.Max(1, serverRatio * 5), GridUnitType.Star);
+                        mainGrid.RowDefinitions[2].Height = new GridLength(Math.Max(1, detailsRatio * 5), GridUnitType.Star);
+                        mainGrid.RowDefinitions[4].Height = new GridLength(Math.Max(1, logRatio * 5), GridUnitType.Star);
+                    }
+                }
             }
 
             // Log panel visibility - do this AFTER splitter restore so it can override row 0 sizing
@@ -4059,11 +4065,11 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
         get
         {
             if (_server.IsFull)
-                return new SolidColorBrush(Color.FromRgb(60, 45, 45)); // Dark red tint
+                return ThemeService.GetBrush("RowFullBrush", "#3C2D2D");
             if (_server.IsEmpty)
-                return new SolidColorBrush(Color.FromRgb(45, 45, 50)); // Slightly dimmer
+                return ThemeService.GetBrush("RowEmptyBrush", "#2D2D32");
             if (_server.IsPassworded)
-                return new SolidColorBrush(Color.FromRgb(60, 55, 40)); // Dark yellow tint
+                return ThemeService.GetBrush("RowPasswordedBrush", "#3C3728");
             return Brushes.Transparent;
         }
     }

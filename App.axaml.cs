@@ -21,6 +21,9 @@ public partial class App : Application
             LoggingService.Instance.Exception("UI thread unhandled exception", eventArgs.Exception);
         };
 
+        // Apply persisted theme before creating the main window
+        ThemeService.Instance.ApplyFromSettings();
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new MainWindow();

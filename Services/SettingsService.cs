@@ -517,6 +517,13 @@ public class AppSettings
     /// <summary>Whether to show only favorite servers.</summary>
     public bool ShowFavoritesOnly { get; set; }
 
+    // Appearance
+    /// <summary>Application theme (Dark or Light).</summary>
+    public AppTheme Theme { get; set; } = AppTheme.Dark;
+
+    /// <summary>Accent color name (e.g., "Blue", "Green", "Orange").</summary>
+    public string Accent { get; set; } = "Blue";
+
     /// <summary>How clicking the favorite star in the server list should behave for non-favorited servers.</summary>
     public FavoriteStarClickBehavior FavoriteStarClickBehavior { get; set; } = FavoriteStarClickBehavior.AskEveryTime;
     

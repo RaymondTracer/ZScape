@@ -13,6 +13,7 @@ using Avalonia.VisualTree;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using ZScape.Services;
 
 namespace ZScape.Controls;
 
@@ -120,11 +121,14 @@ public class ResizableListView : UserControl
 {
     private const double ScrollAlignmentTolerance = 0.5;
 
-    // Dark theme colors matching the app theme
-    private static readonly IBrush HeaderBackground = new SolidColorBrush(Color.Parse("#2D2D30"));
-    private static readonly IBrush HeaderBorderBrush = new SolidColorBrush(Color.Parse("#3F3F46"));
-    private static readonly IBrush EvenRowBrush = new SolidColorBrush(Color.Parse("#1E1E1E"));
-    private static readonly IBrush OddRowBrush = new SolidColorBrush(Color.Parse("#252526"));
+    // Dark theme fallback colors (used when ThemeService resources aren't loaded yet)
+    private static readonly IBrush HeaderBackgroundFallback = new SolidColorBrush(Color.Parse("#2D2D30"));
+    private static readonly IBrush HeaderBorderBrushFallback = new SolidColorBrush(Color.Parse("#3F3F46"));
+    private static readonly IBrush EvenRowBrush = ThemeService.GetBrush("RowEvenBrush", "#1E1E1E");
+    private static readonly IBrush OddRowBrush = ThemeService.GetBrush("RowOddBrush", "#252526");
+
+    private static IBrush HeaderBackground => ThemeService.GetBrush("TertiaryBackgroundBrush", "#2D2D30");
+    private static IBrush HeaderBorderBrush => ThemeService.GetBrush("BorderBrush", "#3F3F46");
 
     private readonly DockPanel _root;
     private readonly Border _headerBorder;
@@ -219,12 +223,12 @@ public class ResizableListView : UserControl
     /// <summary>
     /// Brush used for the currently selected row.
     /// </summary>
-    public IBrush SelectedRowBrush { get; set; } = new SolidColorBrush(Color.Parse("#094771"));
+    public IBrush SelectedRowBrush { get; set; } = ThemeService.GetBrush("RowSelectedBrush", "#094771");
 
     /// <summary>
     /// Brush used for the hovered (non-selected) row.
     /// </summary>
-    public IBrush HoverRowBrush { get; set; } = new SolidColorBrush(Color.Parse("#2A2D2E"));
+    public IBrush HoverRowBrush { get; set; } = ThemeService.GetBrush("RowHoverBrush", "#2A2D2E");
 
     /// <summary>
     /// Gets the data context of the currently selected row.

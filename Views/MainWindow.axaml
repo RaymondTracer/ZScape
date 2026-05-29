@@ -101,11 +101,11 @@
         <!-- Main Content -->
         <Grid x:Name="MainContentGrid">
             <Grid.RowDefinitions>
-                <RowDefinition Height="*" MinHeight="150" />
+                <RowDefinition Height="3*" MinHeight="150" />
                 <RowDefinition Height="5" />
-                <RowDefinition Height="200" MinHeight="80" />
+                <RowDefinition Height="2*" MinHeight="80" />
                 <RowDefinition Height="5" />
-                <RowDefinition Height="100" MinHeight="50" />
+                <RowDefinition Height="1*" MinHeight="50" />
             </Grid.RowDefinitions>
             
             <!-- Server List -->
