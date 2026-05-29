@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Net;
 using System.Threading.Channels;
 using ZScape.Models;
@@ -31,7 +32,7 @@ public class ServerBrowserService : IDisposable
     public event EventHandler<int>? RefreshProgress;
     public event EventHandler<RefreshCompletedEventArgs>? RefreshCompleted;
 
-    public IReadOnlyCollection<ServerInfo> Servers => _servers.Values.ToList();
+    public IReadOnlyCollection<ServerInfo> Servers => new ReadOnlyCollection<ServerInfo>(_servers.Values.ToList());
     public bool IsRefreshing { get; private set; }
     public bool HasEverRefreshed { get; private set; }
 

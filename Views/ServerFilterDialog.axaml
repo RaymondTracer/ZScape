@@ -3,6 +3,7 @@
         xmlns:controls="using:ZScape.Controls"
         xmlns:local="using:ZScape.Views"
         x:Class="ZScape.Views.ServerFilterDialog"
+        x:CompileBindings="False"
         Title="Advanced Server Filter"
         Width="550" Height="520"
         WindowStartupLocation="CenterOwner"

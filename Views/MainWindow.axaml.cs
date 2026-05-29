@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _serverListUpdateTimer = new();
     private DateTime? _nextAutoRefreshTime;
     private DateTime? _nextFavoritesRefreshTime;
+    private DateTime? _lastRefreshTime;
 
     private ServerInfo? _selectedServer;
     private int _sortColumnIndex = 3; // Default to Players column
@@ -159,9 +160,6 @@ public partial class MainWindow : Window
 
     private void SetupItemsSources()
     {
-        // Write debug to file 
-        var debugPath = Path.Combine(AppContext.BaseDirectory, "debug.log");
-
         // Initialize the server list view with columns
         SetupServerListView();
 
@@ -170,19 +168,16 @@ public partial class MainWindow : Window
         var wadsList = this.FindControl<ItemsControl>("WadsList");
         var gameModeCombo = this.FindControl<PersistentComboBox>("GameModeComboBox");
 
-        File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] ServerListView initialized, LogControl={_logControl != null}\n");
-
         if (playersGrid != null) playersGrid.ItemsSource = Players;
         if (wadsList != null) wadsList.ItemsSource = Wads;
 
         if (_logControl != null)
         {
             _logControl.ItemsSource = LogEntries;
-            File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] LogControl initialized\n");
         }
         else
         {
-            File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] ERROR: LogControl NOT FOUND\n");
+            _logger.Warning("LogControl not found during setup");
         }
 
         if (gameModeCombo != null)
@@ -1323,7 +1318,7 @@ public partial class MainWindow : Window
             // Use team color only for team game modes, otherwise white
             var teamColor = isTeamGame ? GetTeamColor(player.Team, server.Teams) : Brushes.White;
             // Use custom team names from server if available
-            string teamName = player.Team >= 0 && player.Team < server.Teams.Length
+            string teamName = player.Team >= 0 && player.Team < server.Teams.Count
                 ? server.Teams[player.Team].Name
                 : player.TeamName;
 
@@ -1387,10 +1382,10 @@ public partial class MainWindow : Window
             PlayersLabel.Text = $"Players ({server.Players.Count})";
     }
 
-    private static IBrush GetTeamColor(int team, TeamInfo[] teams)
+    private static IBrush GetTeamColor(int team, List<TeamInfo> teams)
     {
         // Use custom team color from server if available
-        if (team >= 0 && team < teams.Length)
+        if (team >= 0 && team < teams.Count)
         {
             var teamInfo = teams[team];
             if (!string.IsNullOrEmpty(teamInfo.ColorHex) && teamInfo.ColorHex.StartsWith('#'))
@@ -3369,6 +3364,8 @@ public partial class MainWindow : Window
 
             if (e.Success)
             {
+                _lastRefreshTime = DateTime.Now;
+                if (StatusLabel != null) StatusLabel.Text = $"Finished - {_lastRefreshTime:HH:mm:ss}";
                 UpdateAutoRefreshStatus();
                 UpdateServerList();
             }

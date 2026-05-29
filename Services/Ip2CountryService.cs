@@ -8,6 +8,12 @@ namespace ZScape.Services;
 /// </summary>
 public class Ip2CountryService
 {
+    private static readonly Lazy<HttpClient> _sharedClient = new(() =>
+    {
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        return client;
+    });
+
     private readonly HttpClient _httpClient;
     private readonly LoggingService _logger;
     private readonly Dictionary<string, string> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -20,10 +26,7 @@ public class Ip2CountryService
     public Ip2CountryService(LoggingService logger)
     {
         _logger = logger;
-        _httpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(5)
-        };
+        _httpClient = _sharedClient.Value;
     }
 
     /// <summary>
