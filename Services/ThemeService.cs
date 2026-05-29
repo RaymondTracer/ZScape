@@ -16,12 +16,23 @@ public class ThemeService
 
     public event EventHandler? ThemeChanged;
 
+    private const string BuiltInDarkUri = "avares://ZScape/Themes/DarkTheme.axaml";
+    private const string BuiltInLightUri = "avares://ZScape/Themes/LightTheme.axaml";
+
+    private readonly Dictionary<AppTheme, string> _builtInThemeUris = new()
+    {
+        [AppTheme.Dark] = BuiltInDarkUri,
+        [AppTheme.Light] = BuiltInLightUri,
+    };
+
     private ThemeVariant _currentTheme = ThemeVariant.Dark;
-    private string _currentAccent = "Blue"; // default accent
+    private string _currentAccent = "Blue";
+    private StyleInclude? _loadedThemeStyle;
 
     public ThemeVariant CurrentTheme => _currentTheme;
     public string CurrentAccent => _currentAccent;
     public bool IsDark => _currentTheme == ThemeVariant.Dark;
+    public bool IsLight => _currentTheme == ThemeVariant.Light;
 
     private ThemeService() { }
 
@@ -39,13 +50,17 @@ public class ThemeService
         _currentTheme = newVariant;
         _currentAccent = newAccent;
 
-        if (Application.Current is not null)
+        if (Application.Current is { } app)
         {
-            Application.Current.RequestedThemeVariant = newVariant;
+            app.RequestedThemeVariant = newVariant;
+            LoadThemeStyle(app, GetThemeUri(theme));
         }
 
         ThemeChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    public string GetThemeUri(AppTheme theme) =>
+        _builtInThemeUris.TryGetValue(theme, out var uri) ? uri : BuiltInDarkUri;
 
     /// <summary>
     /// Applies theme from persisted settings.
@@ -56,13 +71,35 @@ public class ThemeService
         ApplyTheme(settings.Theme, settings.Accent);
     }
 
+    public static IReadOnlyList<(AppTheme Theme, string Name)> GetBuiltInThemes() =>
+    [
+        (AppTheme.Dark, "Dark"),
+        (AppTheme.Light, "Light"),
+    ];
+
+    private void LoadThemeStyle(Application app, string sourceUri)
+    {
+        if (_loadedThemeStyle != null)
+        {
+            app.Styles.Remove(_loadedThemeStyle);
+            _loadedThemeStyle = null;
+        }
+
+        var styleInclude = new StyleInclude(new Uri("avares://ZScape/"))
+        {
+            Source = new Uri(sourceUri)
+        };
+        app.Styles.Add(styleInclude);
+        _loadedThemeStyle = styleInclude;
+    }
+
     /// <summary>
-    /// Resolves an IBrush from a resource key. Falls back to the specified default hex color
+    /// Resolves an IBrush from a resource key with a fallback hex color.
     /// if the resource is not found (e.g., code-behind that runs before theme loads).
     /// </summary>
     public static IBrush GetBrush(string key, string fallbackHex)
     {
-        if (Application.Current?.TryGetResource(key, ThemeVariant.Dark, out var resource) == true
+        if (Application.Current?.TryGetResource(key, Application.Current.ActualThemeVariant, out var resource) == true
             && resource is IBrush brush)
         {
             return brush;
@@ -75,7 +112,7 @@ public class ThemeService
     /// </summary>
     public static Color GetColor(string key, string fallbackHex)
     {
-        if (Application.Current?.TryGetResource(key, ThemeVariant.Dark, out var resource) == true
+        if (Application.Current?.TryGetResource(key, Application.Current.ActualThemeVariant, out var resource) == true
             && resource is Color color)
         {
             return color;
