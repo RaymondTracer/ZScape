@@ -21,8 +21,9 @@ public partial class App : Application
             LoggingService.Instance.Exception("UI thread unhandled exception", eventArgs.Exception);
         };
 
-        // Apply persisted theme before creating the main window
-        ThemeService.Instance.ApplyFromSettings();
+        // Initialize theme system before creating the main window.
+        // This loads and applies the saved theme (Dark by default).
+        ThemeService.Instance.Initialize();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

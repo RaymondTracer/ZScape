@@ -521,6 +521,9 @@ public class AppSettings
     /// <summary>Application theme (Dark or Light).</summary>
     public AppTheme Theme { get; set; } = AppTheme.Dark;
 
+    /// <summary>Identifies which theme to load (built-in "Dark"/"Light" or user theme filename).</summary>
+    public string? ThemeId { get; set; }
+
     /// <summary>Accent color name (e.g., "Blue", "Green", "Orange").</summary>
     public string Accent { get; set; } = "Blue";
 

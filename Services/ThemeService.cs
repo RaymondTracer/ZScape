@@ -6,82 +6,139 @@ using Avalonia.Styling;
 namespace ZScape.Services;
 
 /// <summary>
-/// Manages application theme (Dark/Light) with optional accent overrides.
-/// Handles live theme switching at runtime.
+/// Manages application themes. Call <see cref="Initialize"/> once in App.axaml.cs
+/// before the first window is created. Supports built-in themes (Dark, Light) and
+/// user-supplied theme files loaded from disk.
+/// 
+/// Architecture: ThemeService owns exactly one <see cref="StyleInclude"/> in
+/// Application.Current.Styles. Swapping themes removes the old and adds the new.
 /// </summary>
 public class ThemeService
 {
     private static readonly Lazy<ThemeService> _instance = new(() => new ThemeService());
     public static ThemeService Instance => _instance.Value;
 
-    public event EventHandler? ThemeChanged;
+    // Built-in themes (embedded avares resources)
+    private const string DarkUri = "avares://ZScape/Themes/DarkTheme.axaml";
+    private const string LightUri = "avares://ZScape/Themes/LightTheme.axaml";
 
-    private const string BuiltInDarkUri = "avares://ZScape/Themes/DarkTheme.axaml";
-    private const string BuiltInLightUri = "avares://ZScape/Themes/LightTheme.axaml";
-
-    private readonly Dictionary<AppTheme, string> _builtInThemeUris = new()
+    private static readonly Dictionary<string, string> BuiltInThemes = new()
     {
-        [AppTheme.Dark] = BuiltInDarkUri,
-        [AppTheme.Light] = BuiltInLightUri,
+        ["Dark"] = DarkUri,
+        ["Light"] = LightUri,
     };
+
+    public event EventHandler? ThemeChanged;
 
     private ThemeVariant _currentTheme = ThemeVariant.Dark;
     private string _currentAccent = "Blue";
-    private StyleInclude? _loadedThemeStyle;
+    private string _activeThemeId = "Dark"; // key into BuiltInThemes or user theme name
+    private StyleInclude? _styleInclude;
+    private bool _isInitialized;
 
     public ThemeVariant CurrentTheme => _currentTheme;
     public string CurrentAccent => _currentAccent;
     public bool IsDark => _currentTheme == ThemeVariant.Dark;
     public bool IsLight => _currentTheme == ThemeVariant.Light;
 
+    /// <summary>
+    /// Returns available built-in theme names.
+    /// </summary>
+    public static IReadOnlyList<string> GetBuiltInThemeNames() => new List<string>(BuiltInThemes.Keys);
+
     private ThemeService() { }
 
     /// <summary>
-    /// Applies the specified theme and accent at runtime.
+    /// Must be called once after Avalonia is initialized but before the first window.
+    /// Loads the saved theme from settings and applies it.
     /// </summary>
-    public void ApplyTheme(AppTheme theme, string? accent = null)
+    public void Initialize()
     {
-        var newVariant = theme == AppTheme.Dark ? ThemeVariant.Dark : ThemeVariant.Light;
-        var newAccent = accent ?? _currentAccent;
+        if (_isInitialized) return;
+        _isInitialized = true;
 
-        if (newVariant == _currentTheme && newAccent == _currentAccent)
+        var settings = SettingsService.Instance.Settings;
+
+        // Determine which theme to load
+        var themeId = settings.ThemeId ?? "Dark";
+
+        // Try built-in themes first, then user themes
+        if (BuiltInThemes.TryGetValue(themeId, out var uri))
+        {
+            LoadThemeInternal(uri, ThemeVariant.Dark, themeId);
+        }
+        else
+        {
+            // User theme: try loading from disk
+            var userPath = GetUserThemePath(themeId);
+            if (File.Exists(userPath))
+            {
+                LoadThemeInternal(userPath, ThemeVariant.Dark, themeId);
+            }
+            else
+            {
+                // Fallback to Dark
+                LoadThemeInternal(DarkUri, ThemeVariant.Dark, "Dark");
+            }
+        }
+
+        // If saved theme says Light, then layer the light variant/overrides
+        if (settings.Theme == AppTheme.Light)
+        {
+            _currentTheme = ThemeVariant.Light;
+            if (Application.Current is { } app)
+                app.RequestedThemeVariant = ThemeVariant.Light;
+        }
+    }
+
+    /// <summary>
+    /// Switches to a named theme at runtime. "Dark" and "Light" are built-in.
+    /// Any other name is treated as a user theme file in the themes directory.
+    /// </summary>
+    public void ApplyTheme(string themeId, string? accent = null)
+    {
+        if (!_isInitialized) Initialize();
+
+        var newAccent = accent ?? _currentAccent;
+        var isDark = string.Equals(themeId, "Dark", StringComparison.OrdinalIgnoreCase);
+        var newVariant = isDark ? ThemeVariant.Dark : ThemeVariant.Light;
+
+        if (themeId == _activeThemeId && newAccent == _currentAccent)
             return;
 
-        _currentTheme = newVariant;
         _currentAccent = newAccent;
+        _activeThemeId = themeId;
+        _currentTheme = newVariant;
 
         if (Application.Current is { } app)
         {
             app.RequestedThemeVariant = newVariant;
-            if (theme == AppTheme.Light)
-                EnsureLightThemeLoaded(app);
+
+            if (BuiltInThemes.TryGetValue(themeId, out var uri))
+            {
+                LoadThemeInternal(uri, newVariant, themeId);
+            }
             else
-                RemoveLightTheme(app);
+            {
+                var userPath = GetUserThemePath(themeId);
+                if (File.Exists(userPath))
+                    LoadThemeInternal(userPath, newVariant, themeId);
+            }
         }
+
+        // Persist
+        var settings = SettingsService.Instance.Settings;
+        settings.Theme = isDark ? AppTheme.Dark : AppTheme.Light;
+        settings.ThemeId = themeId;
+        SettingsService.Instance.Save();
 
         ThemeChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>
-    /// DarkTheme is loaded statically in App.axaml. We only need to add/remove
-    /// LightTheme to toggle between them, since LightTheme's keys override Dark's.
-    /// </summary>
-    private void EnsureLightThemeLoaded(Application app)
+    [Obsolete("Use ApplyTheme(string themeId) instead.")]
+    public void ApplyTheme(AppTheme theme, string? accent = null)
     {
-        if (_loadedThemeStyle != null) return;
-        var styleInclude = new StyleInclude(new Uri("avares://ZScape/"))
-        {
-            Source = new Uri(BuiltInLightUri)
-        };
-        app.Styles.Add(styleInclude);
-        _loadedThemeStyle = styleInclude;
-    }
-
-    private void RemoveLightTheme(Application app)
-    {
-        if (_loadedThemeStyle == null) return;
-        app.Styles.Remove(_loadedThemeStyle);
-        _loadedThemeStyle = null;
+        ApplyTheme(theme == AppTheme.Dark ? "Dark" : "Light", accent);
     }
 
     /// <summary>
@@ -89,35 +146,60 @@ public class ThemeService
     /// </summary>
     public void ApplyFromSettings()
     {
-        var settings = SettingsService.Instance.Settings;
-        ApplyTheme(settings.Theme, settings.Accent);
+        var s = SettingsService.Instance.Settings;
+        ApplyTheme(s.ThemeId ?? (s.Theme == AppTheme.Dark ? "Dark" : "Light"), s.Accent);
     }
 
     /// <summary>
     /// Resolves an IBrush from a resource key with a fallback hex color.
-    /// if the resource is not found (e.g., code-behind that runs before theme loads).
     /// </summary>
     public static IBrush GetBrush(string key, string fallbackHex)
     {
-        if (Application.Current?.TryGetResource(key, Application.Current.ActualThemeVariant, out var resource) == true
-            && resource is IBrush brush)
-        {
-            return brush;
-        }
+        var app = Application.Current;
+        if (app == null) return new SolidColorBrush(Color.Parse(fallbackHex));
+        if (app.TryGetResource(key, app.ActualThemeVariant, out var r) && r is IBrush brush) return brush;
         return new SolidColorBrush(Color.Parse(fallbackHex));
     }
 
     /// <summary>
-    /// Resolves a Color from a resource key. Falls back to the specified default.
+    /// Resolves a Color from a resource key with a fallback hex color.
     /// </summary>
     public static Color GetColor(string key, string fallbackHex)
     {
-        if (Application.Current?.TryGetResource(key, Application.Current.ActualThemeVariant, out var resource) == true
-            && resource is Color color)
-        {
-            return color;
-        }
+        var app = Application.Current;
+        if (app == null) return Color.Parse(fallbackHex);
+        if (app.TryGetResource(key, app.ActualThemeVariant, out var r) && r is Color color) return color;
         return Color.Parse(fallbackHex);
+    }
+
+    /// <summary>
+    /// Path where user-created theme files are stored.
+    /// </summary>
+    public static string UserThemesDirectory =>
+        Path.Combine(AppContext.BaseDirectory, "Themes", "User");
+
+    private static string GetUserThemePath(string themeId) =>
+        Path.Combine(UserThemesDirectory, $"{themeId}.axaml");
+
+    private void LoadThemeInternal(string sourceUri, ThemeVariant variant, string themeId)
+    {
+        if (Application.Current is not { } app) return;
+
+        // Remove old theme
+        if (_styleInclude != null)
+        {
+            app.Styles.Remove(_styleInclude);
+            _styleInclude = null;
+        }
+
+        _activeThemeId = themeId;
+
+        var styleInclude = new StyleInclude(new Uri("avares://ZScape/"))
+        {
+            Source = new Uri(sourceUri, sourceUri.StartsWith("avares://") ? UriKind.Absolute : UriKind.RelativeOrAbsolute)
+        };
+        app.Styles.Add(styleInclude);
+        _styleInclude = styleInclude;
     }
 }
 
