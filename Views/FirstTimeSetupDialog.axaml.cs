@@ -37,7 +37,7 @@ public partial class FirstTimeSetupDialog : Window
     public UpdateServerState? PrefetchedServerState { get; private set; }
     private readonly ObservableCollection<string> _wadPaths = new();
     private const string DownloadFolderPrefix = "[Download Folder] ";
-    private const int PageCount = 3;
+    private const int PageCount = 4;
     private bool _applyingPreset;
     private int _currentPageIndex;
     private ZandronumStableReleaseService.ReleaseManifest? _observedLatestStableRelease;
@@ -140,6 +140,10 @@ public partial class FirstTimeSetupDialog : Window
             case 1:
                 PageTitleTextBlock.Text = "WAD Settings";
                 PageDescriptionTextBlock.Text = "Set the download folder and any extra WAD locations ZScape should search before launch.";
+                break;
+            case 2:
+                PageTitleTextBlock.Text = "Theme & Interface";
+                PageDescriptionTextBlock.Text = "Choose your preferred theme and how much of ZScape's features you want to see.";
                 break;
             default:
                 PageTitleTextBlock.Text = "Updates & Finish";
@@ -750,7 +754,8 @@ public partial class FirstTimeSetupDialog : Window
         };
         
         Settings.AutoRestartForUpdates = AutoRestartCheckBox.IsChecked ?? false;
-
+        Settings.Theme = ThemeDarkRadio.IsChecked == true ? AppTheme.Dark : AppTheme.Light;
+        Settings.ThemeId = ThemeDarkRadio.IsChecked == true ? "Dark" : "Light";
         _settingsService.Save();
     }
 

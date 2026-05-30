@@ -122,6 +122,28 @@
                            TextWrapping="Wrap"
                            Margin="0,8,0,0"/>
             </StackPanel>
+
+            <!-- Page 3: Theme & Interface -->
+            <StackPanel x:Name="ThemePagePanel" IsVisible="False" Spacing="14">
+                <TextBlock Text="Appearance" FontWeight="Bold" FontSize="12"/>
+                <StackPanel Spacing="5">
+                    <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="11"/>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <RadioButton x:Name="ThemeDarkRadio" Content="Dark" IsChecked="True" GroupName="ThemeGroup"/>
+                        <RadioButton x:Name="ThemeLightRadio" Content="Light" GroupName="ThemeGroup"/>
+                    </StackPanel>
+                    <TextBlock Text="The dark theme is easier on the eyes and matches ZScape's default look." Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                </StackPanel>
+                <StackPanel Spacing="5">
+                    <TextBlock Text="Interface Mode" FontWeight="SemiBold" FontSize="11"/>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <RadioButton x:Name="UIBasicRadio" Content="Basic" IsChecked="True" GroupName="UIModeGroup"/>
+                        <RadioButton x:Name="UIAdvancedRadio" Content="Advanced" GroupName="UIModeGroup"/>
+                    </StackPanel>
+                    <TextBlock Text="Basic shows fewer columns and a simpler toolbar. Advanced unlocks all features including the log panel, WAD details, and full filtering." Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                </StackPanel>
+                <TextBlock Text="You can change themes and interface modes later in Settings > Preferences." Foreground="Gray" FontStyle="Italic" TextWrapping="Wrap"/>
+            </StackPanel>
         </Grid>
 
         <Grid Grid.Row="2" ColumnDefinitions="Auto,*,Auto" Margin="0,18,0,0">
