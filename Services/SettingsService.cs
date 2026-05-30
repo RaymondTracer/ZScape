@@ -527,6 +527,12 @@ public class AppSettings
     /// <summary>Accent color name (e.g., "Blue", "Green", "Orange").</summary>
     public string Accent { get; set; } = "Blue";
 
+    /// <summary>UI density mode.</summary>
+    public UIMode UIMode { get; set; } = UIMode.Basic;
+
+    /// <summary>UI density mode: Advanced (all features), Basic (simplified).</summary>
+    public UIMode UIMode { get; set; } = UIMode.Basic;
+
     /// <summary>How clicking the favorite star in the server list should behave for non-favorited servers.</summary>
     public FavoriteStarClickBehavior FavoriteStarClickBehavior { get; set; } = FavoriteStarClickBehavior.AskEveryTime;
     

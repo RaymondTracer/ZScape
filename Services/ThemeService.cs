@@ -208,3 +208,17 @@ public enum AppTheme
     Dark = 0,
     Light = 1
 }
+
+
+public enum UIMode
+{
+    Basic = 0,
+    Advanced = 1,
+    Touch = 2
+}
+public enum UIMode
+{
+    Basic = 0,
+    Advanced = 1,
+    Touch = 2
+}
