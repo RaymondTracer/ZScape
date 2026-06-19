@@ -3713,7 +3713,7 @@ public partial class MainWindow : Window
         _notificationService.Dispose();
         _browserService.CancelRefresh();
         _browserService.Dispose();
-        _controller.StopPolling();
+        _controller.Dispose();
         base.OnClosing(e);
     }
 

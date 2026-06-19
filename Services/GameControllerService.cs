@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Avalonia.Threading;
+using static SDL2.SDL;
 
 namespace ZScape.Services;
 
@@ -20,17 +21,18 @@ public enum ControllerDirection
 /// </summary>
 public enum ControllerAction
 {
-    Accept,   // A button
-    Back,     // B button
-    Secondary // X button
+    Accept,   // A button (SDL: SDL_CONTROLLER_BUTTON_A)
+    Back,     // B button (SDL: SDL_CONTROLLER_BUTTON_B)
+    Secondary // X button (SDL: SDL_CONTROLLER_BUTTON_X)
 }
 
 /// <summary>
-/// Polls Windows.Gaming.Input.Gamepad on a dispatch timer and fires edge-triggered
-/// events for directional navigation and action buttons. Safe to call on systems
-/// without a connected controller — polling silently becomes a no-op.
+/// Polls SDL2 game controllers on a dispatch timer and fires edge-triggered
+/// events for directional navigation and action buttons. Works identically
+/// on Windows, Linux, and macOS via ppy.SDL2-CS.
+/// Safe to call on systems without a connected controller — polling is a no-op.
 /// </summary>
-public class GameControllerService
+public class GameControllerService : IDisposable
 {
     private static readonly Lazy<GameControllerService> _instance = new(() => new GameControllerService());
     public static GameControllerService Instance => _instance.Value;
@@ -40,6 +42,8 @@ public class GameControllerService
     private readonly HashSet<ControllerDirection> _prevDirs = [];
     private readonly HashSet<ControllerAction> _pressedActions = [];
     private readonly HashSet<ControllerAction> _prevActions = [];
+    private IntPtr _controllerHandle = IntPtr.Zero;
+    private bool _sdlInitialized;
     private bool _isPolling;
 
     /// <summary>Fired once when a direction is first pressed.</summary>
@@ -48,7 +52,7 @@ public class GameControllerService
     /// <summary>Fired once when an action button is first pressed.</summary>
     public event Action<ControllerAction>? ActionPressed;
 
-    /// <summary>True when at least one gamepad is connected.</summary>
+    /// <summary>True when at least one gamepad is connected and opened.</summary>
     public bool IsControllerConnected { get; private set; }
 
     private GameControllerService()
@@ -61,6 +65,17 @@ public class GameControllerService
     {
         if (_isPolling) return;
         _isPolling = true;
+
+        try
+        {
+            if (SDL_Init(SDL_INIT_GAMECONTROLLER) >= 0)
+                _sdlInitialized = true;
+        }
+        catch
+        {
+            // SDL2 native library not available on this system
+        }
+
         _pollTimer.Start();
     }
 
@@ -68,6 +83,8 @@ public class GameControllerService
     {
         _isPolling = false;
         _pollTimer.Stop();
+
+        CloseController();
         _pressedDirs.Clear();
         _prevDirs.Clear();
         _pressedActions.Clear();
@@ -75,52 +92,66 @@ public class GameControllerService
         IsControllerConnected = false;
     }
 
+    public void Dispose()
+    {
+        StopPolling();
+
+        if (_sdlInitialized)
+        {
+            try { SDL_Quit(); } catch { }
+            _sdlInitialized = false;
+        }
+    }
+
     private void OnPoll(object? sender, EventArgs e)
     {
-#if WINDOWS
+        if (!_sdlInitialized) return;
+
         try
         {
-            var gamepads = Windows.Gaming.Input.Gamepad.Gamepads;
-            if (gamepads.Count == 0)
+            TryOpenController();
+
+            if (_controllerHandle == IntPtr.Zero)
             {
                 IsControllerConnected = false;
                 return;
             }
 
             IsControllerConnected = true;
-            var reading = gamepads[0].GetCurrentReading();
-            var buttons = reading.Buttons;
 
             _pressedDirs.Clear();
             _pressedActions.Clear();
 
             // D-pad
-            if (buttons.HasFlag(Windows.Gaming.Input.GamepadButtons.DPadUp))
+            if (SDL_GameControllerGetButton(_controllerHandle, SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_UP) != 0)
                 _pressedDirs.Add(ControllerDirection.Up);
-            if (buttons.HasFlag(Windows.Gaming.Input.GamepadButtons.DPadDown))
+            if (SDL_GameControllerGetButton(_controllerHandle, SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_DOWN) != 0)
                 _pressedDirs.Add(ControllerDirection.Down);
-            if (buttons.HasFlag(Windows.Gaming.Input.GamepadButtons.DPadLeft))
+            if (SDL_GameControllerGetButton(_controllerHandle, SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_LEFT) != 0)
                 _pressedDirs.Add(ControllerDirection.Left);
-            if (buttons.HasFlag(Windows.Gaming.Input.GamepadButtons.DPadRight))
+            if (SDL_GameControllerGetButton(_controllerHandle, SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_RIGHT) != 0)
                 _pressedDirs.Add(ControllerDirection.Right);
 
             // Left thumbstick as directional fallback
-            const double thumbDeadZone = 0.4;
-            if (reading.LeftThumbstickY > thumbDeadZone)
+            const short thumbDeadZone = 12000; // ~0.37 of the [-32768, 32767] range
+            var stickX = SDL_GameControllerGetAxis(_controllerHandle, SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTX);
+            var stickY = SDL_GameControllerGetAxis(_controllerHandle, SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTY);
+
+            if (stickY < -thumbDeadZone)
                 _pressedDirs.Add(ControllerDirection.Up);
-            if (reading.LeftThumbstickY < -thumbDeadZone)
+            if (stickY > thumbDeadZone)
                 _pressedDirs.Add(ControllerDirection.Down);
-            if (reading.LeftThumbstickX < -thumbDeadZone)
+            if (stickX < -thumbDeadZone)
                 _pressedDirs.Add(ControllerDirection.Left);
-            if (reading.LeftThumbstickX > thumbDeadZone)
+            if (stickX > thumbDeadZone)
                 _pressedDirs.Add(ControllerDirection.Right);
 
             // Action buttons
-            if (buttons.HasFlag(Windows.Gaming.Input.GamepadButtons.A))
+            if (SDL_GameControllerGetButton(_controllerHandle, SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_A) != 0)
                 _pressedActions.Add(ControllerAction.Accept);
-            if (buttons.HasFlag(Windows.Gaming.Input.GamepadButtons.B))
+            if (SDL_GameControllerGetButton(_controllerHandle, SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_B) != 0)
                 _pressedActions.Add(ControllerAction.Back);
-            if (buttons.HasFlag(Windows.Gaming.Input.GamepadButtons.X))
+            if (SDL_GameControllerGetButton(_controllerHandle, SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_X) != 0)
                 _pressedActions.Add(ControllerAction.Secondary);
 
             // Edge-trigger: fire only on newly pressed
@@ -140,12 +171,36 @@ public class GameControllerService
         }
         catch
         {
-            // Gamepad access throws on systems without Windows.Gaming.Input support
+            CloseController();
             IsControllerConnected = false;
         }
-#else
-        // Non-Windows: polling is a no-op. StartPolling/StopPolling still run so
-        // callers don't need platform guards, but events will never fire.
-#endif
+    }
+
+    private void TryOpenController()
+    {
+        if (_controllerHandle != IntPtr.Zero) return;
+
+        var count = SDL_NumJoysticks();
+        for (int i = 0; i < count; i++)
+        {
+            if (SDL_IsGameController(i) == SDL_bool.SDL_TRUE)
+            {
+                var handle = SDL_GameControllerOpen(i);
+                if (handle != IntPtr.Zero)
+                {
+                    _controllerHandle = handle;
+                    return;
+                }
+            }
+        }
+    }
+
+    private void CloseController()
+    {
+        if (_controllerHandle != IntPtr.Zero)
+        {
+            SDL_GameControllerClose(_controllerHandle);
+            _controllerHandle = IntPtr.Zero;
+        }
     }
 }
