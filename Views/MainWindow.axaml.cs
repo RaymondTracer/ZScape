@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private readonly NotificationService _notificationService = NotificationService.Instance;
     private readonly ScreenshotMonitorService _screenshotMonitor = ScreenshotMonitorService.Instance;
     private readonly ZandronumStableReleaseService _stableReleaseService = ZandronumStableReleaseService.Instance;
+    private readonly GameControllerService _controller = GameControllerService.Instance;
     private readonly DispatcherTimer _autoRefreshTimer = new();
     private readonly DispatcherTimer _favoritesRefreshTimer = new();
     private readonly DispatcherTimer _countdownTimer = new();
@@ -48,6 +49,7 @@ public partial class MainWindow : Window
     private int _sortColumnIndex = 3; // Default to Players column
     private bool _sortAscending = false;
     private bool _isInitializing = true;
+    private BigUIShell? _bigUIShell;
 
     // Server alert state tracking
     private readonly Dictionary<string, ServerAlertState> _serverAlertStates = new();
@@ -104,6 +106,7 @@ public partial class MainWindow : Window
         }
 
         SubscribeToEvents();
+        SetupControllerInput();
         _notificationService.AttachWindow(this);
 
         // Apply dark title bar on Windows
@@ -132,6 +135,8 @@ public partial class MainWindow : Window
             AutoDetectPaths();
 
             LoadSettings();
+            ApplyUIMode();
+            _controller.StartPolling();
             _isInitializing = false;
 
             // Start screenshot monitoring
@@ -1499,6 +1504,220 @@ public partial class MainWindow : Window
         UpdateMenuCheckMark(ShowFavoritesColumnMenuItem, _settings.Settings.ShowFavoritesColumn);
         UpdateFavoritesColumnVisibility(_settings.Settings.ShowFavoritesColumn);
         _settings.Save();
+    }
+
+    private void TouchModeMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var settings = _settings.Settings;
+        settings.UIMode = settings.UIMode == UIMode.BigUI ? UIMode.Standard : UIMode.BigUI;
+        _settings.Save();
+        ApplyUIMode();
+    }
+
+    private void ApplyUIMode()
+    {
+        var isBigUI = _settings.Settings.UIMode == UIMode.BigUI;
+
+        if (isBigUI)
+            EnterBigUIMode();
+        else
+            ExitBigUIMode();
+
+        if (TouchModeMenuItem != null)
+            TouchModeMenuItem.Header = isBigUI ? "Exit Big UI Mode" : "Big UI Mode";
+    }
+
+    private void EnterBigUIMode()
+    {
+        if (_bigUIShell != null) return;
+
+        _bigUIShell = new BigUIShell();
+
+        var dockPanel = (DockPanel)Content;
+        var idx = dockPanel.Children.IndexOf(MainContentGrid);
+        if (idx >= 0)
+            dockPanel.Children[idx] = _bigUIShell;
+
+        SetupBigUIServerListView();
+
+        _bigUIShell.ExitBigUIRequested += () => Dispatcher.UIThread.Post(() =>
+        {
+            _settings.Settings.UIMode = UIMode.Standard;
+            _settings.Save();
+            ApplyUIMode();
+        });
+
+        _bigUIShell.ExitZScapeRequested += () => Dispatcher.UIThread.Post(() =>
+        {
+            Close();
+        });
+
+        _bigUIShell.RefreshRequested += () => _ = RefreshServersAsync();
+        _bigUIShell.LaunchRequested += () => _ = ShowLaunchGameDialogAsync();
+        _bigUIShell.SearchTextChanged += text =>
+        {
+            _settings.Settings.SearchText = text;
+            UpdateServerList();
+        };
+
+        if (ToolbarBorder != null) ToolbarBorder.IsVisible = false;
+        var menu = ((DockPanel)Content).Children.OfType<Menu>().FirstOrDefault();
+        if (menu != null) menu.IsVisible = false;
+        SetLogPanelVisible(false);
+
+        // Also hide the standard status bar
+        var statusBar = ((DockPanel)Content).Children.OfType<Border>()
+            .FirstOrDefault(b => b.Child is Grid g
+                && g.Children.OfType<TextBlock>().Any(t => t.Name == "ServerCountLabel"));
+        if (statusBar != null) statusBar.IsVisible = false;
+    }
+
+    private void ExitBigUIMode()
+    {
+        if (_bigUIShell == null) return;
+
+        ServerListView.ItemsSource = Servers;
+
+        var dockPanel = (DockPanel)Content;
+        var idx = dockPanel.Children.IndexOf(_bigUIShell);
+        if (idx >= 0)
+            dockPanel.Children[idx] = MainContentGrid;
+
+        _bigUIShell = null;
+
+        if (ToolbarBorder != null) ToolbarBorder.IsVisible = true;
+        var menu = ((DockPanel)Content).Children.OfType<Menu>().FirstOrDefault();
+        if (menu != null) menu.IsVisible = true;
+        SetLogPanelVisible(_settings.Settings.ShowLogPanel);
+
+        var statusBar = ((DockPanel)Content).Children.OfType<Border>()
+            .FirstOrDefault(b => b.Child is Grid g
+                && g.Children.OfType<TextBlock>().Any(t => t.Name == "ServerCountLabel"));
+        if (statusBar != null) statusBar.IsVisible = true;
+    }
+
+    private void SetupBigUIServerListView()
+    {
+        if (_bigUIShell == null) return;
+        var list = _bigUIShell.ServerListView;
+
+        list.RowBaseBackgroundPath = "RowBackground";
+        list.RowHeightPath = "RowHeight";
+        list.RowHeight = 48;
+
+        // Favorites star column
+        list.AddColumn(new ListViewColumn
+        {
+            Header = "",
+            Width = 36,
+            IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var btn = new Button
+                {
+                    Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(0),
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
+                    HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                    VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+                    Width = 36
+                };
+                btn.Bind(Button.IsVisibleProperty, new Avalonia.Data.Binding("ShowFavoritesColumn"));
+                var tb = new TextBlock { FontSize = 16 };
+                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("FavoriteIcon"));
+                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("FavoriteColor"));
+                btn.Content = tb;
+                btn.Click += FavoriteButton_Click;
+                return btn;
+            }
+        });
+
+        list.AddColumn(new ListViewColumn { Header = "", Width = 0, MinWidth = 0, IsFixedWidth = true,
+            CellContentFactory = () => new Border { Width = 0, Height = 0 } });
+
+        list.AddColumn(new ListViewColumn { Header = "Server Name", IsStar = true, MinWidth = 200,
+            BindingPath = "Name", TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByName_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Players", Width = 100, MinWidth = 80,
+            BindingPath = "PlayersDisplay", SortClick = SortByPlayers_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Ping", Width = 80, MinWidth = 60,
+            BindingPath = "Ping", SortClick = SortByPing_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Map", Width = 120, MinWidth = 80,
+            BindingPath = "Map", TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByMap_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Mode", Width = 100, MinWidth = 80,
+            BindingPath = "GameModeDisplay", SortClick = SortByMode_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "IWAD", Width = 120, MinWidth = 80,
+            BindingPath = "IWAD", TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByIwad_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Address", Width = 180, MinWidth = 120,
+            BindingPath = "AddressDisplay", SortClick = SortByAddress_Click });
+
+        list.Build(ListViewOverflowMode.Fill);
+        list.ItemsSource = Servers;
+        list.KeyDown += (_, e) => {
+            if (e.Key == Key.Enter) { _ = ShowLaunchGameDialogAsync(); e.Handled = true; }
+        };
+    }
+
+    private void SetupControllerInput()
+    {
+        _controller.DirectionPressed += dir =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                var items = Servers;
+                if (items.Count == 0) return;
+
+                int current = GetSelectedServerIndex();
+                int next = current;
+
+                switch (dir)
+                {
+                    case ControllerDirection.Up:
+                        next = current > 0 ? current - 1 : 0;
+                        break;
+                    case ControllerDirection.Down:
+                        next = current < items.Count - 1 ? current + 1 : items.Count - 1;
+                        break;
+                    case ControllerDirection.Left:
+                    case ControllerDirection.Right:
+                        (_bigUIShell?.ServerListView ?? (Control)ServerListView).Focus();
+                        return;
+                }
+
+                var targetList = _bigUIShell?.ServerListView ?? ServerListView;
+                if (next != current && next >= 0 && next < items.Count)
+                    targetList.SelectItem(Servers[next]);
+            });
+        };
+
+        _controller.ActionPressed += act =>
+        {
+            Dispatcher.UIThread.Post(async () =>
+            {
+                if (act == ControllerAction.Accept)
+                    await ShowLaunchGameDialogAsync();
+            });
+        };
+    }
+
+    private int GetSelectedServerIndex()
+    {
+        var selItem = ServerListView.SelectedItem;
+        if (selItem == null) return -1;
+        for (int i = 0; i < Servers.Count; i++)
+            if (Servers[i] == selItem) return i;
+        return -1;
     }
 
     private void UpdateRowHeights()
@@ -3494,6 +3713,7 @@ public partial class MainWindow : Window
         _notificationService.Dispose();
         _browserService.CancelRefresh();
         _browserService.Dispose();
+        _controller.StopPolling();
         base.OnClosing(e);
     }
 

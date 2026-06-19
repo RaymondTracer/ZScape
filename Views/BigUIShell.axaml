@@ -1,0 +1,221 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="clr-namespace:ZScape.Controls"
+             mc:Ignorable="d"
+             x:Class="ZScape.Views.BigUIShell">
+
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="BigUiHoverBrush" Color="#3356A8FF" />
+        <SolidColorBrush x:Key="BigUiFocusBrush" Color="#4D56A8FF" />
+        <SolidColorBrush x:Key="BigUiSelectedBrush" Color="#FF1F4E79" />
+    </UserControl.Resources>
+
+    <!-- Big UI: HTPC/Android TV style layout
+         Left sidebar for tab navigation, right content area.
+         Designed for d-pad / arrow key / controller input. -->
+
+    <Grid x:Name="RootGrid" ColumnDefinitions="200,12,*">
+
+        <!-- Sidebar -->
+        <Border x:Name="SidebarBorder" Grid.Column="0"
+                Background="{DynamicResource SecondaryBackgroundBrush}"
+                Padding="16,20,12,20">
+            <Grid RowDefinitions="Auto,*,Auto,Auto">
+                <!-- Header -->
+                <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,24">
+                    <TextBlock Text="ZScape" FontSize="24" FontWeight="Bold" />
+                    <TextBlock Text="Big UI" FontSize="12" Foreground="Gray" />
+                </StackPanel>
+
+                <!-- Tab list -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="TabListPanel" Spacing="4">
+                        <!-- Tabs are populated from code-behind -->
+
+                        <Border x:Name="ServerListTab" Classes="BigUiTab" Padding="12,10"
+                                PointerPressed="Tab_PointerPressed" Tag="servers">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <TextBlock Text="Servers" FontSize="18"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="SettingsTab" Classes="BigUiTab" Padding="12,10"
+                                PointerPressed="Tab_PointerPressed" Tag="settings">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <TextBlock Text="Settings" FontSize="18"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="FiltersTab" Classes="BigUiTab" Padding="12,10"
+                                PointerPressed="Tab_PointerPressed" Tag="filters">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <TextBlock Text="Filters" FontSize="18"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="WADsTab" Classes="BigUiTab" Padding="12,10"
+                                PointerPressed="Tab_PointerPressed" Tag="wads">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <TextBlock Text="WADs" FontSize="18"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Bottom: exit Big UI -->
+                <Button Grid.Row="2" x:Name="ExitBigUIButton"
+                        Content="Exit Big UI"
+                        HorizontalAlignment="Stretch"
+                        Margin="0,16,0,4"
+                        Padding="12,8"
+                        FontSize="12"
+                        Foreground="Gray"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Click="ExitBigUIButton_Click" />
+                <Button Grid.Row="3" x:Name="ExitZScapeButton"
+                        Content="Exit ZScape"
+                        HorizontalAlignment="Stretch"
+                        Margin="0,4,0,0"
+                        Padding="12,8"
+                        FontSize="12"
+                        Foreground="Gray"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Click="ExitZScapeButton_Click" />
+            </Grid>
+        </Border>
+
+        <!-- Sidebar divider -->
+        <GridSplitter Grid.Column="1" ResizeDirection="Columns"
+                      Background="{DynamicResource BorderBrush}" />
+
+        <!-- Content area -->
+        <Grid Grid.Column="2" Margin="12,0,12,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Top bar: search + quick actions -->
+            <Border Grid.Row="0" Padding="0,12,0,8">
+                <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,8">
+                    <TextBox x:Name="BigSearchBox" Grid.Column="0"
+                             Watermark="Search servers..."
+                             FontSize="18" Padding="12,10" />
+                    <Button x:Name="BigRefreshButton" Grid.Column="1" Margin="16,0,8,0"
+                            Content="Refresh" FontSize="16" Padding="16,10"
+                            Click="BigRefreshButton_Click" />
+                    <Button x:Name="BigLaunchButton" Grid.Column="2"
+                            Content="Launch" FontSize="16" Padding="16,10"
+                            Click="BigLaunchButton_Click" />
+                </Grid>
+            </Border>
+
+            <!-- Main content: server list or settings -->
+            <Border Grid.Row="1" ClipToBounds="True">
+                <!-- Server list fills the space -->
+                <controls:ResizableListView x:Name="BigServerListView" />
+            </Border>
+
+            <!-- Status bar (compact) -->
+            <Border Grid.Row="2" Padding="0,8,0,12">
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                    <TextBlock x:Name="BigServerCountLabel" Text="Servers: 0"
+                               FontSize="14" Margin="0,0,16,0" Foreground="Gray" />
+                    <TextBlock x:Name="BigPlayerCountLabel" Text="Players: 0"
+                               Grid.Column="1" FontSize="14" Margin="0,0,16,0" Foreground="Gray" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+
+    <UserControl.Styles>
+        <Style Selector="Border.BigUiTab">
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Border.BigUiTab:pointerover">
+            <Setter Property="Background" Value="{StaticResource BigUiHoverBrush}" />
+        </Style>
+        <Style Selector="Border.BigUiTab:focused">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="{StaticResource BigUiFocusBrush}" />
+        </Style>
+        <Style Selector="Border.BigUiTab.Active">
+            <Setter Property="Background" Value="{StaticResource BigUiSelectedBrush}" />
+        </Style>
+        <Style Selector="Border.BigUiTab.Active:focused">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button#ExitBigUIButton">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+        </Style>
+        <Style Selector="Button#ExitBigUIButton:pointerover">
+            <Setter Property="Background" Value="{StaticResource BigUiHoverBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+        <Style Selector="Button#ExitBigUIButton:focused">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="{StaticResource BigUiFocusBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+
+        <Style Selector="Button#ExitZScapeButton">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+        </Style>
+        <Style Selector="Button#ExitZScapeButton:pointerover">
+            <Setter Property="Background" Value="{StaticResource BigUiHoverBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+        <Style Selector="Button#ExitZScapeButton:focused">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="{StaticResource BigUiFocusBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+
+        <Style Selector="TextBox#BigSearchBox:focused">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="Button#BigRefreshButton">
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button#BigRefreshButton:pointerover">
+            <Setter Property="Background" Value="{StaticResource BigUiHoverBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+        <Style Selector="Button#BigRefreshButton:focused">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="{StaticResource BigUiFocusBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+        <Style Selector="Button#BigLaunchButton">
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button#BigLaunchButton:pointerover">
+            <Setter Property="Background" Value="{StaticResource BigUiHoverBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+        <Style Selector="Button#BigLaunchButton:focused">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="{StaticResource BigUiFocusBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+    </UserControl.Styles>
+</UserControl>

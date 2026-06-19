@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -209,16 +209,8 @@ public enum AppTheme
     Light = 1
 }
 
-
 public enum UIMode
 {
-    Basic = 0,
-    Advanced = 1,
-    Touch = 2
-}
-public enum UIMode
-{
-    Basic = 0,
-    Advanced = 1,
-    Touch = 2
+    Standard = 0,
+    BigUI = 1
 }

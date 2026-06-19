@@ -1979,12 +1979,33 @@ public partial class WadDownloader : IDisposable
         };
         progressTimer.Start();
         
+        const int maxSegmentRetries = 3;
+
         try
         {
             var downloadTasks = segments.Select((segment, index) =>
                 DownloadSegmentAsync(uri, segment.Start, segment.End, outputHandle, index, downloadedBytes, failedSegments, ct));
             
             await Task.WhenAll(downloadTasks);
+
+            // Retry failed segments concurrently
+            for (int retry = 0; retry < maxSegmentRetries && failedSegments.Count > 0; retry++)
+            {
+                var retryCandidates = failedSegments.ToList();
+                // ConcurrentBag has no Clear(); replace with a fresh instance so new failures are tracked separately
+                failedSegments = new ConcurrentBag<(int, bool)>();
+
+                if (ct.IsCancellationRequested) break;
+
+                LogVerbose($"Retrying {retryCandidates.Count} segment(s), attempt {retry + 1}/{maxSegmentRetries}");
+                var retryTasks = retryCandidates.Select(candidate =>
+                {
+                    var segment = segments[candidate.SegmentIndex];
+                    return DownloadSegmentAsync(uri, segment.Start, segment.End, outputHandle, candidate.SegmentIndex, downloadedBytes, failedSegments, ct);
+                });
+
+                await Task.WhenAll(retryTasks);
+            }
             
             // Check for connection limit failures
             var connectionLimitFailures = failedSegments.Count(f => f.IsConnectionLimit);
@@ -1995,7 +2016,7 @@ public partial class WadDownloader : IDisposable
             
             if (failedSegments.Count > 0)
             {
-                throw new Exception($"{failedSegments.Count} segments failed to download");
+                throw new Exception($"{failedSegments.Count} segments failed to download after {maxSegmentRetries} retries");
             }
 
             task.BytesDownloaded = downloadedBytes.Sum();

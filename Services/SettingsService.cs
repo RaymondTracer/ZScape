@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Linq;
 using ZScape.Models;
@@ -527,11 +527,8 @@ public class AppSettings
     /// <summary>Accent color name (e.g., "Blue", "Green", "Orange").</summary>
     public string Accent { get; set; } = "Blue";
 
-    /// <summary>UI density mode.</summary>
-    public UIMode UIMode { get; set; } = UIMode.Basic;
-
-    /// <summary>UI density mode: Advanced (all features), Basic (simplified).</summary>
-    public UIMode UIMode { get; set; } = UIMode.Basic;
+    /// <summary>UI mode: Standard or BigUI (HTPC-style fullscreen layout for d-pad / controller input).</summary>
+    public UIMode UIMode { get; set; } = UIMode.Standard;
 
     /// <summary>How clicking the favorite star in the server list should behave for non-favorited servers.</summary>
     public FavoriteStarClickBehavior FavoriteStarClickBehavior { get; set; } = FavoriteStarClickBehavior.AskEveryTime;
