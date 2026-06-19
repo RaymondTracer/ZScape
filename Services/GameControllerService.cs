@@ -77,6 +77,7 @@ public class GameControllerService
 
     private void OnPoll(object? sender, EventArgs e)
     {
+#if WINDOWS
         try
         {
             var gamepads = Windows.Gaming.Input.Gamepad.Gamepads;
@@ -142,5 +143,9 @@ public class GameControllerService
             // Gamepad access throws on systems without Windows.Gaming.Input support
             IsControllerConnected = false;
         }
+#else
+        // Non-Windows: polling is a no-op. StartPolling/StopPolling still run so
+        // callers don't need platform guards, but events will never fire.
+#endif
     }
 }
