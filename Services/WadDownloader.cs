@@ -1889,46 +1889,27 @@ public partial class WadDownloader : IDisposable
         var url = uri.ToString();
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Head, uri);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
             LogUrlAttempt("Range support probe", request.Method, url);
-            using var response = await HttpClient.SendAsync(request, ct);
-            if (response.IsSuccessStatusCode)
-            {
-                if (response.Headers.AcceptRanges.Contains("bytes"))
-                {
-                    return true;
-                }
-
-                LogVerbose($"Range support probe missing Accept-Ranges, retrying with GET: {url}");
-            }
-            else
+            using var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode)
             {
                 LogUrlFailure("Range support probe", request.Method, url, response.StatusCode);
-                LogVerbose($"Range support probe falling back to GET: {url}");
-            }
-        }
-        catch (Exception ex)
-        {
-            LogUrlFailure("Range support probe", HttpMethod.Head, url, ex, ct);
-            LogVerbose($"Range support probe falling back to GET after HEAD failure: {url}");
-        }
-
-        try
-        {
-            using var fallbackRequest = new HttpRequestMessage(HttpMethod.Get, uri);
-            LogUrlAttempt("Range support fallback", fallbackRequest.Method, url);
-            using var fallbackResponse = await HttpClient.SendAsync(fallbackRequest, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (!fallbackResponse.IsSuccessStatusCode)
-            {
-                LogUrlFailure("Range support fallback", fallbackRequest.Method, url, fallbackResponse.StatusCode);
                 return false;
             }
 
-            return fallbackResponse.Headers.AcceptRanges.Contains("bytes");
+            if (response.StatusCode == HttpStatusCode.PartialContent)
+            {
+                return true;
+            }
+
+            LogVerbose($"Range support probe returned {response.StatusCode} instead of PartialContent: {url}");
+            return false;
         }
         catch (Exception ex)
         {
-            LogUrlFailure("Range support fallback", HttpMethod.Get, url, ex, ct);
+            LogUrlFailure("Range support probe", HttpMethod.Get, url, ex, ct);
             return false;
         }
     }
@@ -2036,25 +2017,63 @@ public partial class WadDownloader : IDisposable
         int segmentIndex,
         long[] downloadedBytes, ConcurrentBag<(int, bool)> failedSegments, CancellationToken ct)
     {
+        var requestStart = start;
+
         try
         {
+            var segmentLength = end - start + 1;
+            var existingBytes = Math.Clamp(Volatile.Read(ref downloadedBytes[segmentIndex]), 0, segmentLength);
+            requestStart = start + existingBytes;
+            if (requestStart > end)
+            {
+                return;
+            }
+
+            if (requestStart > start)
+            {
+                LogVerbose($"Resuming segment download bytes={start}-{end} from {requestStart}");
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(start, end);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(requestStart, end);
             
             using var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                response.EnsureSuccessStatusCode();
+            }
+
+            if (response.StatusCode != HttpStatusCode.PartialContent)
+            {
+                throw new HttpRequestException(
+                    $"Server did not honor range request bytes={requestStart}-{end}",
+                    null,
+                    response.StatusCode);
+            }
             
             using var stream = await response.Content.ReadAsStreamAsync(ct);
             
-            long position = start;
+            long position = requestStart;
             var tempBuffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
             int bytesRead;
             
             while ((bytesRead = await stream.ReadAsync(tempBuffer, ct)) > 0)
             {
+                if (position + bytesRead - 1 > end)
+                {
+                    throw new IOException($"Segment response exceeded requested range bytes={requestStart}-{end}");
+                }
+
                 await RandomAccess.WriteAsync(outputHandle, tempBuffer.AsMemory(0, bytesRead), position, ct);
                 position += bytesRead;
-                downloadedBytes[segmentIndex] = position - start;
+                Volatile.Write(ref downloadedBytes[segmentIndex], position - start);
+            }
+
+            if (position <= end)
+            {
+                var receivedBytes = position - requestStart;
+                var expectedBytes = end - requestStart + 1;
+                throw new IOException($"Segment ended early after {receivedBytes} of {expectedBytes} bytes");
             }
         }
         catch (HttpRequestException ex)
@@ -2062,7 +2081,7 @@ public partial class WadDownloader : IDisposable
             bool isConnectionLimit = ex.StatusCode == HttpStatusCode.TooManyRequests ||
                                     ex.StatusCode == HttpStatusCode.ServiceUnavailable ||
                                     ex.InnerException is System.Net.Sockets.SocketException;
-            var range = $"{start}-{end}";
+            var range = $"{requestStart}-{end}";
             if (ex.StatusCode.HasValue)
             {
                 LogUrlFailure($"Segment download bytes={range}", HttpMethod.Get, uri.ToString(), ex.StatusCode.Value);
@@ -2075,7 +2094,7 @@ public partial class WadDownloader : IDisposable
         }
         catch (Exception ex)
         {
-            LogUrlFailure($"Segment download bytes={start}-{end}", HttpMethod.Get, uri.ToString(), ex, ct);
+            LogUrlFailure($"Segment download bytes={requestStart}-{end}", HttpMethod.Get, uri.ToString(), ex, ct);
             failedSegments.Add((segmentIndex, false));
         }
     }

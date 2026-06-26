@@ -997,12 +997,29 @@ public class GameLauncher : IDisposable
 
         progressTimer.Start();
 
+        const int maxSegmentRetries = 3;
+
         try
         {
             var downloadTasks = segments.Select((segment, index) =>
                 DownloadTestingArchiveSegmentAsync(archiveUri, segment.Start, segment.End, outputHandle, index, downloadedBytes, failedSegments));
 
             await Task.WhenAll(downloadTasks);
+
+            for (var retry = 0; retry < maxSegmentRetries && !failedSegments.IsEmpty; retry++)
+            {
+                var retryCandidates = failedSegments.ToList();
+                failedSegments = new ConcurrentBag<(int SegmentIndex, bool IsConnectionLimit)>();
+
+                LoggingService.Instance.Verbose($"Retrying {retryCandidates.Count} testing build segment(s), attempt {retry + 1}/{maxSegmentRetries}.");
+                var retryTasks = retryCandidates.Select(candidate =>
+                {
+                    var segment = segments[candidate.SegmentIndex];
+                    return DownloadTestingArchiveSegmentAsync(archiveUri, segment.Start, segment.End, outputHandle, candidate.SegmentIndex, downloadedBytes, failedSegments);
+                });
+
+                await Task.WhenAll(retryTasks);
+            }
 
             var connectionLimitFailures = failedSegments.Count(f => f.IsConnectionLimit);
             if (connectionLimitFailures > segments.Count * 0.3)
@@ -1034,24 +1051,62 @@ public class GameLauncher : IDisposable
         long[] downloadedBytes,
         ConcurrentBag<(int SegmentIndex, bool IsConnectionLimit)> failedSegments)
     {
+        var requestStart = start;
+
         try
         {
+            var segmentLength = end - start + 1;
+            var existingBytes = Math.Clamp(Volatile.Read(ref downloadedBytes[segmentIndex]), 0, segmentLength);
+            requestStart = start + existingBytes;
+            if (requestStart > end)
+            {
+                return;
+            }
+
+            if (requestStart > start)
+            {
+                LoggingService.Instance.Verbose($"Resuming testing build segment bytes={start}-{end} from {requestStart}.");
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Get, archiveUri);
-            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(start, end);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(requestStart, end);
 
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                response.EnsureSuccessStatusCode();
+            }
+
+            if (response.StatusCode != HttpStatusCode.PartialContent)
+            {
+                throw new HttpRequestException(
+                    $"Server did not honor range request bytes={requestStart}-{end}",
+                    null,
+                    response.StatusCode);
+            }
 
             await using var stream = await response.Content.ReadAsStreamAsync();
-            long position = start;
+            long position = requestStart;
             var buffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
             int bytesRead;
 
             while ((bytesRead = await stream.ReadAsync(buffer)) > 0)
             {
+                if (position + bytesRead - 1 > end)
+                {
+                    throw new IOException($"Segment response exceeded requested range bytes={requestStart}-{end}");
+                }
+
                 await RandomAccess.WriteAsync(outputHandle, buffer.AsMemory(0, bytesRead), position);
                 position += bytesRead;
-                downloadedBytes[segmentIndex] = position - start;
+                Volatile.Write(ref downloadedBytes[segmentIndex], position - start);
+            }
+
+            if (position <= end)
+            {
+                var receivedBytes = position - requestStart;
+                var expectedBytes = end - requestStart + 1;
+                throw new IOException($"Segment ended early after {receivedBytes} of {expectedBytes} bytes");
             }
         }
         catch (HttpRequestException ex)
@@ -1071,23 +1126,10 @@ public class GameLauncher : IDisposable
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Head, archiveUri);
-            using var response = await _httpClient.SendAsync(request);
-            if (response.IsSuccessStatusCode && response.Headers.AcceptRanges.Contains("bytes"))
-            {
-                return true;
-            }
-        }
-        catch
-        {
-            // Fall back to GET probe below.
-        }
-
-        try
-        {
             using var request = new HttpRequestMessage(HttpMethod.Get, archiveUri);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-            return response.IsSuccessStatusCode && response.Headers.AcceptRanges.Contains("bytes");
+            return response.IsSuccessStatusCode && response.StatusCode == HttpStatusCode.PartialContent;
         }
         catch
         {
