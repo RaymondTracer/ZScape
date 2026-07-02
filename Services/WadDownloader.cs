@@ -345,6 +345,14 @@ public partial class WadDownloader : IDisposable
         return !string.IsNullOrWhiteSpace(fileName);
     }
 
+    private static string GetLowercaseFileName(string filename)
+    {
+        var fileName = Path.GetFileName(filename);
+        return string.IsNullOrWhiteSpace(fileName)
+            ? filename.ToLowerInvariant()
+            : fileName.ToLowerInvariant();
+    }
+
     private static bool TryBuildAbsoluteUrl(Uri baseUri, string href, out string absoluteUrl)
     {
         absoluteUrl = string.Empty;
@@ -1146,7 +1154,7 @@ public partial class WadDownloader : IDisposable
                 
                 try
                 {
-                    var baseName = Path.GetFileNameWithoutExtension(task.Wad.FileName);
+                    var baseName = Path.GetFileNameWithoutExtension(task.Wad.FileName).ToLowerInvariant();
                     var searchQuery = $"\"{baseName}\" download doom";
                     var encodedQuery = Uri.EscapeDataString(searchQuery);
                     
@@ -1655,7 +1663,7 @@ public partial class WadDownloader : IDisposable
             LogInfo($"Downloading {task.Wad.FileName} from {task.SourceUrl} ({FormatSizeOrUnknown(task.TotalBytes)}, {task.ThreadCount} threads)");
             
             // Use the actual filename from the download (may differ from requested if found as different extension)
-            var downloadFileName = task.DownloadedFileName ?? task.Wad.FileName;
+            var downloadFileName = GetLowercaseFileName(task.DownloadedFileName ?? task.Wad.FileName);
             var outputPath = Path.Combine(downloadPath, downloadFileName);
             
             // Ensure directory exists
@@ -2189,15 +2197,16 @@ public partial class WadDownloader : IDisposable
     }
     
     /// <summary>
-    /// Gets filename variants to try when searching (original + alternative extensions).
-    /// When a file has no extension, tries all supported extensions.
+    /// Gets filename variants to try when searching.
+    /// When the file has a supported extension, only that exact filename is used.
+    /// When a file has no extension or an unsupported one, tries all supported extensions.
     /// </summary>
     private static List<string> GetFilenameVariants(string filename)
     {
         var variants = new List<string>();
-        var baseName = Path.GetFileNameWithoutExtension(filename);
-        var originalExt = Path.GetExtension(filename).ToLowerInvariant();
-        var archiveExtensions = WadExtensions.ArchiveExtensions;
+        var normalizedFileName = GetLowercaseFileName(filename);
+        var baseName = Path.GetFileNameWithoutExtension(normalizedFileName);
+        var originalExt = Path.GetExtension(normalizedFileName);
         
         // If no extension, try all supported extensions (prioritize common WAD formats)
         if (string.IsNullOrEmpty(originalExt))
@@ -2217,30 +2226,19 @@ public partial class WadDownloader : IDisposable
                     variants.Add(variant);
             }
         }
+        // If the file has a supported extension, only use that exact filename
+        else if (SupportedExtensions.Contains(originalExt))
+        {
+            variants.Add(normalizedFileName);
+        }
+        // If unsupported extension, try all supported extensions
         else
         {
-            // Always try the original filename first
-            variants.Add(filename);
-            
-            // Archive links are common even when the requested file is a direct WAD/PK3.
-            if (SupportedExtensions.Contains(originalExt))
+            foreach (var ext in SupportedExtensions)
             {
-                foreach (var archiveExt in archiveExtensions)
-                {
-                    var variant = baseName + archiveExt;
-                    if (!variants.Contains(variant, StringComparer.OrdinalIgnoreCase))
-                        variants.Add(variant);
-                }
-            }
-            // If unsupported extension, try all supported extensions
-            else if (!SupportedExtensions.Contains(originalExt))
-            {
-                foreach (var ext in SupportedExtensions)
-                {
-                    var variant = baseName + ext;
-                    if (!variants.Contains(variant, StringComparer.OrdinalIgnoreCase))
-                        variants.Add(variant);
-                }
+                var variant = baseName + ext;
+                if (!variants.Contains(variant, StringComparer.OrdinalIgnoreCase))
+                    variants.Add(variant);
             }
         }
         
