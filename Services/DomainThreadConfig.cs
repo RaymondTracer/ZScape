@@ -57,8 +57,8 @@ public class DomainThreadConfig
     /// Gets effective thread settings for a domain, applying global defaults where needed.
     /// This is the primary method for determining download thread configuration.
     /// </summary>
-    /// <returns>Tuple of (maxThreads, initialThreads, minSegmentSizeKb, shouldProbe, adaptiveLearning)</returns>
-    public (int MaxThreads, int InitialThreads, int MinSegmentSizeKb, bool ShouldProbe, bool AdaptiveLearning) 
+    /// <returns>Tuple of (maxThreads, minSegmentSizeKb, shouldProbe, adaptiveLearning)</returns>
+    public (int MaxThreads, int MinSegmentSizeKb, bool ShouldProbe, bool AdaptiveLearning) 
         GetEffectiveThreadSettings(string domain)
     {
         domain = NormalizeDomain(domain);
@@ -77,10 +77,6 @@ public class DomainThreadConfig
                 if (globalSettings.MaxThreadsPerFile > 0)
                     maxThreads = Math.Min(maxThreads, globalSettings.MaxThreadsPerFile);
                 
-                int initialThreads = settings.InitialThreads > 0 
-                    ? settings.InitialThreads 
-                    : globalSettings.DefaultInitialThreads;
-                    
                 int minSegmentSizeKb = settings.MinSegmentSizeKb > 0 
                     ? settings.MinSegmentSizeKb 
                     : globalSettings.DefaultMinSegmentSizeKb;
@@ -88,7 +84,7 @@ public class DomainThreadConfig
                 // Only probe if adaptive learning is enabled AND max threads seems low
                 bool shouldProbe = settings.AdaptiveLearning && settings.MaxThreads < 4 && settings.MaxThreads > 0;
                 
-                return (maxThreads, initialThreads, minSegmentSizeKb, shouldProbe, settings.AdaptiveLearning);
+                return (maxThreads, minSegmentSizeKb, shouldProbe, settings.AdaptiveLearning);
             }
             else
             {
@@ -101,7 +97,6 @@ public class DomainThreadConfig
                 
                 return (
                     maxThreads,
-                    globalSettings.DefaultInitialThreads,
                     globalSettings.DefaultMinSegmentSizeKb,
                     true, // shouldProbe for new domains
                     true  // adaptiveLearning default
@@ -112,9 +107,9 @@ public class DomainThreadConfig
 
     /// <summary>
     /// Updates the thread count for a domain after a successful probe/download.
-    /// Only updates if AdaptiveLearning is enabled for the domain.
+    /// Only updates if adaptive learning is enabled for the domain.
     /// </summary>
-    public void UpdateThreadCount(string domain, int threadCount, bool wasSuccessful)
+    public void UpdateThreadCount(string domain, int threadCount)
     {
         domain = NormalizeDomain(domain);
         lock (_lock)
@@ -125,21 +120,10 @@ public class DomainThreadConfig
                 DomainSettings[domain] = settings;
             }
 
-            if (wasSuccessful)
+            if (settings.AdaptiveLearning && threadCount > settings.MaxThreads)
             {
-                settings.SuccessCount++;
-                
-                // Only update thread count if adaptive learning is enabled
-                if (settings.AdaptiveLearning && threadCount > settings.MaxThreads)
-                {
-                    _logger.Verbose($"Domain {domain}: Updated thread count from {settings.MaxThreads} to {threadCount}");
-                    settings.MaxThreads = threadCount;
-                    settings.LastUpdated = DateTime.UtcNow;
-                }
-            }
-            else
-            {
-                settings.FailureCount++;
+                _logger.Verbose($"Domain {domain}: Updated thread count from {settings.MaxThreads} to {threadCount}");
+                settings.MaxThreads = threadCount;
             }
 
             SettingsService.Instance.SaveDomainSettings();
@@ -162,15 +146,11 @@ public class DomainThreadConfig
                 settings = new DomainSettings();
                 DomainSettings[domain] = settings;
             }
-
-            settings.FailureCount++;
             
             // Only reduce thread count if adaptive learning is enabled
             if (settings.AdaptiveLearning)
             {
                 settings.MaxThreads = reducedCount;
-                settings.LastUpdated = DateTime.UtcNow;
-                settings.Notes = $"Reduced from {currentThreads} due to connection issues";
                 _logger.Warning($"Domain {domain}: Reduced threads from {currentThreads} to {reducedCount}");
             }
             else
@@ -215,20 +195,9 @@ public class DomainSettings
     /// <summary>Maximum concurrent threads per file for this domain. 0 = use global default.</summary>
     public int MaxThreads { get; set; } = 0;
     
-    /// <summary>Maximum concurrent file downloads from this domain. 0 = unlimited.</summary>
-    public int MaxConcurrentDownloads { get; set; } = 0;
-    
-    /// <summary>Initial thread count when probing a new domain.</summary>
-    public int InitialThreads { get; set; } = 2;
-    
     /// <summary>Minimum bytes per download segment (KB). Smaller = more threads for small files.</summary>
     public int MinSegmentSizeKb { get; set; } = 256;
     
     /// <summary>Enable adaptive learning (probing and auto-backoff on failures).</summary>
     public bool AdaptiveLearning { get; set; } = true;
-    
-    public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
-    public int SuccessCount { get; set; }
-    public int FailureCount { get; set; }
-    public string? Notes { get; set; }
 }

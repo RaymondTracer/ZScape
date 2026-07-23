@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http;
 using SharpCompress.Archives;
 using SharpCompress.Common;
@@ -12,16 +14,19 @@ namespace ZScape.Services;
 /// Handles launching Zandronum to connect to servers, including automatic
 /// downloading of testing versions.
 /// </summary>
-public class GameLauncher
+public class GameLauncher : IDisposable
 {
     private static readonly Lazy<GameLauncher> _instance = new(() => new GameLauncher());
+    private static readonly Uri TestingArchiveBaseUri = new("https://zandronum.com/", UriKind.Absolute);
     public static GameLauncher Instance => _instance.Value;
 
+    private readonly DomainThreadConfig _domainConfig = DomainThreadConfig.Instance;
     private readonly HttpClient _httpClient = new();
+    private bool _disposed;
 
     public event EventHandler<string>? LaunchError;
     public event EventHandler<string>? LaunchSuccess;
-    public event EventHandler<(string Message, int Progress)>? DownloadProgress;
+    public event EventHandler<TestingBuildDownloadProgress>? DownloadProgress;
 
     private GameLauncher() 
     {
@@ -34,8 +39,13 @@ public class GameLauncher
     /// <param name="server">The server to connect to.</param>
     /// <param name="connectPassword">Optional connect password.</param>
     /// <param name="joinPassword">Optional join/in-game password.</param>
+    /// <param name="excludedOptionalPwads">Optional PWAD names to exclude from the launch command line.</param>
     /// <returns>True if launch succeeded, false otherwise.</returns>
-    public bool LaunchGame(ServerInfo server, string? connectPassword = null, string? joinPassword = null)
+    public bool LaunchGame(
+        ServerInfo server,
+        string? connectPassword = null,
+        string? joinPassword = null,
+        ISet<string>? excludedOptionalPwads = null)
     {
         var settings = SettingsService.Instance.Settings;
         
@@ -60,7 +70,7 @@ public class GameLauncher
             return false;
         }
 
-        var args = BuildCommandLine(server, connectPassword, joinPassword);
+        var args = BuildCommandLine(server, connectPassword, joinPassword, excludedOptionalPwads);
         
         try
         {
@@ -152,10 +162,11 @@ public class GameLauncher
     /// Resolves missing WADs by activating locally archived copies that match the server hash.
     /// Returns only the WADs that still need to be downloaded.
     /// </summary>
-    public List<WadInfo> ResolveMissingWadsByHash(List<(string Name, string? Hash)> missingWads)
+    public (List<WadInfo> NeedsDownload, bool CacheChanged) ResolveMissingWadsByHash(List<(string Name, string? Hash)> missingWads)
     {
         var needsDownload = new List<WadInfo>();
         var wadManager = WadManager.Instance;
+        var cacheChanged = false;
 
         foreach (var (name, hash) in missingWads)
         {
@@ -177,6 +188,7 @@ public class GameLauncher
             var activatedPath = wadManager.ActivateArchivedWad(matchingPath, name);
             if (activatedPath != null)
             {
+                cacheChanged = true;
                 LoggingService.Instance.Info(
                     $"Activated local WAD for {name}: {Path.GetFileName(matchingPath)} -> {Path.GetFileName(activatedPath)}");
                 continue;
@@ -186,7 +198,7 @@ public class GameLauncher
             needsDownload.Add(new WadInfo(name, hash));
         }
 
-        return needsDownload;
+        return (needsDownload, cacheChanged);
     }
 
     /// <summary>
@@ -195,6 +207,7 @@ public class GameLauncher
     public class WadHashMismatch
     {
         public string WadName { get; init; } = string.Empty;
+        public bool IsOptional { get; init; }
         public string LocalPath { get; init; } = string.Empty;
         public string LocalHash { get; init; } = string.Empty;
         public string ExpectedHash { get; init; } = string.Empty;
@@ -224,7 +237,21 @@ public class GameLauncher
     }
 
     /// <summary>
-    /// Verifies that all local WAD files match the server's expected hashes asynchronously with concurrent processing.
+    /// Progress information for testing build downloads.
+    /// </summary>
+    public class TestingBuildDownloadProgress
+    {
+        public string Status { get; init; } = string.Empty;
+        public int ProgressPercent { get; init; }
+        public long DownloadedBytes { get; init; }
+        public long TotalBytes { get; init; }
+        public double BytesPerSecond { get; init; }
+        public TimeSpan? EstimatedTimeRemaining { get; init; }
+        public int ThreadCount { get; init; } = 1;
+    }
+
+    /// <summary>
+    /// Verifies that all local PWAD files with advertised hashes match the server's expected hashes.
     /// </summary>
     /// <param name="server">The server to verify WADs for.</param>
     /// <param name="progress">Progress callback with per-file byte-level progress.</param>
@@ -235,14 +262,35 @@ public class GameLauncher
         IProgress<HashVerificationProgress>? progress,
         CancellationToken cancellationToken)
     {
+        return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, _ => true);
+    }
+
+    /// <summary>
+    /// Verifies local optional PWADs that advertise hashes.
+    /// Unresolved mismatches can be excluded from launch or offered for download.
+    /// </summary>
+    public async Task<List<WadHashMismatch>> VerifyOptionalWadHashesAsync(
+        ServerInfo server,
+        IProgress<HashVerificationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, pwad => pwad.IsOptional);
+    }
+
+    private async Task<List<WadHashMismatch>> VerifyWadHashesCoreAsync(
+        ServerInfo server,
+        IProgress<HashVerificationProgress>? progress,
+        CancellationToken cancellationToken,
+        Func<PWadInfo, bool> predicate)
+    {
         var mismatches = new System.Collections.Concurrent.ConcurrentBag<WadHashMismatch>();
         var exeFolder = GetExecutableFolder(server);
         var wadManager = WadManager.Instance;
         var settings = SettingsService.Instance.Settings;
         
-        // Verify only required PWADs that advertise hashes.
+        // Verify only the PWADs requested by the caller that advertise hashes.
         var pwadsWithHashes = server.PWADs
-            .Where(p => !p.IsOptional && !string.IsNullOrEmpty(p.Hash))
+            .Where(p => predicate(p) && !string.IsNullOrEmpty(p.Hash))
             .ToList();
         var totalFiles = pwadsWithHashes.Count;
         
@@ -276,6 +324,19 @@ public class GameLauncher
             
             verificationItems.Add((pwad, localPath, fileSize));
             fileProgress[pwad.Name] = (0, fileSize);
+        }
+
+        if (verificationItems.Count == 0)
+        {
+            progress?.Report(new HashVerificationProgress
+            {
+                CurrentFile = string.Empty,
+                CurrentIndex = 0,
+                TotalFiles = 0,
+                Status = "No local WADs with server hashes are available to verify.",
+                FileSize = 0
+            });
+            return [];
         }
         
         // Report initial state
@@ -357,6 +418,7 @@ public class GameLauncher
                     mismatches.Add(new WadHashMismatch
                     {
                         WadName = item.Pwad.Name,
+                        IsOptional = item.Pwad.IsOptional,
                         LocalPath = item.LocalPath,
                         LocalHash = localHash,
                         ExpectedHash = expectedHash,
@@ -603,6 +665,36 @@ public class GameLauncher
     }
 
     /// <summary>
+    /// Checks whether the exact stable version required by a non-testing server is installed.
+    /// Falls back to the configured stable executable when the server does not report a stable version.
+    /// </summary>
+    public bool IsStableVersionInstalled(ServerInfo server)
+    {
+        if (server.IsTestingServer)
+        {
+            return false;
+        }
+
+        var exePath = ResolveStableExecutablePath(server);
+        return !string.IsNullOrEmpty(exePath) && File.Exists(exePath);
+    }
+
+    /// <summary>
+    /// Gets the normalized stable version required by a non-testing server, if one can be extracted.
+    /// </summary>
+    public string? GetRequiredStableVersion(ServerInfo server)
+    {
+        if (server.IsTestingServer)
+        {
+            return null;
+        }
+
+        return ZandronumStableReleaseService.Instance.TryExtractStableVersion(server.GameVersion, out var version)
+            ? version
+            : null;
+    }
+
+    /// <summary>
     /// Gets the folder path for a specific testing version.
     /// </summary>
     public string? GetTestingVersionFolder(ServerInfo server)
@@ -642,7 +734,7 @@ public class GameLauncher
     /// Strips extraneous data after the version number (e.g., OS info, mod names).
     /// Example: "3.3-alpha-r260112-1855 (TSPGv32) on Linux 6.8.0-58-generic" -> "3.3-alpha-r260112-1855"
     /// </summary>
-    private static string ExtractCoreVersion(string fullVersion)
+    public static string ExtractCoreVersion(string fullVersion)
     {
         if (string.IsNullOrEmpty(fullVersion))
         {
@@ -682,8 +774,31 @@ public class GameLauncher
         {
             return GetTestingExePath(server) ?? string.Empty;
         }
-        
-        return settings.ZandronumPath;
+
+        return ResolveStableExecutablePath(server) ?? string.Empty;
+    }
+
+    private string? ResolveStableExecutablePath(ServerInfo server)
+    {
+        var configuredStablePath = SettingsService.Instance.Settings.ZandronumPath;
+        if (string.IsNullOrEmpty(configuredStablePath) || !File.Exists(configuredStablePath))
+        {
+            return null;
+        }
+
+        var stableReleaseService = ZandronumStableReleaseService.Instance;
+        if (!stableReleaseService.TryExtractStableVersion(server.GameVersion, out var requiredVersion))
+        {
+            return configuredStablePath;
+        }
+
+        if (stableReleaseService.TryGetInstalledStableVersion(configuredStablePath, out var configuredVersion, out _) &&
+            stableReleaseService.CompareStableVersions(configuredVersion, requiredVersion) == 0)
+        {
+            return configuredStablePath;
+        }
+
+        return stableReleaseService.GetInstalledArchivedExecutablePath(configuredStablePath, requiredVersion);
     }
 
     /// <summary>
@@ -699,6 +814,13 @@ public class GameLauncher
             return false;
         }
 
+        var archiveUri = ResolveTestingArchiveUri(server.TestingArchive);
+        if (archiveUri == null)
+        {
+            LaunchError?.Invoke(this, $"Invalid testing archive URL: {server.TestingArchive}");
+            return false;
+        }
+
         var versionFolder = GetTestingVersionFolder(server);
         if (string.IsNullOrEmpty(versionFolder))
         {
@@ -706,57 +828,66 @@ public class GameLauncher
             return false;
         }
 
-        LoggingService.Instance.Info($"Downloading testing version from: {server.TestingArchive}");
-        DownloadProgress?.Invoke(this, ("Starting download...", 0));
+        LoggingService.Instance.Info($"Downloading testing version from: {archiveUri}");
+        DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+        {
+            Status = "Starting download...",
+            ProgressPercent = 0
+        });
 
         try
         {
-            // Download the archive
-            using var response = await _httpClient.GetAsync(server.TestingArchive, HttpCompletionOption.ResponseHeadersRead);
+            using var response = await _httpClient.GetAsync(archiveUri, HttpCompletionOption.ResponseHeadersRead);
             response.EnsureSuccessStatusCode();
 
             var totalBytes = response.Content.Headers.ContentLength ?? -1;
             var tempFile = Path.GetTempFileName();
 
-            await using (var contentStream = await response.Content.ReadAsStreamAsync())
-            await using (var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, AppConstants.BufferSizes.FileStreamBuffer, true))
+            try
             {
-                var buffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
-                var totalRead = 0L;
-                int bytesRead;
-
-                while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
-                {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
-                    totalRead += bytesRead;
-
-                    if (totalBytes > 0)
-                    {
-                        var percent = (int)((totalRead * 100) / totalBytes);
-                        var sizeMB = totalRead / 1024.0 / 1024.0;
-                        var totalMB = totalBytes / 1024.0 / 1024.0;
-                        DownloadProgress?.Invoke(this, ($"Downloading: {sizeMB:F1} / {totalMB:F1} MB", percent));
-                    }
-                }
+                await DownloadTestingArchiveAsync(archiveUri, tempFile, totalBytes, response);
+            }
+            catch
+            {
+                try { File.Delete(tempFile); } catch { }
+                throw;
             }
 
-            DownloadProgress?.Invoke(this, ("Extracting...", 90));
+            DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+            {
+                Status = "Extracting...",
+                ProgressPercent = 90,
+                DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
+                TotalBytes = totalBytes > 0 ? totalBytes : 0
+            });
 
             // Create version folder
             Directory.CreateDirectory(versionFolder);
 
             // Extract archive
-            await Task.Run(() => ExtractArchive(tempFile, versionFolder, server.TestingArchive));
+            await Task.Run(() => ExtractArchive(tempFile, versionFolder, archiveUri.AbsoluteUri));
 
             // Clean up temp file
             try { File.Delete(tempFile); } catch { }
 
             // Copy configuration files from base Zandronum directory (matches Doomseeker behavior)
-            DownloadProgress?.Invoke(this, ("Copying configuration files...", 95));
+            DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+            {
+                Status = "Copying configuration files...",
+                ProgressPercent = 95,
+                DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
+                TotalBytes = totalBytes > 0 ? totalBytes : 0
+            });
             await Task.Run(() => CopyConfigFilesToTestingVersion(versionFolder));
 
-            DownloadProgress?.Invoke(this, ("Complete!", 100));
-            LoggingService.Instance.Info($"Testing version {server.GameVersion} installed to: {versionFolder}");
+            DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+            {
+                Status = "Complete!",
+                ProgressPercent = 100,
+                DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
+                TotalBytes = totalBytes > 0 ? totalBytes : 0
+            });
+            LoggingService.Instance.Info($"Testing version {ExtractCoreVersion(server.GameVersion)} installed to: {versionFolder}");
 
             return IsTestingVersionInstalled(server);
         }
@@ -767,6 +898,302 @@ public class GameLauncher
             LoggingService.Instance.Error(error);
             return false;
         }
+    }
+
+    private async Task DownloadTestingArchiveAsync(Uri archiveUri, string outputPath, long totalBytes, HttpResponseMessage initialResponse)
+    {
+        var domain = archiveUri.Host;
+        var (domainMaxThreads, minSegmentSizeKb, _, _) = _domainConfig.GetEffectiveThreadSettings(domain);
+        var threadCount = CalculateOptimalThreads(totalBytes, domainMaxThreads, minSegmentSizeKb);
+        var minSegmentSizeBytes = minSegmentSizeKb * 1024L;
+        var supportsRange = totalBytes > 0 && threadCount > 1 && await TestRangeRequestAsync(archiveUri);
+
+        if (supportsRange && totalBytes > minSegmentSizeBytes * 2)
+        {
+            LoggingService.Instance.Verbose($"Using {threadCount} threads for testing build download from {domain}.");
+            initialResponse.Dispose();
+            await MultiThreadedDownloadTestingArchiveAsync(archiveUri, outputPath, totalBytes, threadCount);
+            _domainConfig.UpdateThreadCount(domain, threadCount);
+            return;
+        }
+
+        await SingleThreadDownloadTestingArchiveAsync(archiveUri, outputPath, totalBytes, initialResponse);
+    }
+
+    private async Task SingleThreadDownloadTestingArchiveAsync(Uri archiveUri, string outputPath, long totalBytes, HttpResponseMessage? response)
+    {
+        using var ownedResponse = response is null
+            ? await _httpClient.GetAsync(archiveUri, HttpCompletionOption.ResponseHeadersRead)
+            : null;
+        using var activeResponse = response ?? ownedResponse!;
+
+        activeResponse.EnsureSuccessStatusCode();
+
+        var resolvedTotalBytes = totalBytes > 0 ? totalBytes : activeResponse.Content.Headers.ContentLength ?? -1;
+        await using var contentStream = await activeResponse.Content.ReadAsStreamAsync();
+        await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, AppConstants.BufferSizes.FileStreamBuffer, true);
+
+        var buffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
+        var totalRead = 0L;
+        var stopwatch = Stopwatch.StartNew();
+        var lastUpdate = Stopwatch.StartNew();
+        var lastBytes = 0L;
+        int bytesRead;
+
+        while ((bytesRead = await contentStream.ReadAsync(buffer)) > 0)
+        {
+            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+            totalRead += bytesRead;
+
+            if (lastUpdate.ElapsedMilliseconds >= AppConstants.UiIntervals.UiUpdateThrottleMs ||
+                (resolvedTotalBytes > 0 && totalRead >= resolvedTotalBytes))
+            {
+                var elapsedSeconds = Math.Max(lastUpdate.Elapsed.TotalSeconds, 0.001);
+                var speed = (totalRead - lastBytes) / elapsedSeconds;
+                ReportTestingDownloadProgress(totalRead, resolvedTotalBytes, speed, threadCount: 1);
+                lastBytes = totalRead;
+                lastUpdate.Restart();
+            }
+        }
+
+        var finalElapsedSeconds = Math.Max(stopwatch.Elapsed.TotalSeconds, 0.001);
+        var finalSpeed = totalRead / finalElapsedSeconds;
+        ReportTestingDownloadProgress(totalRead, resolvedTotalBytes, finalSpeed, threadCount: 1);
+    }
+
+    private async Task MultiThreadedDownloadTestingArchiveAsync(Uri archiveUri, string outputPath, long totalBytes, int threadCount)
+    {
+        var segmentSize = (long)Math.Ceiling((double)totalBytes / threadCount);
+        var segments = new List<(long Start, long End)>();
+
+        for (long start = 0; start < totalBytes; start += segmentSize)
+        {
+            var end = Math.Min(start + segmentSize - 1, totalBytes - 1);
+            segments.Add((start, end));
+        }
+
+        var downloadedBytes = new long[segments.Count];
+        var failedSegments = new ConcurrentBag<(int SegmentIndex, bool IsConnectionLimit)>();
+        using var outputHandle = File.OpenHandle(
+            outputPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        RandomAccess.SetLength(outputHandle, totalBytes);
+
+        var lastUpdate = Stopwatch.StartNew();
+        var lastBytes = 0L;
+        using var progressTimer = new System.Timers.Timer(AppConstants.UiIntervals.UiUpdateThrottleMs);
+        progressTimer.Elapsed += (_, _) =>
+        {
+            var currentBytes = downloadedBytes.Sum();
+            var elapsedSeconds = Math.Max(lastUpdate.Elapsed.TotalSeconds, 0.001);
+            var speed = (currentBytes - lastBytes) / elapsedSeconds;
+            ReportTestingDownloadProgress(currentBytes, totalBytes, speed, threadCount);
+            lastBytes = currentBytes;
+            lastUpdate.Restart();
+        };
+
+        progressTimer.Start();
+
+        const int maxSegmentRetries = 3;
+
+        try
+        {
+            var downloadTasks = segments.Select((segment, index) =>
+                DownloadTestingArchiveSegmentAsync(archiveUri, segment.Start, segment.End, outputHandle, index, downloadedBytes, failedSegments));
+
+            await Task.WhenAll(downloadTasks);
+
+            for (var retry = 0; retry < maxSegmentRetries && !failedSegments.IsEmpty; retry++)
+            {
+                var retryCandidates = failedSegments.ToList();
+                failedSegments = new ConcurrentBag<(int SegmentIndex, bool IsConnectionLimit)>();
+
+                LoggingService.Instance.Verbose($"Retrying {retryCandidates.Count} testing build segment(s), attempt {retry + 1}/{maxSegmentRetries}.");
+                var retryTasks = retryCandidates.Select(candidate =>
+                {
+                    var segment = segments[candidate.SegmentIndex];
+                    return DownloadTestingArchiveSegmentAsync(archiveUri, segment.Start, segment.End, outputHandle, candidate.SegmentIndex, downloadedBytes, failedSegments);
+                });
+
+                await Task.WhenAll(retryTasks);
+            }
+
+            var connectionLimitFailures = failedSegments.Count(f => f.IsConnectionLimit);
+            if (connectionLimitFailures > segments.Count * 0.3)
+            {
+                _domainConfig.ReduceThreadCount(archiveUri.Host, threadCount);
+                throw new Exception($"Testing build download hit connection limits with {threadCount} threads.");
+            }
+
+            if (!failedSegments.IsEmpty)
+            {
+                throw new Exception($"{failedSegments.Count} download segments failed.");
+            }
+        }
+        finally
+        {
+            progressTimer.Stop();
+        }
+
+        var finalBytes = downloadedBytes.Sum();
+        ReportTestingDownloadProgress(finalBytes, totalBytes, 0, threadCount);
+    }
+
+    private async Task DownloadTestingArchiveSegmentAsync(
+        Uri archiveUri,
+        long start,
+        long end,
+        Microsoft.Win32.SafeHandles.SafeFileHandle outputHandle,
+        int segmentIndex,
+        long[] downloadedBytes,
+        ConcurrentBag<(int SegmentIndex, bool IsConnectionLimit)> failedSegments)
+    {
+        var requestStart = start;
+
+        try
+        {
+            var segmentLength = end - start + 1;
+            var existingBytes = Math.Clamp(Volatile.Read(ref downloadedBytes[segmentIndex]), 0, segmentLength);
+            requestStart = start + existingBytes;
+            if (requestStart > end)
+            {
+                return;
+            }
+
+            if (requestStart > start)
+            {
+                LoggingService.Instance.Verbose($"Resuming testing build segment bytes={start}-{end} from {requestStart}.");
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, archiveUri);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(requestStart, end);
+
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            if (!response.IsSuccessStatusCode)
+            {
+                response.EnsureSuccessStatusCode();
+            }
+
+            if (response.StatusCode != HttpStatusCode.PartialContent)
+            {
+                throw new HttpRequestException(
+                    $"Server did not honor range request bytes={requestStart}-{end}",
+                    null,
+                    response.StatusCode);
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync();
+            long position = requestStart;
+            var buffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
+            int bytesRead;
+
+            while ((bytesRead = await stream.ReadAsync(buffer)) > 0)
+            {
+                if (position + bytesRead - 1 > end)
+                {
+                    throw new IOException($"Segment response exceeded requested range bytes={requestStart}-{end}");
+                }
+
+                await RandomAccess.WriteAsync(outputHandle, buffer.AsMemory(0, bytesRead), position);
+                position += bytesRead;
+                Volatile.Write(ref downloadedBytes[segmentIndex], position - start);
+            }
+
+            if (position <= end)
+            {
+                var receivedBytes = position - requestStart;
+                var expectedBytes = end - requestStart + 1;
+                throw new IOException($"Segment ended early after {receivedBytes} of {expectedBytes} bytes");
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            var isConnectionLimit = ex.StatusCode == HttpStatusCode.TooManyRequests ||
+                                    ex.StatusCode == HttpStatusCode.ServiceUnavailable ||
+                                    ex.InnerException is System.Net.Sockets.SocketException;
+            failedSegments.Add((segmentIndex, isConnectionLimit));
+        }
+        catch
+        {
+            failedSegments.Add((segmentIndex, false));
+        }
+    }
+
+    private async Task<bool> TestRangeRequestAsync(Uri archiveUri)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, archiveUri);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            return response.IsSuccessStatusCode && response.StatusCode == HttpStatusCode.PartialContent;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int CalculateOptimalThreads(long totalBytes, int domainMaxThreads, int minSegmentSizeKb)
+    {
+        if (totalBytes <= 0)
+        {
+            return 1;
+        }
+
+        var minSegmentSize = minSegmentSizeKb * 1024L;
+        var maxBySegmentSize = (int)Math.Max(1, totalBytes / minSegmentSize);
+        var maxByFileSize = totalBytes switch
+        {
+            < 1_000_000 => 4,
+            < 5_000_000 => 16,
+            < 20_000_000 => 32,
+            < 50_000_000 => 64,
+            < 100_000_000 => 128,
+            _ => domainMaxThreads
+        };
+
+        return Math.Max(1, Math.Min(Math.Min(maxByFileSize, domainMaxThreads), maxBySegmentSize));
+    }
+
+    private void ReportTestingDownloadProgress(long downloadedBytes, long totalBytes, double bytesPerSecond, int threadCount)
+    {
+        TimeSpan? estimatedTimeRemaining = null;
+        if (totalBytes > 0 && bytesPerSecond > 0 && downloadedBytes < totalBytes)
+        {
+            estimatedTimeRemaining = TimeSpan.FromSeconds((totalBytes - downloadedBytes) / bytesPerSecond);
+        }
+
+        DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+        {
+            Status = "Downloading...",
+            ProgressPercent = totalBytes > 0 ? (int)((downloadedBytes * 100) / totalBytes) : 0,
+            DownloadedBytes = downloadedBytes,
+            TotalBytes = totalBytes > 0 ? totalBytes : 0,
+            BytesPerSecond = bytesPerSecond,
+            EstimatedTimeRemaining = estimatedTimeRemaining,
+            ThreadCount = threadCount
+        });
+    }
+
+    private static Uri? ResolveTestingArchiveUri(string archivePath)
+    {
+        if (string.IsNullOrWhiteSpace(archivePath))
+        {
+            return null;
+        }
+
+        if (Uri.TryCreate(archivePath, UriKind.Absolute, out var absoluteUri))
+        {
+            return absoluteUri;
+        }
+
+        return Uri.TryCreate(TestingArchiveBaseUri, archivePath, out var relativeUri)
+            ? relativeUri
+            : null;
     }
 
     /// <summary>
@@ -872,7 +1299,11 @@ public class GameLauncher
         return versions;
     }
 
-    private string BuildCommandLine(ServerInfo server, string? connectPassword, string? joinPassword)
+    private string BuildCommandLine(
+        ServerInfo server,
+        string? connectPassword,
+        string? joinPassword,
+        ISet<string>? excludedOptionalPwads = null)
     {
         var args = new List<string>();
         var exeFolder = GetExecutableFolder(server);
@@ -894,6 +1325,11 @@ public class GameLauncher
         var pwadPaths = new List<string>();
         foreach (var pwad in server.PWADs)
         {
+            if (pwad.IsOptional && excludedOptionalPwads?.Contains(pwad.Name) == true)
+            {
+                continue;
+            }
+
             var path = FindWadWithExeFolder(pwad.Name, exeFolder);
             if (!string.IsNullOrEmpty(path))
             {
@@ -932,5 +1368,188 @@ public class GameLauncher
         
         var args = BuildCommandLine(server, null, null);
         return $"\"{exePath}\" {args}";
+    }
+
+    /// <summary>
+    /// Launches Zandronum in offline (single-player) mode with the given IWAD and PWADs.
+    /// </summary>
+    /// <param name="exePath">Full path to the Zandronum executable, or null for the stable configured path.</param>
+    public bool LaunchOffline(string? exePath, string iwadPath, IReadOnlyList<string> pwadPaths, int skill, string? map)
+    {
+        exePath ??= SettingsService.Instance.Settings.ZandronumPath;
+        if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
+        {
+            LaunchError?.Invoke(this, "Zandronum executable not configured. Please set it in Settings.");
+            return false;
+        }
+
+        var args = new List<string>
+        {
+            $"-iwad \"{iwadPath}\""
+        };
+
+        if (pwadPaths.Count > 0)
+        {
+            args.Add($"-file {string.Join(" ", pwadPaths.Select(p => $"\"{p}\""))}");
+        }
+
+        if (skill >= 0 && skill <= 4)
+        {
+            args.Add($"-skill {skill}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(map))
+        {
+            args.Add($"+map \"{map}\"");
+        }
+
+        var argString = string.Join(" ", args);
+        LoggingService.Instance.Verbose($"Launching offline: {exePath} {argString}");
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = exePath,
+                Arguments = argString,
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(exePath)
+            };
+            Process.Start(startInfo);
+
+            var msg = "Launched Zandronum in offline mode";
+            LaunchSuccess?.Invoke(this, msg);
+            LoggingService.Instance.Info(msg);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var error = $"Failed to launch Zandronum offline: {ex.Message}";
+            LaunchError?.Invoke(this, error);
+            LoggingService.Instance.Error(error);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Launches Zandronum as a host server (listen or dedicated).
+    /// For dedicated servers, tries zandronum-server.exe first, falling back to zandronum.exe -host.
+    /// </summary>
+    /// <param name="exePath">Full path to the Zandronum executable, or null for the stable configured path.</param>
+    public bool LaunchHost(
+        string? exePath,
+        string iwadPath,
+        IReadOnlyList<string> pwadPaths,
+        int skill,
+        int maxPlayers,
+        int maxClients,
+        bool isDedicated,
+        string? map,
+        string? serverName,
+        string? password,
+        string? joinPassword)
+    {
+        exePath ??= SettingsService.Instance.Settings.ZandronumPath;
+        if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
+        {
+            LaunchError?.Invoke(this, "Zandronum executable not configured. Please set it in Settings.");
+            return false;
+        }
+
+        string resolvedExePath;
+        var args = new List<string>();
+
+        if (isDedicated)
+        {
+            var exeDir = Path.GetDirectoryName(exePath) ?? "";
+            var dedicatedExe = Path.Combine(exeDir, "zandronum-server.exe");
+            if (File.Exists(dedicatedExe))
+            {
+                resolvedExePath = dedicatedExe;
+            }
+            else
+            {
+                resolvedExePath = exePath;
+                args.Add("-host");
+            }
+        }
+        else
+        {
+            resolvedExePath = exePath;
+            args.Add("-host");
+        }
+
+        args.Add($"-iwad \"{iwadPath}\"");
+
+        if (pwadPaths.Count > 0)
+        {
+            args.Add($"-file {string.Join(" ", pwadPaths.Select(p => $"\"{p}\""))}");
+        }
+
+        if (skill >= 0 && skill <= 4)
+        {
+            args.Add($"-skill {skill}");
+        }
+
+        args.Add($"+sv_maxplayers {maxPlayers}");
+        args.Add($"+sv_maxclients {maxClients}");
+
+        if (!string.IsNullOrWhiteSpace(map))
+        {
+            args.Add($"+map \"{map}\"");
+        }
+
+        if (!string.IsNullOrWhiteSpace(serverName))
+        {
+            args.Add($"+sv_hostname \"{serverName}\"");
+        }
+
+        if (!string.IsNullOrWhiteSpace(password))
+        {
+            args.Add($"+sv_password \"{password}\"");
+        }
+
+        if (!string.IsNullOrWhiteSpace(joinPassword))
+        {
+            args.Add($"+sv_joinpassword \"{joinPassword}\"");
+        }
+
+        var argString = string.Join(" ", args);
+        LoggingService.Instance.Verbose($"Launching host: {resolvedExePath} {argString}");
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = resolvedExePath,
+                Arguments = argString,
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(resolvedExePath)
+            };
+            Process.Start(startInfo);
+
+            var mode = isDedicated ? "dedicated server" : "listen server";
+            var msg = $"Launched Zandronum as {mode}";
+            LaunchSuccess?.Invoke(this, msg);
+            LoggingService.Instance.Info(msg);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var error = $"Failed to launch Zandronum host: {ex.Message}";
+            LaunchError?.Invoke(this, error);
+            LoggingService.Instance.Error(error);
+            return false;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            _httpClient?.Dispose();
+            _disposed = true;
+        }
+        GC.SuppressFinalize(this);
     }
 }

@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="16 16 224 224" fill="none">
+  <defs>
+    <linearGradient id="shell" x1="28" y1="20" x2="226" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34353A"/>
+      <stop offset="0.48" stop-color="#24252A"/>
+      <stop offset="1" stop-color="#17181C"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="52" y1="42" x2="198" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1F2328"/>
+      <stop offset="1" stop-color="#12161A"/>
+    </linearGradient>
+    <linearGradient id="tube" x1="84" y1="78" x2="176" y2="178" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D9F69A"/>
+      <stop offset="0.48" stop-color="#8FD14A"/>
+      <stop offset="1" stop-color="#4E8620"/>
+    </linearGradient>
+    <linearGradient id="tubeEdge" x1="84" y1="78" x2="176" y2="178" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F3FFD1" stop-opacity="0.88"/>
+      <stop offset="1" stop-color="#B6EE78" stop-opacity="0.2"/>
+    </linearGradient>
+    <!-- Enhanced core glow: stronger centre -->
+    <radialGradient id="coreGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(128 128) rotate(90) scale(86)">
+      <stop offset="0" stop-color="#8FD14A" stop-opacity="0.32"/>
+      <stop offset="0.45" stop-color="#8FD14A" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#8FD14A" stop-opacity="0"/>
+    </radialGradient>
+    <!-- New: tight Z bloom layer -->
+    <radialGradient id="zBloom" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(128 128) rotate(90) scale(56)">
+      <stop offset="0" stop-color="#AEFF55" stop-opacity="0.14"/>
+      <stop offset="0.6" stop-color="#8FD14A" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#8FD14A" stop-opacity="0"/>
+    </radialGradient>
+    <!-- New: corner vignette -->
+    <radialGradient id="vignette" cx="0.5" cy="0.5" r="0.5" gradientUnits="objectBoundingBox">
+      <stop offset="0.4" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.38"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background layers -->
+  <rect x="16" y="16" width="224" height="224" rx="48" fill="url(#shell)"/>
+  <rect x="19" y="19" width="218" height="218" rx="45" stroke="#4A4C54" stroke-width="4"/>
+  <rect x="30" y="30" width="196" height="196" rx="34" fill="url(#panel)"/>
+  <rect x="30" y="30" width="196" height="196" rx="34" stroke="#0D0F12" stroke-width="2"/>
+  <rect x="35" y="35" width="186" height="186" rx="29" stroke="#FFFFFF" stroke-opacity="0.03" stroke-width="1.5"/>
+
+  <!-- Atmosphere glows -->
+  <circle cx="128" cy="128" r="86" fill="url(#coreGlow)"/>
+  <circle cx="128" cy="128" r="56" fill="url(#zBloom)"/>
+
+  <!-- Scan lines: 5 instead of 2, lower opacity -->
+  <g opacity="0.07">
+    <path d="M60 88H196" stroke="#FFFFFF" stroke-width="1.5"/>
+    <path d="M60 108H196" stroke="#FFFFFF" stroke-width="1.5"/>
+    <path d="M60 128H196" stroke="#FFFFFF" stroke-width="1.5"/>
+    <path d="M60 148H196" stroke="#FFFFFF" stroke-width="1.5"/>
+    <path d="M60 168H196" stroke="#FFFFFF" stroke-width="1.5"/>
+  </g>
+
+  <g>
+    <rect x="42" y="70" width="34" height="8" rx="4" fill="#9FE35A" fill-opacity="0.14"/>
+    <rect x="46" y="72" width="26" height="4" rx="2" fill="#BDF57A" fill-opacity="0.96"/>
+    <rect x="42" y="84" width="22" height="6" rx="3" fill="#7FCC40" fill-opacity="0.34"/>
+
+    <rect x="180" y="166" width="34" height="8" rx="4" fill="#9FE35A" fill-opacity="0.14"/>
+    <rect x="184" y="168" width="26" height="4" rx="2" fill="#BDF57A" fill-opacity="0.96"/>
+    <rect x="192" y="154" width="22" height="6" rx="3" fill="#7FCC40" fill-opacity="0.34"/>
+  </g>
+
+  <!-- New: industrial corner circuit traces -->
+  <g opacity="0.2" stroke="#6FCF3A" stroke-width="1.5" stroke-linecap="square" fill="none">
+    <path d="M44 60 L44 46 L62 46"/>
+    <path d="M212 60 L212 46 L194 46"/>
+    <path d="M44 196 L44 210 L62 210"/>
+    <path d="M212 196 L212 210 L194 210"/>
+  </g>
+
+    <!-- Z halo baked into the artwork so exports do not depend on SVG filters -->
+    <path d="M78 76H178L82 180H178" stroke="#7FCC40" stroke-width="28"
+      stroke-linecap="round" stroke-linejoin="round"
+      opacity="0.08"/>
+    <path d="M78 76H178L82 180H178" stroke="#9BE94E" stroke-width="22"
+      stroke-linecap="round" stroke-linejoin="round"
+      opacity="0.12"/>
+
+  <!-- Z tube: shadow base + gradient fill + edge highlight -->
+    <g>
+      <path d="M78 76H178L82 180H178" stroke="#000000" stroke-width="29" stroke-linecap="round" stroke-linejoin="round" opacity="0.32"/>
+    <path d="M78 76H178L82 180H178" stroke="#13190E" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M78 76H178L82 180H178" stroke="url(#tube)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M78 76H178L82 180H178" stroke="url(#tubeEdge)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Corner circuit nodes (original) -->
+  <g>
+    <circle cx="78" cy="76" r="11" fill="#9FE35A" fill-opacity="0.16"/>
+    <circle cx="178" cy="76" r="11" fill="#9FE35A" fill-opacity="0.16"/>
+    <circle cx="82" cy="180" r="11" fill="#9FE35A" fill-opacity="0.16"/>
+    <circle cx="178" cy="180" r="11" fill="#9FE35A" fill-opacity="0.16"/>
+    <circle cx="78" cy="76" r="6" fill="#9FE35A"/>
+    <circle cx="178" cy="76" r="6" fill="#9FE35A"/>
+    <circle cx="82" cy="180" r="6" fill="#9FE35A"/>
+    <circle cx="178" cy="180" r="6" fill="#9FE35A"/>
+    <circle cx="78" cy="76" r="2" fill="#F2FFD9"/>
+    <circle cx="178" cy="76" r="2" fill="#F2FFD9"/>
+    <circle cx="82" cy="180" r="2" fill="#F2FFD9"/>
+    <circle cx="178" cy="180" r="2" fill="#F2FFD9"/>
+  </g>
+
+  <!-- New: midpoint node at diagonal centre (130,128) -->
+  <circle cx="130" cy="128" r="9" fill="#9FE35A" fill-opacity="0.16"/>
+  <circle cx="130" cy="128" r="4.5" fill="#9FE35A"/>
+  <circle cx="130" cy="128" r="1.8" fill="#F2FFD9"/>
+
+  <!-- New: vignette overlay -->
+  <rect x="30" y="30" width="196" height="196" rx="34" fill="url(#vignette)"/>
+</svg>

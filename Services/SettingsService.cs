@@ -1,5 +1,6 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Linq;
 using ZScape.Models;
 using ZScape.Utilities;
 
@@ -61,6 +62,8 @@ public class SettingsService
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonUtils.DefaultOptions);
                 if (loaded != null)
                 {
+                    using var doc = JsonDocument.Parse(json);
+                    NormalizeLoadedSettings(loaded, doc.RootElement);
                     _settings = loaded;
                 }
             }
@@ -73,6 +76,87 @@ public class SettingsService
         {
             _isLoading = false;
         }
+    }
+
+    private static void NormalizeLoadedSettings(AppSettings settings, JsonElement settingsJson)
+    {
+        ApplyLegacySettingsCompatibility(settings, settingsJson);
+        settings.CurrentFilter ??= new ServerFilter();
+        settings.FilterPresets ??= [];
+        settings.FavoriteServers ??= [];
+        settings.ManualServers ??= [];
+        settings.WadSearchPaths ??= [];
+        settings.DownloadSites ??= [];
+        settings.FavoriteServerNameRules = NormalizeRules(settings.FavoriteServerNameRules);
+        settings.HiddenServerNameRules = NormalizeRules(settings.HiddenServerNameRules);
+        settings.SavedLaunchGameConfigs ??= [];
+
+        NormalizeFilter(settings.CurrentFilter);
+        foreach (var preset in settings.FilterPresets)
+        {
+            NormalizeFilter(preset);
+        }
+    }
+
+    private static void ApplyLegacySettingsCompatibility(AppSettings settings, JsonElement settingsJson)
+    {
+        if (TryGetBooleanProperty(settingsJson, "verboseLogging", out _))
+        {
+            return;
+        }
+
+        if (TryGetBooleanProperty(settingsJson, "verboseMode", out var legacyVerboseMode) && legacyVerboseMode)
+        {
+            settings.VerboseLogging = true;
+        }
+    }
+
+    private static bool TryGetBooleanProperty(JsonElement root, string propertyName, out bool value)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                value = property.Value.GetBoolean();
+                return true;
+            }
+
+            break;
+        }
+
+        value = false;
+        return false;
+    }
+
+    private static List<TextMatchRule> NormalizeRules(List<TextMatchRule>? rules)
+    {
+        return (rules ?? [])
+            .Where(rule => rule != null && !string.IsNullOrWhiteSpace(rule.Pattern))
+            .Select(rule => new TextMatchRule
+            {
+                Pattern = rule.Pattern.Trim(),
+                Mode = rule.Mode
+            })
+            .ToList();
+    }
+
+    private static void NormalizeFilter(ServerFilter filter)
+    {
+        filter.ServerNameFilter ??= string.Empty;
+        filter.MapFilter ??= string.Empty;
+        filter.RequireVersion ??= string.Empty;
+        filter.IncludeGameModes ??= [];
+        filter.ExcludeGameModes ??= [];
+        filter.RequireWads ??= [];
+        filter.IncludeAnyWads ??= [];
+        filter.ExcludeWads ??= [];
+        filter.IncludeCountries ??= [];
+        filter.ExcludeCountries ??= [];
     }
     
     /// <summary>
@@ -198,16 +282,7 @@ public class SettingsService
     public void Save()
     {
         if (_isLoading) return;
-
-        try
-        {
-            var json = JsonSerializer.Serialize(_settings, JsonUtils.DefaultOptions);
-            File.WriteAllText(_settingsPath, json);
-        }
-        catch (Exception ex)
-        {
-            LoggingService.Instance.Warning($"Failed to save settings: {ex.Message}");
-        }
+        AtomicWriteJson(_settingsPath, _settings);
     }
     
     /// <summary>
@@ -215,15 +290,7 @@ public class SettingsService
     /// </summary>
     public void SaveHistory()
     {
-        try
-        {
-            var json = JsonSerializer.Serialize(_historyData, JsonUtils.DefaultOptions);
-            File.WriteAllText(_historyPath, json);
-        }
-        catch (Exception ex)
-        {
-            LoggingService.Instance.Warning($"Failed to save history: {ex.Message}");
-        }
+        AtomicWriteJson(_historyPath, _historyData);
     }
     
     /// <summary>
@@ -231,14 +298,38 @@ public class SettingsService
     /// </summary>
     public void SaveDomainSettings()
     {
+        AtomicWriteJson(_domainSettingsPath, _domainSettingsData);
+    }
+
+    private static void AtomicWriteJson<T>(string filePath, T data)
+    {
         try
         {
-            var json = JsonSerializer.Serialize(_domainSettingsData, JsonUtils.DefaultOptions);
-            File.WriteAllText(_domainSettingsPath, json);
+            var json = JsonSerializer.Serialize(data, JsonUtils.DefaultOptions);
+            var dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            var tempPath = filePath + ".tmp";
+            var backupPath = filePath + ".bak";
+
+            // Write to temp file first
+            File.WriteAllText(tempPath, json);
+
+            // If original exists, make a backup before replacing
+            if (File.Exists(filePath))
+            {
+                if (File.Exists(backupPath))
+                    File.Delete(backupPath);
+                File.Move(filePath, backupPath);
+            }
+
+            // Atomically replace original with temp
+            File.Move(tempPath, filePath);
         }
         catch (Exception ex)
         {
-            LoggingService.Instance.Warning($"Failed to save domain settings: {ex.Message}");
+            LoggingService.Instance.Warning($"Failed to save {Path.GetFileName(filePath)}: {ex.Message}");
         }
     }
 
@@ -339,8 +430,6 @@ public class AppSettings
     public string SearchText { get; set; } = string.Empty;
 
     // View options
-    public bool VerboseMode { get; set; }
-    public bool ShowHexDumps { get; set; }
     public bool ShowLogPanel { get; set; }
     public bool VerboseLogging { get; set; }
     public bool ColorizePlayerNames { get; set; } = true;
@@ -349,6 +438,8 @@ public class AppSettings
     public bool RefreshOnLaunch { get; set; } = true;
     public bool AutoRefresh { get; set; }
     public int AutoRefreshIntervalMinutes { get; set; } = 5;
+    public int AutoRefreshFavoritesIntervalMinutes { get; set; } = 5;
+    public bool AutoRefreshFavoritesUseFullRefreshTimer { get; set; } = true;
     public bool AutoRefreshFavoritesOnly { get; set; }
 
     // Panel sizes (splitter positions)
@@ -381,9 +472,6 @@ public class AppSettings
     /// <summary>Global maximum threads per file. 0 = no global limit (use per-domain settings).</summary>
     public int MaxThreadsPerFile { get; set; } = 0;
     
-    /// <summary>Default initial threads for probing new domains.</summary>
-    public int DefaultInitialThreads { get; set; } = 2;
-    
     /// <summary>Default minimum segment size in KB for new domains.</summary>
     public int DefaultMinSegmentSizeKb { get; set; } = 256;
     
@@ -413,6 +501,12 @@ public class AppSettings
     // Favorites system
     /// <summary>Set of favorite server addresses (IP:Port format).</summary>
     public HashSet<string> FavoriteServers { get; set; } = [];
+
+    /// <summary>Server-name rules that mark servers as favorites without pinning them by address.</summary>
+    public List<TextMatchRule> FavoriteServerNameRules { get; set; } = [];
+
+    /// <summary>Server-name rules that hide matching servers from the main list.</summary>
+    public List<TextMatchRule> HiddenServerNameRules { get; set; } = [];
     
     /// <summary>Manually added server addresses for servers not from master list.</summary>
     public List<ManualServerEntry> ManualServers { get; set; } = [];
@@ -422,6 +516,22 @@ public class AppSettings
     
     /// <summary>Whether to show only favorite servers.</summary>
     public bool ShowFavoritesOnly { get; set; }
+
+    // Appearance
+    /// <summary>Application theme (Dark or Light).</summary>
+    public AppTheme Theme { get; set; } = AppTheme.Dark;
+
+    /// <summary>Identifies which theme to load (built-in "Dark"/"Light" or user theme filename).</summary>
+    public string? ThemeId { get; set; }
+
+    /// <summary>Accent color name (e.g., "Blue", "Green", "Orange").</summary>
+    public string Accent { get; set; } = "Blue";
+
+    /// <summary>UI mode: Standard or BigUI (HTPC-style fullscreen layout for d-pad / controller input).</summary>
+    public UIMode UIMode { get; set; } = UIMode.Standard;
+
+    /// <summary>How clicking the favorite star in the server list should behave for non-favorited servers.</summary>
+    public FavoriteStarClickBehavior FavoriteStarClickBehavior { get; set; } = FavoriteStarClickBehavior.AskEveryTime;
     
     /// <summary>Row height in pixels for the server list. Range: 18-60.</summary>
     public int ServerListRowHeight { get; set; } = 26;
@@ -435,6 +545,15 @@ public class AppSettings
     
     /// <summary>Minimum number of players to trigger an alert (0 = any players).</summary>
     public int AlertMinPlayers { get; set; } = 1;
+
+    /// <summary>Preferred notification presentation. Native uses OS notifications when available, then falls back to custom popups.</summary>
+    public NotificationDisplayMode AlertNotificationMode { get; set; } = NotificationDisplayMode.Native;
+
+    /// <summary>Screen corner used for custom in-app alert popups.</summary>
+    public CustomNotificationCorner CustomNotificationCorner { get; set; } = CustomNotificationCorner.BottomRight;
+
+    /// <summary>How long custom in-app alert popups stay visible in seconds. 0 means until dismissed.</summary>
+    public int CustomNotificationDurationSeconds { get; set; } = 15;
     
     /// <summary>Interval in seconds between alert checks when window is not focused.</summary>
     public int AlertCheckIntervalSeconds { get; set; } = 60;
@@ -447,7 +566,10 @@ public class AppSettings
     public HistoryTrackingMode HistoryTrackingMode { get; set; } = HistoryTrackingMode.ByAddress;
     
     // Download Dialog
-    /// <summary>Behavior of the WAD download dialog after downloads complete.</summary>
+    /// <summary>
+    /// Behavior for missing WAD downloads when joining a server.
+    /// Most values control when the download dialog closes after a successful join download.
+    /// </summary>
     public DownloadDialogBehavior DownloadDialogBehavior { get; set; } = DownloadDialogBehavior.CloseOnSuccess;
 
     /// <summary>
@@ -502,6 +624,12 @@ public class AppSettings
     
     /// <summary>GitHub repository name for update checks.</summary>
     public string GitHubRepo { get; set; } = "ZScape";
+
+    /// <summary>Last-used settings from the Launch Game dialog. Persisted across sessions.</summary>
+    public LaunchGameConfig? LastLaunchGameConfig { get; set; }
+
+    /// <summary>Named saved launch-game configurations.</summary>
+    public List<NamedLaunchGameConfig> SavedLaunchGameConfigs { get; set; } = [];
 }
 
 /// <summary>
@@ -590,7 +718,23 @@ public enum HistoryTrackingMode
 }
 
 /// <summary>
-/// Defines how the WAD download dialog behaves after downloads complete.
+/// Defines how clicking the favorite star should add new favorites.
+/// </summary>
+public enum FavoriteStarClickBehavior
+{
+    /// <summary>Prompt the user to choose address or server name favorite behavior.</summary>
+    AskEveryTime = 0,
+
+    /// <summary>Add explicit IP:Port favorites directly from the star button.</summary>
+    Address = 1,
+
+    /// <summary>Add exact server-name favorites directly from the star button.</summary>
+    ServerName = 2
+}
+
+/// <summary>
+/// Defines how missing WAD downloads behave during server join.
+/// Most values control when the download dialog closes after a successful join download.
 /// </summary>
 public enum DownloadDialogBehavior
 {
@@ -605,9 +749,15 @@ public enum DownloadDialogBehavior
     
     /// <summary>Auto-close on success after a brief delay to show results.</summary>
     CloseOnSuccessAfterDelay = 3,
+
+    /// <summary>
+    /// Skip the review prompt for required WADs and begin downloading them immediately.
+    /// Optional PWADs still follow the separate optional PWAD policy.
+    /// </summary>
+    AutoDownloadRequiredWads = 4,
     
     /// <summary>Legacy value retained for settings compatibility; treated as CloseOnSuccess.</summary>
-    AlwaysClose = 4
+    AlwaysClose = 5
 }
 
 /// <summary>

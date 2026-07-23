@@ -201,7 +201,8 @@ public static class AppConstants
             (Services.DownloadDialogBehavior.StayOpen, "Stay Open"),
             (Services.DownloadDialogBehavior.CloseOnSuccess, "Close on Success"),
             (Services.DownloadDialogBehavior.CloseOnSuccessIfFocused, "Close on Success (if focused)"),
-            (Services.DownloadDialogBehavior.CloseOnSuccessAfterDelay, "Close on Success (after delay)")
+            (Services.DownloadDialogBehavior.CloseOnSuccessAfterDelay, "Close on Success (after delay)"),
+            (Services.DownloadDialogBehavior.AutoDownloadRequiredWads, "Always download required files")
         ];
         
         public static string GetLabel(Services.DownloadDialogBehavior behavior) =>
@@ -238,5 +239,104 @@ public static class AppConstants
             Array.FindIndex(Options, o => o.Value == mode) is var index && index >= 0
                 ? index
                 : Array.FindIndex(Options, o => o.Value == Services.OptionalPwadDownloadMode.AskEachTime);
+    }
+
+    /// <summary>
+    /// Display labels for NotificationDisplayMode enum values.
+    /// </summary>
+    public static class NotificationDisplayModeLabels
+    {
+        public static readonly (Services.NotificationDisplayMode Value, string Label)[] Options =
+        [
+            (Services.NotificationDisplayMode.Native, "Native OS notifications (fall back to custom popup)"),
+            (Services.NotificationDisplayMode.Custom, "Custom in-app popup notifications with action buttons")
+        ];
+
+        public static string GetLabel(Services.NotificationDisplayMode mode) =>
+            Options.FirstOrDefault(o => o.Value == mode).Label ?? GetLabel(Services.NotificationDisplayMode.Native);
+
+        public static Services.NotificationDisplayMode GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Services.NotificationDisplayMode.Native;
+
+        public static int GetIndex(Services.NotificationDisplayMode mode) =>
+            Array.FindIndex(Options, o => o.Value == mode) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Services.NotificationDisplayMode.Native);
+    }
+
+    /// <summary>
+    /// Display labels for CustomNotificationCorner enum values.
+    /// </summary>
+    public static class CustomNotificationCornerLabels
+    {
+        public static readonly (Services.CustomNotificationCorner Value, string Label)[] Options =
+        [
+            (Services.CustomNotificationCorner.TopRight, "Top right"),
+            (Services.CustomNotificationCorner.TopLeft, "Top left"),
+            (Services.CustomNotificationCorner.BottomRight, "Bottom right"),
+            (Services.CustomNotificationCorner.BottomLeft, "Bottom left")
+        ];
+
+        public static string GetLabel(Services.CustomNotificationCorner corner) =>
+            Options.FirstOrDefault(o => o.Value == corner).Label ?? GetLabel(Services.CustomNotificationCorner.BottomRight);
+
+        public static Services.CustomNotificationCorner GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Services.CustomNotificationCorner.BottomRight;
+
+        public static int GetIndex(Services.CustomNotificationCorner corner) =>
+            Array.FindIndex(Options, o => o.Value == corner) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Services.CustomNotificationCorner.BottomRight);
+    }
+
+    /// <summary>
+    /// Display labels for FavoriteStarClickBehavior enum values.
+    /// </summary>
+    public static class FavoriteStarClickBehaviorLabels
+    {
+        public static readonly (Services.FavoriteStarClickBehavior Value, string Label)[] Options =
+        [
+            (Services.FavoriteStarClickBehavior.AskEveryTime, "Always ask when clicking the star"),
+            (Services.FavoriteStarClickBehavior.Address, "Prefer address favorites"),
+            (Services.FavoriteStarClickBehavior.ServerName, "Prefer server name favorites")
+        ];
+
+        public static string GetLabel(Services.FavoriteStarClickBehavior behavior) =>
+            Options.FirstOrDefault(o => o.Value == behavior).Label ?? GetLabel(Services.FavoriteStarClickBehavior.AskEveryTime);
+
+        public static Services.FavoriteStarClickBehavior GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Services.FavoriteStarClickBehavior.AskEveryTime;
+
+        public static int GetIndex(Services.FavoriteStarClickBehavior behavior) =>
+            Array.FindIndex(Options, o => o.Value == behavior) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Services.FavoriteStarClickBehavior.AskEveryTime);
+    }
+
+    /// <summary>
+    /// Display labels for TextMatchMode enum values.
+    /// </summary>
+    public static class TextMatchModeLabels
+    {
+        public static readonly (Models.TextMatchMode Value, string Label)[] Options =
+        [
+            (Models.TextMatchMode.Contains, "Contains"),
+            (Models.TextMatchMode.Exact, "Exact"),
+            (Models.TextMatchMode.StartsWith, "Starts with"),
+            (Models.TextMatchMode.EndsWith, "Ends with"),
+            (Models.TextMatchMode.Wildcard, "Wildcard (*, ?)"),
+            (Models.TextMatchMode.Regex, "Regex")
+        ];
+
+        public static string GetLabel(Models.TextMatchMode mode) =>
+            Options.FirstOrDefault(o => o.Value == mode).Label ?? GetLabel(Models.TextMatchMode.Contains);
+
+        public static Models.TextMatchMode GetValue(int index) =>
+            index >= 0 && index < Options.Length ? Options[index].Value : Models.TextMatchMode.Contains;
+
+        public static int GetIndex(Models.TextMatchMode mode) =>
+            Array.FindIndex(Options, o => o.Value == mode) is var index && index >= 0
+                ? index
+                : Array.FindIndex(Options, o => o.Value == Models.TextMatchMode.Contains);
     }
 }

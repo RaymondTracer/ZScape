@@ -8,10 +8,12 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using ZScape.Services;
 
 namespace ZScape.Controls;
 
@@ -117,11 +119,16 @@ public class ListViewSortEventArgs : EventArgs
 /// </summary>
 public class ResizableListView : UserControl
 {
-    // Dark theme colors matching the app theme
-    private static readonly IBrush HeaderBackground = new SolidColorBrush(Color.Parse("#2D2D30"));
-    private static readonly IBrush HeaderBorderBrush = new SolidColorBrush(Color.Parse("#3F3F46"));
-    private static readonly IBrush EvenRowBrush = new SolidColorBrush(Color.Parse("#1E1E1E"));
-    private static readonly IBrush OddRowBrush = new SolidColorBrush(Color.Parse("#252526"));
+    private const double ScrollAlignmentTolerance = 0.5;
+
+    // Dark theme fallback colors (used when ThemeService resources aren't loaded yet)
+    private static readonly IBrush HeaderBackgroundFallback = new SolidColorBrush(Color.Parse("#2D2D30"));
+    private static readonly IBrush HeaderBorderBrushFallback = new SolidColorBrush(Color.Parse("#3F3F46"));
+    private static readonly IBrush EvenRowBrush = ThemeService.GetBrush("RowEvenBrush", "#1E1E1E");
+    private static readonly IBrush OddRowBrush = ThemeService.GetBrush("RowOddBrush", "#252526");
+
+    private static IBrush HeaderBackground => ThemeService.GetBrush("TertiaryBackgroundBrush", "#2D2D30");
+    private static IBrush HeaderBorderBrush => ThemeService.GetBrush("BorderBrush", "#3F3F46");
 
     private readonly DockPanel _root;
     private readonly Border _headerBorder;
@@ -216,12 +223,12 @@ public class ResizableListView : UserControl
     /// <summary>
     /// Brush used for the currently selected row.
     /// </summary>
-    public IBrush SelectedRowBrush { get; set; } = new SolidColorBrush(Color.Parse("#094771"));
+    public IBrush SelectedRowBrush { get; set; } = ThemeService.GetBrush("RowSelectedBrush", "#094771");
 
     /// <summary>
     /// Brush used for the hovered (non-selected) row.
     /// </summary>
-    public IBrush HoverRowBrush { get; set; } = new SolidColorBrush(Color.Parse("#2A2D2E"));
+    public IBrush HoverRowBrush { get; set; } = ThemeService.GetBrush("RowHoverBrush", "#2A2D2E");
 
     /// <summary>
     /// Gets the data context of the currently selected row.
@@ -659,7 +666,7 @@ public class ResizableListView : UserControl
         var rowHeightPath = RowHeightPath;
         var suppressHandCursor = SuppressHandCursor;
 
-        _itemsControl.ItemsPanel = new FuncTemplate<Panel>(() =>
+        _itemsControl.ItemsPanel = new FuncTemplate<Panel?>(() =>
             new VirtualizingStackPanel());
 
         _itemsControl.ItemTemplate = new FuncDataTemplate<object>((_, _) =>
@@ -1125,6 +1132,8 @@ public class ResizableListView : UserControl
     /// </summary>
     private void UpdateSelectionVisuals()
     {
+        _selectedRow = null;
+
         foreach (var container in _itemsControl.GetRealizedContainers())
         {
             Border? b = null;
@@ -1137,6 +1146,8 @@ public class ResizableListView : UserControl
             if (b.DataContext != null && _selectedItems.Contains(b.DataContext))
             {
                 b.Background = SelectedRowBrush;
+                if (Equals(b.DataContext, _selectedItem))
+                    _selectedRow = b;
             }
             else if (b == _hoveredRow)
             {
@@ -1153,22 +1164,123 @@ public class ResizableListView : UserControl
     /// Scrolls the vertical <see cref="ScrollViewer"/> so that the row at the given
     /// index is visible. Uses <see cref="RowHeight"/> to compute the scroll offset.
     /// </summary>
+    private double GetViewportHeight()
+    {
+        double boundsHeight = _scrollViewer.Bounds.Height;
+        double viewportHeight = _scrollViewer.Viewport.Height;
+
+        if (boundsHeight > 0 && viewportHeight > 0)
+            return Math.Min(boundsHeight, viewportHeight);
+
+        return boundsHeight > 0 ? boundsHeight : viewportHeight;
+    }
+
+    private Border? FindRealizedRowBorder(object? item)
+    {
+        if (item == null)
+            return null;
+
+        foreach (var container in _itemsControl.GetRealizedContainers())
+        {
+            Border? border = null;
+            if (container is ContentPresenter presenter)
+                border = presenter.Child as Border;
+            border ??= container.FindDescendantOfType<Border>();
+
+            if (border?.DataContext != null && Equals(border.DataContext, item))
+                return border;
+        }
+
+        return null;
+    }
+
+    private double GetEstimatedItemExtent(int itemCount)
+    {
+        if (itemCount > 0 && _scrollViewer.Extent.Height > 0)
+        {
+            var extentPerItem = _scrollViewer.Extent.Height / itemCount;
+            if (extentPerItem > 0)
+                return extentPerItem;
+        }
+
+        return RowHeight;
+    }
+
+    private int GetPageSelectionStep(int itemCount)
+    {
+        double itemExtent = GetEstimatedItemExtent(itemCount);
+        double viewportHeight = GetViewportHeight();
+        if (itemExtent <= 0 || viewportHeight <= 0)
+            return 1;
+
+        int visibleItems = (int)Math.Floor(viewportHeight / itemExtent);
+        return Math.Max(1, visibleItems - 1);
+    }
+
+    private void SetVerticalOffset(double offset)
+    {
+        double viewportHeight = GetViewportHeight();
+        double maxOffset = Math.Max(0, _scrollViewer.Extent.Height - viewportHeight);
+        double clampedOffset = Math.Clamp(offset, 0, maxOffset);
+
+        if (Math.Abs(clampedOffset - _scrollViewer.Offset.Y) <= ScrollAlignmentTolerance)
+            return;
+
+        _scrollViewer.Offset = _scrollViewer.Offset.WithY(clampedOffset);
+    }
+
     private void ScrollItemIntoView(int index)
     {
+        var items = GetItemsList();
+        if (items != null && index >= 0 && index < items.Count)
+        {
+            var targetItem = items[index];
+            var realizedRow = FindRealizedRowBorder(items[index]);
+            if (realizedRow != null)
+            {
+                realizedRow.BringIntoView();
+                return;
+            }
+
+            double itemExtent = GetEstimatedItemExtent(items.Count);
+            if (itemExtent > 0)
+            {
+                double estimatedTop = index * itemExtent;
+                double estimatedBottom = estimatedTop + itemExtent;
+                double estimatedViewportHeight = GetViewportHeight();
+                double estimatedOffset = _scrollViewer.Offset.Y;
+
+                if (estimatedTop < estimatedOffset)
+                    SetVerticalOffset(estimatedTop);
+                else if (estimatedBottom > estimatedOffset + estimatedViewportHeight)
+                    SetVerticalOffset(estimatedBottom - estimatedViewportHeight);
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!Equals(_selectedItem, targetItem))
+                    return;
+
+                FindRealizedRowBorder(targetItem)?.BringIntoView();
+            }, DispatcherPriority.Loaded);
+            return;
+        }
+
         double targetTop = index * RowHeight;
         double targetBottom = targetTop + RowHeight;
-        double viewportHeight = _scrollViewer.Viewport.Height;
+        double viewportHeight = GetViewportHeight();
         double currentOffset = _scrollViewer.Offset.Y;
 
         if (targetTop < currentOffset)
-            _scrollViewer.Offset = _scrollViewer.Offset.WithY(targetTop);
+            SetVerticalOffset(targetTop);
         else if (targetBottom > currentOffset + viewportHeight)
-            _scrollViewer.Offset = _scrollViewer.Offset.WithY(targetBottom - viewportHeight);
+            SetVerticalOffset(targetBottom - viewportHeight);
     }
 
     /// <summary>
-    /// Handles keyboard navigation: Up/Down to move selection, Home/End to jump,
-    /// Shift+Arrow to extend selection in multi-mode, Enter to activate, Ctrl+A to select all.
+    /// Handles keyboard navigation: Up/Down to move selection, PageUp/PageDown to move
+    /// by one viewport, Home/End to jump, Shift+Arrow to extend selection in multi-mode,
+    /// Enter to activate, Ctrl+A to select all.
     /// </summary>
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
@@ -1178,12 +1290,21 @@ public class ResizableListView : UserControl
         if (items == null || items.Count == 0) return;
 
         int currentIndex = _selectedItem != null ? items.IndexOf(_selectedItem) : -1;
+        int pageStep = GetPageSelectionStep(items.Count);
 
         switch (e.Key)
         {
             case Key.Up:
             {
                 int newIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+                if (newIndex == currentIndex)
+                {
+                    if (currentIndex >= 0)
+                        ScrollItemIntoView(currentIndex);
+                    e.Handled = true;
+                    break;
+                }
+
                 SelectByIndex(items, newIndex, e.KeyModifiers);
                 e.Handled = true;
                 break;
@@ -1191,6 +1312,32 @@ public class ResizableListView : UserControl
             case Key.Down:
             {
                 int newIndex = currentIndex < items.Count - 1 ? currentIndex + 1 : items.Count - 1;
+                if (newIndex == currentIndex)
+                {
+                    if (currentIndex >= 0)
+                        ScrollItemIntoView(currentIndex);
+                    e.Handled = true;
+                    break;
+                }
+
+                SelectByIndex(items, newIndex, e.KeyModifiers);
+                e.Handled = true;
+                break;
+            }
+            case Key.PageUp:
+            {
+                int newIndex = currentIndex >= 0
+                    ? Math.Max(0, currentIndex - pageStep)
+                    : 0;
+                SelectByIndex(items, newIndex, e.KeyModifiers);
+                e.Handled = true;
+                break;
+            }
+            case Key.PageDown:
+            {
+                int newIndex = currentIndex >= 0
+                    ? Math.Min(items.Count - 1, currentIndex + pageStep)
+                    : 0;
                 SelectByIndex(items, newIndex, e.KeyModifiers);
                 e.Handled = true;
                 break;

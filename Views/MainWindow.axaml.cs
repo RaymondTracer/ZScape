@@ -1,13 +1,16 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -30,17 +33,23 @@ public partial class MainWindow : Window
     private readonly WadManager _wadManager = WadManager.Instance;
     private readonly NotificationService _notificationService = NotificationService.Instance;
     private readonly ScreenshotMonitorService _screenshotMonitor = ScreenshotMonitorService.Instance;
+    private readonly ZandronumStableReleaseService _stableReleaseService = ZandronumStableReleaseService.Instance;
+    private readonly GameControllerService _controller = GameControllerService.Instance;
     private readonly DispatcherTimer _autoRefreshTimer = new();
+    private readonly DispatcherTimer _favoritesRefreshTimer = new();
     private readonly DispatcherTimer _countdownTimer = new();
     private readonly DispatcherTimer _alertTimer = new();
     private readonly DispatcherTimer _logFlushTimer = new();
     private readonly DispatcherTimer _serverListUpdateTimer = new();
-    private DateTime _nextAutoRefreshTime;
+    private DateTime? _nextAutoRefreshTime;
+    private DateTime? _nextFavoritesRefreshTime;
+    private DateTime? _lastRefreshTime;
 
     private ServerInfo? _selectedServer;
     private int _sortColumnIndex = 3; // Default to Players column
     private bool _sortAscending = false;
     private bool _isInitializing = true;
+    private BigUIShell? _bigUIShell;
 
     // Server alert state tracking
     private readonly Dictionary<string, ServerAlertState> _serverAlertStates = new();
@@ -58,7 +67,8 @@ public partial class MainWindow : Window
 
     // Custom control references (initialized after InitializeComponent)
     private LogPanelControl? _logControl;
-    private MenuItem? ToggleFavoriteMenuItem;
+    private MenuItem? ToggleAddressFavoriteMenuItem;
+    private MenuItem? ToggleNameFavoriteMenuItem;
 
     // Observable collections for data binding
     public ObservableCollection<ServerViewModel> Servers { get; private set; } = [];
@@ -96,6 +106,8 @@ public partial class MainWindow : Window
         }
 
         SubscribeToEvents();
+        SetupControllerInput();
+        _notificationService.AttachWindow(this);
 
         // Apply dark title bar on Windows
         if (OperatingSystem.IsWindows())
@@ -111,22 +123,34 @@ public partial class MainWindow : Window
         // Load settings after UI is ready
         Dispatcher.UIThread.Post(async () =>
         {
+            UpdateServerState? setupPrefetchedServerState = null;
+
             // Check for first-time setup
             if (!_settings.SettingsFileExists)
             {
-                await ShowFirstTimeSetupAsync();
+                setupPrefetchedServerState = await ShowFirstTimeSetupAsync();
             }
 
             // Auto-detect paths if not configured
             AutoDetectPaths();
 
             LoadSettings();
+            ApplyUIMode();
+            _controller.StartPolling();
             _isInitializing = false;
 
             // Start screenshot monitoring
             _screenshotMonitor.StartMonitoring();
 
-            if (_settings.Settings.RefreshOnLaunch)
+            if (setupPrefetchedServerState != null)
+            {
+                _logger.Info("Using server list prefetched during first-time setup...");
+                await _browserService.ResumeFromStateAsync(setupPrefetchedServerState);
+                UpdateAutoRefreshStatus();
+                UpdateServerList();
+                UpdateStatusBar();
+            }
+            else if (_settings.Settings.RefreshOnLaunch)
             {
                 _ = RefreshServersAsync();
             }
@@ -141,9 +165,6 @@ public partial class MainWindow : Window
 
     private void SetupItemsSources()
     {
-        // Write debug to file 
-        var debugPath = Path.Combine(AppContext.BaseDirectory, "debug.log");
-
         // Initialize the server list view with columns
         SetupServerListView();
 
@@ -152,19 +173,16 @@ public partial class MainWindow : Window
         var wadsList = this.FindControl<ItemsControl>("WadsList");
         var gameModeCombo = this.FindControl<PersistentComboBox>("GameModeComboBox");
 
-        File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] ServerListView initialized, LogControl={_logControl != null}\n");
-
         if (playersGrid != null) playersGrid.ItemsSource = Players;
         if (wadsList != null) wadsList.ItemsSource = Wads;
 
         if (_logControl != null)
         {
             _logControl.ItemsSource = LogEntries;
-            File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] LogControl initialized\n");
         }
         else
         {
-            File.AppendAllText(debugPath, $"[{DateTime.Now:HH:mm:ss}] ERROR: LogControl NOT FOUND\n");
+            _logger.Warning("LogControl not found during setup");
         }
 
         if (gameModeCombo != null)
@@ -210,20 +228,38 @@ public partial class MainWindow : Window
             }
         });
 
-        // Column 1: Lock icon (fixed)
+        // Column 1: Legacy lock-icon spacer (kept at zero width to preserve column indices)
         ServerListView.AddColumn(new ListViewColumn
         {
             Header = "",
-            Width = 24,
+            Width = 0,
+            MinWidth = 0,
             IsFixedWidth = true,
+            CellContentFactory = () => new Border { Width = 0, Height = 0 }
+        });
+
+        // Column 2: Server Name with inline password icon (star-sized, resizable)
+        ServerListView.AddColumn(new ListViewColumn
+        {
+            Header = "Server Name",
+            IsStar = true,
+            MinWidth = 100,
             CellContentFactory = () =>
             {
+                var panel = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Margin = new Thickness(4, 0, 4, 0)
+                };
+
                 var viewbox = new Viewbox
                 {
                     Width = 14,
                     Height = 14,
                     VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 0, 4, 0)
                 };
                 viewbox.Bind(Viewbox.IsVisibleProperty, new Avalonia.Data.Binding("IsPassworded"));
                 viewbox.Child = new Avalonia.Controls.Shapes.Path
@@ -231,18 +267,20 @@ public partial class MainWindow : Window
                     Fill = new SolidColorBrush(Avalonia.Media.Color.Parse("#FFCC00")),
                     Data = Avalonia.Media.Geometry.Parse("M 12 2 C 9.79 2 8 3.79 8 6 L 8 8 L 6 8 C 4.9 8 4 8.9 4 10 L 4 20 C 4 21.1 4.9 22 6 22 L 18 22 C 19.1 22 20 21.1 20 20 L 20 10 C 20 8.9 19.1 8 18 8 L 16 8 L 16 6 C 16 3.79 14.21 2 12 2 Z M 10 6 C 10 4.9 10.9 4 12 4 C 13.1 4 14 4.9 14 6 L 14 8 L 10 8 Z M 12 17 C 10.9 17 10 16.1 10 15 C 10 13.9 10.9 13 12 13 C 13.1 13 14 13.9 14 15 C 14 16.1 13.1 17 12 17 Z")
                 };
-                return viewbox;
-            }
-        });
+                Grid.SetColumn(viewbox, 0);
 
-        // Column 2: Server Name (star-sized, resizable)
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "Server Name",
-            IsStar = true,
-            MinWidth = 100,
-            BindingPath = "Name",
-            TextTrimming = TextTrimming.CharacterEllipsis,
+                var textBlock = new TextBlock
+                {
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                textBlock.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("Name"));
+                Grid.SetColumn(textBlock, 1);
+
+                panel.Children.Add(viewbox);
+                panel.Children.Add(textBlock);
+                return panel;
+            },
             SortClick = SortByName_Click
         });
 
@@ -308,7 +346,7 @@ public partial class MainWindow : Window
             SortClick = SortByAddress_Click
         });
 
-        ServerListView.Build(ListViewOverflowMode.AutoScroll);
+        ServerListView.Build(ListViewOverflowMode.Fill);
         ServerListView.ItemsSource = Servers;
 
         // Set up context menu on the scroll viewer
@@ -339,9 +377,13 @@ public partial class MainWindow : Window
         refreshItem.Click += RefreshServerMenuItem_Click;
         contextMenu.Items.Add(refreshItem);
 
-        ToggleFavoriteMenuItem = new MenuItem { Header = "_Add to Favorites" };
-        ToggleFavoriteMenuItem.Click += ToggleFavoriteMenuItem_Click;
-        contextMenu.Items.Add(ToggleFavoriteMenuItem);
+        ToggleAddressFavoriteMenuItem = new MenuItem { Header = "Add _Address to Favorites" };
+        ToggleAddressFavoriteMenuItem.Click += ToggleFavoriteAddressMenuItem_Click;
+        contextMenu.Items.Add(ToggleAddressFavoriteMenuItem);
+
+        ToggleNameFavoriteMenuItem = new MenuItem { Header = "Add Server _Name to Favorites" };
+        ToggleNameFavoriteMenuItem.Click += ToggleFavoriteNameMenuItem_Click;
+        contextMenu.Items.Add(ToggleNameFavoriteMenuItem);
 
         contextMenu.Items.Add(new Separator());
 
@@ -380,21 +422,17 @@ public partial class MainWindow : Window
         _serverListUpdateTimer.Tick += ServerListUpdateTimer_Tick;
         _serverListUpdateTimer.Start();
 
-        // Auto-refresh timer
+        // Auto-refresh timers
         _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
+        _favoritesRefreshTimer.Tick += FavoritesRefreshTimer_Tick;
 
         // Countdown display timer (1-second tick)
         _countdownTimer.Interval = TimeSpan.FromSeconds(1);
         _countdownTimer.Tick += CountdownTimer_Tick;
 
         // Alert timer for background server monitoring
-        _alertTimer.Interval = TimeSpan.FromSeconds(_settings.Settings.AlertCheckIntervalSeconds > 0
-            ? _settings.Settings.AlertCheckIntervalSeconds : 60);
         _alertTimer.Tick += AlertTimer_Tick;
-        if (_settings.Settings.EnableFavoriteServerAlerts || _settings.Settings.EnableManualServerAlerts)
-        {
-            _alertTimer.Start();
-        }
+        UpdateAlertTimerSettings();
 
         // Alert notification click handler
         _notificationService.AlertClicked += NotificationService_AlertClicked;
@@ -411,49 +449,177 @@ public partial class MainWindow : Window
 
     private void AutoRefreshTimer_Tick(object? sender, EventArgs e)
     {
-        if (_settings.Settings.AutoRefresh)
+        if (!_settings.Settings.AutoRefresh)
         {
-            _nextAutoRefreshTime = DateTime.UtcNow.Add(_autoRefreshTimer.Interval);
-            _ = RefreshServersAsync();
+            return;
         }
+
+        _nextAutoRefreshTime = DateTime.UtcNow.Add(_autoRefreshTimer.Interval);
+        if (FavoritesUseFullRefreshTimer() && _nextAutoRefreshTime.HasValue)
+        {
+            _nextFavoritesRefreshTime = _nextAutoRefreshTime.Value;
+        }
+
+        UpdateAutoRefreshStatus();
+        if (_browserService.IsRefreshing)
+        {
+            return;
+        }
+
+        _ = RefreshServersAsync();
+    }
+
+    private void FavoritesRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        if (!_settings.Settings.AutoRefreshFavoritesOnly)
+        {
+            return;
+        }
+
+        _nextFavoritesRefreshTime = DateTime.UtcNow.Add(_favoritesRefreshTimer.Interval);
+        UpdateAutoRefreshStatus();
+        if (_browserService.IsRefreshing)
+        {
+            return;
+        }
+
+        _ = RefreshFavoriteServersAsync();
     }
 
     private void CountdownTimer_Tick(object? sender, EventArgs e)
     {
-        if (!_settings.Settings.AutoRefresh || _browserService.IsRefreshing)
+        if (_browserService.IsRefreshing)
             return;
 
-        var remaining = _nextAutoRefreshTime - DateTime.UtcNow;
-        if (remaining.TotalSeconds < 0) remaining = TimeSpan.Zero;
-
-        if (StatusLabel != null)
-        {
-            var minutes = (int)remaining.TotalMinutes;
-            var seconds = remaining.Seconds;
-            StatusLabel.Text = $"Ready (next refresh in {minutes}:{seconds:D2})";
-        }
+        UpdateAutoRefreshStatus();
     }
 
-    private void UpdateAutoRefreshTimer()
+    private void UpdateAutoRefreshTimers()
     {
         _autoRefreshTimer.Stop();
+        _favoritesRefreshTimer.Stop();
         _countdownTimer.Stop();
-        if (_settings.Settings.AutoRefresh)
+        _nextAutoRefreshTime = null;
+        _nextFavoritesRefreshTime = null;
+
+        var fullEnabled = _settings.Settings.AutoRefresh;
+        var favoritesEnabled = _settings.Settings.AutoRefreshFavoritesOnly;
+        var fullIntervalMinutes = NormalizeRefreshIntervalMinutes(_settings.Settings.AutoRefreshIntervalMinutes);
+        var favoritesIntervalMinutes = GetEffectiveFavoritesRefreshIntervalMinutes();
+
+        if (fullEnabled)
         {
-            var intervalMinutes = _settings.Settings.AutoRefreshIntervalMinutes;
-            if (intervalMinutes < 1) intervalMinutes = 5;
-            _autoRefreshTimer.Interval = TimeSpan.FromMinutes(intervalMinutes);
+            _autoRefreshTimer.Interval = TimeSpan.FromMinutes(fullIntervalMinutes);
             _autoRefreshTimer.Start();
-            _nextAutoRefreshTime = DateTime.UtcNow.AddMinutes(intervalMinutes);
-            _countdownTimer.Start();
-            _logger.Info($"Auto-refresh enabled: every {intervalMinutes} minutes");
+            _nextAutoRefreshTime = DateTime.UtcNow.AddMinutes(fullIntervalMinutes);
+            _logger.Info($"Auto-refresh enabled: every {fullIntervalMinutes} minutes");
         }
         else
         {
-            if (StatusLabel != null && StatusLabel.Text?.StartsWith("Ready") == true)
-                StatusLabel.Text = "Ready";
             _logger.Info("Auto-refresh disabled");
         }
+
+        if (favoritesEnabled)
+        {
+            if (FavoritesUseFullRefreshTimer() && _nextAutoRefreshTime.HasValue)
+            {
+                _nextFavoritesRefreshTime = _nextAutoRefreshTime.Value;
+                _logger.Info($"Favorites auto-refresh enabled: using the full refresh timer ({fullIntervalMinutes} minutes)");
+            }
+            else
+            {
+                _favoritesRefreshTimer.Interval = TimeSpan.FromMinutes(favoritesIntervalMinutes);
+                _favoritesRefreshTimer.Start();
+                _nextFavoritesRefreshTime = DateTime.UtcNow.AddMinutes(favoritesIntervalMinutes);
+                _logger.Info($"Favorites auto-refresh enabled: every {favoritesIntervalMinutes} minutes");
+            }
+        }
+        else
+        {
+            _logger.Info("Favorites auto-refresh disabled");
+        }
+
+        if (fullEnabled || favoritesEnabled)
+        {
+            _countdownTimer.Start();
+        }
+
+        UpdateAutoRefreshStatus();
+    }
+
+    private static int NormalizeRefreshIntervalMinutes(int intervalMinutes)
+    {
+        return intervalMinutes < 1 ? 5 : intervalMinutes;
+    }
+
+    private int GetEffectiveFavoritesRefreshIntervalMinutes()
+    {
+        if (_settings.Settings.AutoRefreshFavoritesUseFullRefreshTimer)
+        {
+            return NormalizeRefreshIntervalMinutes(_settings.Settings.AutoRefreshIntervalMinutes);
+        }
+
+        return NormalizeRefreshIntervalMinutes(_settings.Settings.AutoRefreshFavoritesIntervalMinutes);
+    }
+
+    private bool FavoritesUseFullRefreshTimer()
+    {
+        return _settings.Settings.AutoRefreshFavoritesOnly
+            && _settings.Settings.AutoRefreshFavoritesUseFullRefreshTimer
+            && _settings.Settings.AutoRefresh;
+    }
+
+    private void UpdateAutoRefreshStatus()
+    {
+        if (StatusLabel == null)
+        {
+            return;
+        }
+
+        if (_browserService.IsRefreshing)
+        {
+            return;
+        }
+
+        if (_settings.Settings.AutoRefresh && _settings.Settings.AutoRefreshFavoritesOnly && FavoritesUseFullRefreshTimer() && _nextAutoRefreshTime.HasValue)
+        {
+            StatusLabel.Text = $"Ready (next full/favorites refresh in {FormatRefreshCountdown(_nextAutoRefreshTime.Value)})";
+            return;
+        }
+
+        if (_settings.Settings.AutoRefresh && _nextAutoRefreshTime.HasValue && _settings.Settings.AutoRefreshFavoritesOnly && _nextFavoritesRefreshTime.HasValue)
+        {
+            StatusLabel.Text = $"Ready (next full refresh in {FormatRefreshCountdown(_nextAutoRefreshTime.Value)} | favorites in {FormatRefreshCountdown(_nextFavoritesRefreshTime.Value)})";
+            return;
+        }
+
+        if (_settings.Settings.AutoRefresh && _nextAutoRefreshTime.HasValue)
+        {
+            StatusLabel.Text = $"Ready (next full refresh in {FormatRefreshCountdown(_nextAutoRefreshTime.Value)})";
+            return;
+        }
+
+        if (_settings.Settings.AutoRefreshFavoritesOnly && _nextFavoritesRefreshTime.HasValue)
+        {
+            StatusLabel.Text = $"Ready (next favorites refresh in {FormatRefreshCountdown(_nextFavoritesRefreshTime.Value)})";
+            return;
+        }
+
+        if (StatusLabel.Text?.StartsWith("Ready") == true)
+        {
+            StatusLabel.Text = "Ready";
+        }
+    }
+
+    private static string FormatRefreshCountdown(DateTime nextRefreshTime)
+    {
+        var remaining = nextRefreshTime - DateTime.UtcNow;
+        if (remaining.TotalSeconds < 0)
+        {
+            remaining = TimeSpan.Zero;
+        }
+
+        return $"{(int)remaining.TotalMinutes}:{remaining.Seconds:D2}";
     }
 
     #endregion
@@ -510,24 +676,31 @@ public partial class MainWindow : Window
             if (HideBotOnlyCheckBox != null) HideBotOnlyCheckBox.IsChecked = settings.TreatBotOnlyAsEmpty;
             if (HideFullCheckBox != null) HideFullCheckBox.IsChecked = settings.HideFull;
             if (HidePasswordedCheckBox != null) HidePasswordedCheckBox.IsChecked = settings.HidePassworded;
+            if (FavoritesOnlyCheckBox != null) FavoritesOnlyCheckBox.IsChecked = settings.ShowFavoritesOnly;
             if (GameModeComboBox != null && settings.GameModeFilterIndex >= 0 && settings.GameModeFilterIndex < GameModes.Count)
             {
                 GameModeComboBox.SelectedIndex = settings.GameModeFilterIndex;
             }
             if (SearchBox != null) SearchBox.Text = settings.SearchText ?? "";
 
-            // Splitter positions - only on initial load
+            // Splitter positions - restore as proportional star heights
             var mainGrid = MainContentGrid;
-            if (mainGrid != null && mainGrid.RowDefinitions.Count >= 3 && settings.MainSplitterDistance > 0)
+            if (mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
             {
-                mainGrid.RowDefinitions[0].Height = new GridLength(settings.MainSplitterDistance, GridUnitType.Pixel);
-                mainGrid.RowDefinitions[2].Height = new GridLength(settings.DetailsSplitterDistance > 0 ? settings.DetailsSplitterDistance : 250, GridUnitType.Pixel);
-            }
-
-            // Log panel height - only restore if log panel is visible
-            if (settings.ShowLogPanel && settings.LogSplitterDistance > 0 && mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
-            {
-                mainGrid.RowDefinitions[4].Height = new GridLength(settings.LogSplitterDistance, GridUnitType.Pixel);
+                if (settings.MainSplitterDistance > 0 && settings.DetailsSplitterDistance > 0)
+                {
+                    var totalHeight = settings.MainSplitterDistance + settings.DetailsSplitterDistance + (settings.LogSplitterDistance > 0 ? settings.LogSplitterDistance : 100);
+                    if (totalHeight > 0)
+                    {
+                        var serverRatio = (double)settings.MainSplitterDistance / totalHeight;
+                        var detailsRatio = (double)settings.DetailsSplitterDistance / totalHeight;
+                        var logRatio = settings.LogSplitterDistance > 0 ? (double)settings.LogSplitterDistance / totalHeight : 1.0 - serverRatio - detailsRatio;
+                        if (logRatio < 0.05) logRatio = 0.05;
+                        mainGrid.RowDefinitions[0].Height = new GridLength(Math.Max(1, serverRatio * 5), GridUnitType.Star);
+                        mainGrid.RowDefinitions[2].Height = new GridLength(Math.Max(1, detailsRatio * 5), GridUnitType.Star);
+                        mainGrid.RowDefinitions[4].Height = new GridLength(Math.Max(1, logRatio * 5), GridUnitType.Star);
+                    }
+                }
             }
 
             // Log panel visibility - do this AFTER splitter restore so it can override row 0 sizing
@@ -548,8 +721,10 @@ public partial class MainWindow : Window
         // Apply verbose logging to logger
         _logger.VerboseMode = settings.VerboseLogging;
 
-        // Auto-refresh timer
-        UpdateAutoRefreshTimer();
+        // Auto-refresh timers
+        UpdateAutoRefreshTimers();
+
+        UpdateAlertTimerSettings();
 
         // WAD settings
         var searchPaths = settings.WadSearchPaths ?? [];
@@ -636,6 +811,7 @@ public partial class MainWindow : Window
         settings.TreatBotOnlyAsEmpty = HideBotOnlyCheckBox?.IsChecked ?? false;
         settings.HideFull = HideFullCheckBox?.IsChecked ?? false;
         settings.HidePassworded = HidePasswordedCheckBox?.IsChecked ?? false;
+        settings.ShowFavoritesOnly = FavoritesOnlyCheckBox?.IsChecked ?? false;
         settings.GameModeFilterIndex = GameModeComboBox?.SelectedIndex ?? 0;
         settings.SearchText = SearchBox?.Text ?? "";
 
@@ -671,21 +847,36 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task RefreshFavoriteServersAsync()
+    {
+        try
+        {
+            await _browserService.RefreshFavoritesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"Favorites refresh failed: {ex.Message}");
+        }
+    }
+
     private void UpdateServerList()
     {
         var allServers = _browserService.Servers.ToList();
         var filtered = ApplyFilters(allServers);
         filtered = SortServers(filtered);
+        var manualAddresses = _settings.Settings.ManualServers
+            .Select(m => m.FullAddress)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         // Build map of new server data by address for efficient lookup
-        var newServerMap = new Dictionary<string, (ServerInfo Server, bool IsFavorite, bool IsManual)>();
+        var newServerMap = new Dictionary<string, (ServerInfo Server, FavoriteMatchResult FavoriteMatch, bool IsManual)>();
         for (int i = 0; i < filtered.Count; i++)
         {
             var server = filtered[i];
-            var address = $"{server.Address}:{server.Port}";
-            var isFavorite = _settings.Settings.FavoriteServers.Contains(address);
-            var isManual = _settings.Settings.ManualServers.Any(m => m.FullAddress == address);
-            newServerMap[address] = (server, isFavorite, isManual);
+            var address = ServerRuleUtility.GetServerAddress(server);
+            var favoriteMatch = GetFavoriteMatch(server);
+            var isManual = manualAddresses.Contains(address);
+            newServerMap[address] = (server, favoriteMatch, isManual);
         }
 
         // Build expected order of addresses
@@ -704,7 +895,7 @@ public partial class MainWindow : Window
             if (newServerMap.TryGetValue(vm.AddressDisplay, out var data))
             {
                 // Update existing item in-place
-                vm.UpdateFrom(data.Server, data.IsFavorite, data.IsManual);
+                vm.UpdateFrom(data.Server, data.FavoriteMatch, data.IsManual);
                 existingAddresses.Add(vm.AddressDisplay);
             }
             else
@@ -720,7 +911,7 @@ public partial class MainWindow : Window
             if (!existingAddresses.Contains(address))
             {
                 var data = newServerMap[address];
-                var vm = new ServerViewModel(data.Server, data.IsFavorite, data.IsManual);
+                var vm = new ServerViewModel(data.Server, data.FavoriteMatch, data.IsManual);
                 Servers.Add(vm);
             }
         }
@@ -763,6 +954,9 @@ public partial class MainWindow : Window
             // Hide offline servers
             if (!s.IsOnline) return false;
 
+            // Hidden name rules apply globally before other filters.
+            if (IsServerHiddenByRule(s)) return false;
+
             // Hide empty
             if (hideEmpty && s.CurrentPlayers == 0) return false;
 
@@ -778,8 +972,7 @@ public partial class MainWindow : Window
             // Favorites only
             if (favoritesOnly)
             {
-                var address = $"{s.Address}:{s.Port}";
-                if (!_settings.Settings.FavoriteServers.Contains(address))
+                if (!GetFavoriteMatch(s).IsFavorite)
                     return false;
             }
 
@@ -794,8 +987,7 @@ public partial class MainWindow : Window
             // Search filter
             if (!string.IsNullOrEmpty(searchText))
             {
-                var searchLower = searchText.ToLowerInvariant();
-                if (!s.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
+                if (!ServerRuleUtility.GetComparableServerName(s).Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
                     !s.Map.Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
                     !s.Address.Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
                     !s.IWAD.Contains(searchText, StringComparison.OrdinalIgnoreCase))
@@ -813,9 +1005,13 @@ public partial class MainWindow : Window
     private System.Collections.Generic.List<ServerInfo> SortServers(System.Collections.Generic.List<ServerInfo> servers)
     {
         // First, separate pinned (favorites/manual) from regular servers
-        var pinnedAddresses = new HashSet<string>(
-            _settings.Settings.FavoriteServers
-                .Concat(_settings.Settings.ManualServers.Select(m => m.FullAddress)));
+        var manualAddresses = _settings.Settings.ManualServers
+            .Select(m => m.FullAddress)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pinnedAddresses = servers
+            .Where(s => GetFavoriteMatch(s).IsFavorite || manualAddresses.Contains(ServerRuleUtility.GetServerAddress(s)))
+            .Select(ServerRuleUtility.GetServerAddress)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var pinned = servers.Where(s => pinnedAddresses.Contains($"{s.Address}:{s.Port}")).ToList();
         var regular = servers.Where(s => !pinnedAddresses.Contains($"{s.Address}:{s.Port}")).ToList();
@@ -846,6 +1042,198 @@ public partial class MainWindow : Window
             _ => servers
         };
     }
+
+    private FavoriteMatchResult GetFavoriteMatch(ServerInfo server)
+    {
+        return ServerRuleUtility.GetFavoriteMatch(_settings.Settings, server);
+    }
+
+    private bool IsServerHiddenByRule(ServerInfo server)
+    {
+        return ServerRuleUtility.IsHiddenByRule(_settings.Settings, server);
+    }
+
+    private void ToggleExplicitFavorite(string address)
+    {
+        if (_settings.Settings.FavoriteServers.Contains(address))
+        {
+            RemoveExplicitFavorite(address);
+        }
+        else
+        {
+            AddExplicitFavorite(address);
+        }
+    }
+
+    private void AddExplicitFavorite(string address)
+    {
+        if (!_settings.Settings.FavoriteServers.Add(address))
+        {
+            return;
+        }
+
+        _logger.Info($"Added explicit favorite: {address}");
+        _settings.Save();
+        UpdateServerList();
+    }
+
+    private void RemoveExplicitFavorite(string address)
+    {
+        if (!_settings.Settings.FavoriteServers.Remove(address))
+        {
+            return;
+        }
+
+        _logger.Info($"Removed explicit favorite: {address}");
+        _settings.Save();
+        UpdateServerList();
+    }
+
+    private bool HasExactFavoriteNameRule(ServerInfo server)
+    {
+        return HasExactFavoriteNameRule(ServerRuleUtility.GetComparableServerName(server));
+    }
+
+    private bool HasExactFavoriteNameRule(string comparableName)
+    {
+        if (string.IsNullOrWhiteSpace(comparableName))
+        {
+            return false;
+        }
+
+        return _settings.Settings.FavoriteServerNameRules.Any(rule =>
+            rule.Mode == TextMatchMode.Exact &&
+            rule.Pattern.Equals(comparableName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void AddExactFavoriteNameRule(ServerInfo server, bool rememberChoice = false)
+    {
+        var comparableName = ServerRuleUtility.GetComparableServerName(server);
+        if (string.IsNullOrWhiteSpace(comparableName))
+        {
+            return;
+        }
+
+        var changed = false;
+        if (!HasExactFavoriteNameRule(comparableName))
+        {
+            _settings.Settings.FavoriteServerNameRules.Add(new TextMatchRule
+            {
+                Pattern = comparableName,
+                Mode = TextMatchMode.Exact
+            });
+            _logger.Info($"Added favorite name rule: {comparableName}");
+            changed = true;
+        }
+
+        if (rememberChoice && _settings.Settings.FavoriteStarClickBehavior != FavoriteStarClickBehavior.ServerName)
+        {
+            _settings.Settings.FavoriteStarClickBehavior = FavoriteStarClickBehavior.ServerName;
+            _logger.Info("Favorite star clicks will now use server name favorites by default");
+            changed = true;
+        }
+
+        if (changed)
+        {
+            _settings.Save();
+            UpdateServerList();
+        }
+    }
+
+    private void RemoveExactFavoriteNameRule(ServerInfo server)
+    {
+        RemoveExactFavoriteNameRule(ServerRuleUtility.GetComparableServerName(server));
+    }
+
+    private void RemoveExactFavoriteNameRule(string comparableName)
+    {
+        if (string.IsNullOrWhiteSpace(comparableName))
+        {
+            return;
+        }
+
+        var removed = _settings.Settings.FavoriteServerNameRules.RemoveAll(rule =>
+            rule.Mode == TextMatchMode.Exact &&
+            rule.Pattern.Equals(comparableName, StringComparison.OrdinalIgnoreCase));
+
+        if (removed <= 0)
+        {
+            return;
+        }
+
+        _logger.Info($"Removed favorite name rule: {comparableName}");
+        _settings.Save();
+        UpdateServerList();
+    }
+
+    private void FavoriteByAddress(ServerInfo server, bool rememberChoice = false)
+    {
+        var address = ServerRuleUtility.GetServerAddress(server);
+        var changed = false;
+
+        if (_settings.Settings.FavoriteServers.Add(address))
+        {
+            _logger.Info($"Added explicit favorite: {address}");
+            changed = true;
+        }
+
+        if (rememberChoice && _settings.Settings.FavoriteStarClickBehavior != FavoriteStarClickBehavior.Address)
+        {
+            _settings.Settings.FavoriteStarClickBehavior = FavoriteStarClickBehavior.Address;
+            _logger.Info("Favorite star clicks will now use address favorites by default");
+            changed = true;
+        }
+
+        if (changed)
+        {
+            _settings.Save();
+            UpdateServerList();
+        }
+    }
+
+    private void ShowFavoriteChoiceMenu(Button button, ServerInfo server)
+    {
+        var comparableName = ServerRuleUtility.GetComparableServerName(server);
+        var contextMenu = new ContextMenu();
+
+        var favoriteAddressItem = new MenuItem { Header = "Favorite This _Address" };
+        favoriteAddressItem.Click += (_, _) => FavoriteByAddress(server);
+        contextMenu.Items.Add(favoriteAddressItem);
+
+        var favoriteNameItem = new MenuItem
+        {
+            Header = "Favorite This Server _Name",
+            IsEnabled = !string.IsNullOrWhiteSpace(comparableName)
+        };
+        favoriteNameItem.Click += (_, _) => AddExactFavoriteNameRule(server);
+        contextMenu.Items.Add(favoriteNameItem);
+
+        contextMenu.Items.Add(new Separator());
+
+        var favoriteAddressAlwaysItem = new MenuItem { Header = "Favorite Address and _Don't Ask Again" };
+        favoriteAddressAlwaysItem.Click += (_, _) => FavoriteByAddress(server, rememberChoice: true);
+        contextMenu.Items.Add(favoriteAddressAlwaysItem);
+
+        var favoriteNameAlwaysItem = new MenuItem
+        {
+            Header = "Favorite Server Name and D_on't Ask Again",
+            IsEnabled = !string.IsNullOrWhiteSpace(comparableName)
+        };
+        favoriteNameAlwaysItem.Click += (_, _) => AddExactFavoriteNameRule(server, rememberChoice: true);
+        contextMenu.Items.Add(favoriteNameAlwaysItem);
+
+        contextMenu.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(button.ContextMenu, contextMenu))
+            {
+                button.ContextMenu = null;
+            }
+        };
+
+        button.ContextMenu = contextMenu;
+        contextMenu.Open(button);
+    }
+
 
     private void UpdateStatusBar()
     {
@@ -878,16 +1266,18 @@ public partial class MainWindow : Window
         if (ServerDetailsText == null) return;
 
         var sb = new System.Text.StringBuilder();
+        var version = string.IsNullOrWhiteSpace(server.GameVersion) ? "Unknown" : server.GameVersion;
         sb.AppendLine($"Server: {DoomColorCodes.StripColorCodes(server.Name)}");
         sb.AppendLine($"Address: {server.Address}:{server.Port}");
         sb.AppendLine($"Map: {server.Map}");
         sb.AppendLine($"Mode: {server.GameMode.Name}");
         sb.AppendLine($"Players: {server.CurrentPlayers}/{server.MaxPlayers}");
         sb.AppendLine($"Ping: {server.Ping}ms");
+        sb.AppendLine($"Version: {version}");
         sb.AppendLine($"IWAD: {server.IWAD}");
 
         if (server.IsPassworded) sb.AppendLine("Password Protected: Yes");
-        if (server.IsTestingServer) sb.AppendLine($"Testing Version: {server.GameVersion}");
+        if (!string.IsNullOrWhiteSpace(server.Website)) sb.AppendLine($"URL: {server.Website}");
 
         ServerDetailsText.Text = sb.ToString();
     }
@@ -939,7 +1329,7 @@ public partial class MainWindow : Window
             // Use team color only for team game modes, otherwise white
             var teamColor = isTeamGame ? GetTeamColor(player.Team, server.Teams) : Brushes.White;
             // Use custom team names from server if available
-            string teamName = player.Team >= 0 && player.Team < server.Teams.Length
+            string teamName = player.Team >= 0 && player.Team < server.Teams.Count
                 ? server.Teams[player.Team].Name
                 : player.TeamName;
 
@@ -1003,10 +1393,10 @@ public partial class MainWindow : Window
             PlayersLabel.Text = $"Players ({server.Players.Count})";
     }
 
-    private static IBrush GetTeamColor(int team, TeamInfo[] teams)
+    private static IBrush GetTeamColor(int team, List<TeamInfo> teams)
     {
         // Use custom team color from server if available
-        if (team >= 0 && team < teams.Length)
+        if (team >= 0 && team < teams.Count)
         {
             var teamInfo = teams[team];
             if (!string.IsNullOrEmpty(teamInfo.ColorHex) && teamInfo.ColorHex.StartsWith('#'))
@@ -1116,6 +1506,220 @@ public partial class MainWindow : Window
         _settings.Save();
     }
 
+    private void TouchModeMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var settings = _settings.Settings;
+        settings.UIMode = settings.UIMode == UIMode.BigUI ? UIMode.Standard : UIMode.BigUI;
+        _settings.Save();
+        ApplyUIMode();
+    }
+
+    private void ApplyUIMode()
+    {
+        var isBigUI = _settings.Settings.UIMode == UIMode.BigUI;
+
+        if (isBigUI)
+            EnterBigUIMode();
+        else
+            ExitBigUIMode();
+
+        if (TouchModeMenuItem != null)
+            TouchModeMenuItem.Header = isBigUI ? "Exit Big UI Mode" : "Big UI Mode";
+    }
+
+    private void EnterBigUIMode()
+    {
+        if (_bigUIShell != null) return;
+
+        _bigUIShell = new BigUIShell();
+
+        var dockPanel = (DockPanel)Content;
+        var idx = dockPanel.Children.IndexOf(MainContentGrid);
+        if (idx >= 0)
+            dockPanel.Children[idx] = _bigUIShell;
+
+        SetupBigUIServerListView();
+
+        _bigUIShell.ExitBigUIRequested += () => Dispatcher.UIThread.Post(() =>
+        {
+            _settings.Settings.UIMode = UIMode.Standard;
+            _settings.Save();
+            ApplyUIMode();
+        });
+
+        _bigUIShell.ExitZScapeRequested += () => Dispatcher.UIThread.Post(() =>
+        {
+            Close();
+        });
+
+        _bigUIShell.RefreshRequested += () => _ = RefreshServersAsync();
+        _bigUIShell.LaunchRequested += () => _ = ShowLaunchGameDialogAsync();
+        _bigUIShell.SearchTextChanged += text =>
+        {
+            _settings.Settings.SearchText = text;
+            UpdateServerList();
+        };
+
+        if (ToolbarBorder != null) ToolbarBorder.IsVisible = false;
+        var menu = ((DockPanel)Content).Children.OfType<Menu>().FirstOrDefault();
+        if (menu != null) menu.IsVisible = false;
+        SetLogPanelVisible(false);
+
+        // Also hide the standard status bar
+        var statusBar = ((DockPanel)Content).Children.OfType<Border>()
+            .FirstOrDefault(b => b.Child is Grid g
+                && g.Children.OfType<TextBlock>().Any(t => t.Name == "ServerCountLabel"));
+        if (statusBar != null) statusBar.IsVisible = false;
+    }
+
+    private void ExitBigUIMode()
+    {
+        if (_bigUIShell == null) return;
+
+        ServerListView.ItemsSource = Servers;
+
+        var dockPanel = (DockPanel)Content;
+        var idx = dockPanel.Children.IndexOf(_bigUIShell);
+        if (idx >= 0)
+            dockPanel.Children[idx] = MainContentGrid;
+
+        _bigUIShell = null;
+
+        if (ToolbarBorder != null) ToolbarBorder.IsVisible = true;
+        var menu = ((DockPanel)Content).Children.OfType<Menu>().FirstOrDefault();
+        if (menu != null) menu.IsVisible = true;
+        SetLogPanelVisible(_settings.Settings.ShowLogPanel);
+
+        var statusBar = ((DockPanel)Content).Children.OfType<Border>()
+            .FirstOrDefault(b => b.Child is Grid g
+                && g.Children.OfType<TextBlock>().Any(t => t.Name == "ServerCountLabel"));
+        if (statusBar != null) statusBar.IsVisible = true;
+    }
+
+    private void SetupBigUIServerListView()
+    {
+        if (_bigUIShell == null) return;
+        var list = _bigUIShell.ServerListView;
+
+        list.RowBaseBackgroundPath = "RowBackground";
+        list.RowHeightPath = "RowHeight";
+        list.RowHeight = 48;
+
+        // Favorites star column
+        list.AddColumn(new ListViewColumn
+        {
+            Header = "",
+            Width = 36,
+            IsFixedWidth = true,
+            CellContentFactory = () =>
+            {
+                var btn = new Button
+                {
+                    Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(0),
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
+                    HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                    VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+                    Width = 36
+                };
+                btn.Bind(Button.IsVisibleProperty, new Avalonia.Data.Binding("ShowFavoritesColumn"));
+                var tb = new TextBlock { FontSize = 16 };
+                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("FavoriteIcon"));
+                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("FavoriteColor"));
+                btn.Content = tb;
+                btn.Click += FavoriteButton_Click;
+                return btn;
+            }
+        });
+
+        list.AddColumn(new ListViewColumn { Header = "", Width = 0, MinWidth = 0, IsFixedWidth = true,
+            CellContentFactory = () => new Border { Width = 0, Height = 0 } });
+
+        list.AddColumn(new ListViewColumn { Header = "Server Name", IsStar = true, MinWidth = 200,
+            BindingPath = "Name", TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByName_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Players", Width = 100, MinWidth = 80,
+            BindingPath = "PlayersDisplay", SortClick = SortByPlayers_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Ping", Width = 80, MinWidth = 60,
+            BindingPath = "Ping", SortClick = SortByPing_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Map", Width = 120, MinWidth = 80,
+            BindingPath = "Map", TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByMap_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Mode", Width = 100, MinWidth = 80,
+            BindingPath = "GameModeDisplay", SortClick = SortByMode_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "IWAD", Width = 120, MinWidth = 80,
+            BindingPath = "IWAD", TextTrimming = TextTrimming.CharacterEllipsis,
+            SortClick = SortByIwad_Click });
+
+        list.AddColumn(new ListViewColumn { Header = "Address", Width = 180, MinWidth = 120,
+            BindingPath = "AddressDisplay", SortClick = SortByAddress_Click });
+
+        list.Build(ListViewOverflowMode.Fill);
+        list.ItemsSource = Servers;
+        list.KeyDown += (_, e) => {
+            if (e.Key == Key.Enter) { _ = ShowLaunchGameDialogAsync(); e.Handled = true; }
+        };
+    }
+
+    private void SetupControllerInput()
+    {
+        _controller.DirectionPressed += dir =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                var items = Servers;
+                if (items.Count == 0) return;
+
+                int current = GetSelectedServerIndex();
+                int next = current;
+
+                switch (dir)
+                {
+                    case ControllerDirection.Up:
+                        next = current > 0 ? current - 1 : 0;
+                        break;
+                    case ControllerDirection.Down:
+                        next = current < items.Count - 1 ? current + 1 : items.Count - 1;
+                        break;
+                    case ControllerDirection.Left:
+                    case ControllerDirection.Right:
+                        (_bigUIShell?.ServerListView ?? (Control)ServerListView).Focus();
+                        return;
+                }
+
+                var targetList = _bigUIShell?.ServerListView ?? ServerListView;
+                if (next != current && next >= 0 && next < items.Count)
+                    targetList.SelectItem(Servers[next]);
+            });
+        };
+
+        _controller.ActionPressed += act =>
+        {
+            Dispatcher.UIThread.Post(async () =>
+            {
+                if (act == ControllerAction.Accept)
+                    await ShowLaunchGameDialogAsync();
+            });
+        };
+    }
+
+    private int GetSelectedServerIndex()
+    {
+        var selItem = ServerListView.SelectedItem;
+        if (selItem == null) return -1;
+        for (int i = 0; i < Servers.Count; i++)
+            if (Servers[i] == selItem) return i;
+        return -1;
+    }
+
     private void UpdateRowHeights()
     {
         foreach (var serverVm in Servers)
@@ -1147,7 +1751,7 @@ public partial class MainWindow : Window
     {
         _settings.Settings.AutoRefresh = !_settings.Settings.AutoRefresh;
         UpdateMenuCheckMark(AutoRefreshMenuItem, _settings.Settings.AutoRefresh);
-        UpdateAutoRefreshTimer();
+        UpdateAutoRefreshTimers();
         _settings.Save();
     }
 
@@ -1155,6 +1759,7 @@ public partial class MainWindow : Window
     {
         _settings.Settings.AutoRefreshFavoritesOnly = !_settings.Settings.AutoRefreshFavoritesOnly;
         UpdateMenuCheckMark(AutoRefreshFavoritesOnlyMenuItem, _settings.Settings.AutoRefreshFavoritesOnly);
+        UpdateAutoRefreshTimers();
         _settings.Save();
     }
 
@@ -1336,6 +1941,56 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void LaunchGameMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        await ShowLaunchGameDialogAsync();
+    }
+
+    private async void LaunchGameButton_Click(object? sender, RoutedEventArgs e)
+    {
+        await ShowLaunchGameDialogAsync();
+    }
+
+    /// <summary>
+    /// Shows the Launch Game dialog for playing offline or hosting a server.
+    /// </summary>
+    private async Task ShowLaunchGameDialogAsync()
+    {
+        var dialog = new LaunchGameDialog();
+        await dialog.ShowDialog(this);
+
+        if (!dialog.Confirmed || string.IsNullOrEmpty(dialog.SelectedIwadPath))
+            return;
+
+        var launcher = GameLauncher.Instance;
+        var pwadPaths = dialog.SelectedPwadPaths;
+
+        if (dialog.IsHostMode)
+        {
+            launcher.LaunchHost(
+                exePath: dialog.SelectedExePath,
+                iwadPath: dialog.SelectedIwadPath,
+                pwadPaths: pwadPaths,
+                skill: dialog.GetSkill(),
+                maxPlayers: dialog.GetMaxPlayers(),
+                maxClients: dialog.GetMaxClients(),
+                isDedicated: dialog.IsDedicated,
+                map: dialog.GetMap(),
+                serverName: dialog.GetServerName(),
+                password: dialog.GetServerPassword(),
+                joinPassword: dialog.GetJoinPassword());
+        }
+        else
+        {
+            launcher.LaunchOffline(
+                exePath: dialog.SelectedExePath,
+                iwadPath: dialog.SelectedIwadPath,
+                pwadPaths: pwadPaths,
+                skill: dialog.GetSkill(),
+                map: dialog.GetMap());
+        }
+    }
+
     private async void DownloadWadsMenuItem_Click(object? sender, RoutedEventArgs e)
     {
         if (_selectedServer == null) return;
@@ -1410,44 +2065,72 @@ public partial class MainWindow : Window
         UpdateServerList();
     }
 
-    private void ToggleFavoriteMenuItem_Click(object? sender, RoutedEventArgs e)
+    private void ToggleFavoriteAddressMenuItem_Click(object? sender, RoutedEventArgs e)
     {
         if (_selectedServer == null) return;
 
-        var address = $"{_selectedServer.Address}:{_selectedServer.Port}";
-        if (_settings.Settings.FavoriteServers.Contains(address))
+        ToggleExplicitFavorite(ServerRuleUtility.GetServerAddress(_selectedServer));
+    }
+
+    private void ToggleFavoriteNameMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_selectedServer == null) return;
+
+        if (HasExactFavoriteNameRule(_selectedServer))
         {
-            _settings.Settings.FavoriteServers.Remove(address);
-            _logger.Info($"Removed from favorites: {address}");
+            RemoveExactFavoriteNameRule(_selectedServer);
         }
         else
         {
-            _settings.Settings.FavoriteServers.Add(address);
-            _logger.Info($"Added to favorites: {address}");
+            AddExactFavoriteNameRule(_selectedServer);
         }
-        _settings.Save();
-        UpdateServerList();
     }
 
     private void FavoriteButton_Click(object? sender, RoutedEventArgs e)
     {
-        // Get the ServerViewModel from the button's DataContext
-        if (sender is Button button && button.DataContext is ServerViewModel vm)
+        if (sender is not Button button || button.DataContext is not ServerViewModel vm)
         {
-            var address = vm.AddressDisplay;
-            if (_settings.Settings.FavoriteServers.Contains(address))
-            {
-                _settings.Settings.FavoriteServers.Remove(address);
-                _logger.Info($"Removed from favorites: {address}");
-            }
-            else
-            {
-                _settings.Settings.FavoriteServers.Add(address);
-                _logger.Info($"Added to favorites: {address}");
-            }
-            _settings.Save();
-            UpdateServerList();
+            return;
         }
+
+        var server = vm.Server;
+        var address = ServerRuleUtility.GetServerAddress(server);
+
+        if (_settings.Settings.FavoriteServers.Contains(address))
+        {
+            RemoveExplicitFavorite(address);
+            e.Handled = true;
+            return;
+        }
+
+        if (HasExactFavoriteNameRule(server))
+        {
+            RemoveExactFavoriteNameRule(server);
+            e.Handled = true;
+            return;
+        }
+
+        if (GetFavoriteMatch(server).IsRuleFavorite)
+        {
+            ShowFavoriteChoiceMenu(button, server);
+            e.Handled = true;
+            return;
+        }
+
+        switch (_settings.Settings.FavoriteStarClickBehavior)
+        {
+            case FavoriteStarClickBehavior.Address:
+                FavoriteByAddress(server);
+                break;
+            case FavoriteStarClickBehavior.ServerName:
+                AddExactFavoriteNameRule(server);
+                break;
+            default:
+                ShowFavoriteChoiceMenu(button, server);
+                break;
+        }
+
+        e.Handled = true;
     }
 
     private async void AddServerMenuItem_Click(object? sender, RoutedEventArgs e)
@@ -1657,12 +2340,27 @@ public partial class MainWindow : Window
 
     private void ServerContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        // Update the favorite menu item text based on current server state
-        if (_selectedServer != null && ToggleFavoriteMenuItem != null)
+        if (_selectedServer != null)
         {
-            var address = $"{_selectedServer.Address}:{_selectedServer.Port}";
-            var isFavorite = _settings.Settings.FavoriteServers.Contains(address);
-            ToggleFavoriteMenuItem.Header = isFavorite ? "_Remove from Favorites" : "_Add to Favorites";
+            if (ToggleAddressFavoriteMenuItem != null)
+            {
+                var favoriteMatch = GetFavoriteMatch(_selectedServer);
+                ToggleAddressFavoriteMenuItem.Header = favoriteMatch.IsExplicitAddressFavorite
+                    ? "_Remove Address Favorite"
+                    : "Add _Address to Favorites";
+            }
+
+            if (ToggleNameFavoriteMenuItem != null)
+            {
+                var comparableName = ServerRuleUtility.GetComparableServerName(_selectedServer);
+                var hasExactNameRule = HasExactFavoriteNameRule(comparableName);
+                ToggleNameFavoriteMenuItem.Header = hasExactNameRule
+                    ? "Remove Server _Name Favorite"
+                    : GetFavoriteMatch(_selectedServer).IsRuleFavorite
+                        ? "Add Exact Server _Name Favorite"
+                        : "Add Server _Name to Favorites";
+                ToggleNameFavoriteMenuItem.IsEnabled = !string.IsNullOrWhiteSpace(comparableName);
+            }
         }
     }
 
@@ -1673,147 +2371,225 @@ public partial class MainWindow : Window
 
     private async Task LaunchServerAsync(ServerInfo server)
     {
-        var launcher = GameLauncher.Instance;
-
-        // Check if executable is configured
-        if (!launcher.IsExecutableConfigured(server))
+        try
         {
-            var exeType = server.IsTestingServer ? "Testing versions folder" : "Stable executable";
-            _logger.Warning($"Zandronum {exeType} not configured");
+            var launcher = GameLauncher.Instance;
 
-            var dialog = new Window
+            // Check if executable is configured
+            if (!launcher.IsExecutableConfigured(server))
             {
-                Title = "Zandronum Path Not Set",
-                Width = 400,
-                Height = 150,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Content = new StackPanel
+                var exeType = server.IsTestingServer ? "Testing versions folder" : "Stable executable";
+                _logger.Warning($"Zandronum {exeType} not configured");
+
+                var dialog = new Window
                 {
-                    Margin = new Thickness(20),
-                    Spacing = 15,
-                    Children =
+                    Title = "Zandronum Path Not Set",
+                    Width = 400,
+                    Height = 150,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Content = new StackPanel
                     {
-                        new TextBlock { Text = $"Zandronum {exeType} is not configured.\n\nWould you like to configure it now in Settings?", TextWrapping = TextWrapping.Wrap },
-                        new StackPanel
+                        Margin = new Thickness(20),
+                        Spacing = 15,
+                        Children =
                         {
-                            Orientation = Avalonia.Layout.Orientation.Horizontal,
-                            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                            Spacing = 10,
-                            Children =
+                            new TextBlock { Text = $"Zandronum {exeType} is not configured.\n\nWould you like to configure it now in Settings?", TextWrapping = TextWrapping.Wrap },
+                            new StackPanel
                             {
-                                new Button { Content = "Yes", Width = 80 },
-                                new Button { Content = "No", Width = 80 }
+                                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                                Spacing = 10,
+                                Children =
+                                {
+                                    new Button { Content = "Yes", Width = 80 },
+                                    new Button { Content = "No", Width = 80 }
+                                }
                             }
                         }
                     }
-                }
-            };
+                };
 
-            var openSettings = false;
-            if (dialog.Content is StackPanel sp && sp.Children.LastOrDefault() is StackPanel buttons)
-            {
-                if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { openSettings = true; dialog.Close(); };
-                if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
+                var openSettings = false;
+                if (dialog.Content is StackPanel sp && sp.Children.LastOrDefault() is StackPanel buttons)
+                {
+                    if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { openSettings = true; dialog.Close(); };
+                    if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
+                }
+
+                await dialog.ShowDialog(this);
+
+                if (openSettings)
+                {
+                    var settingsDialog = new UnifiedSettingsDialog();
+                    await settingsDialog.ShowDialog(this);
+                    if (settingsDialog.SettingsChanged)
+                    {
+                        LoadSettings(restoreWindowLayout: false);
+                        _wadManager.RefreshCache();
+                        UpdateRowHeights();
+                        UpdateServerList();
+                    }
+                }
+                return;
             }
 
-            await dialog.ShowDialog(this);
-
-            if (openSettings)
+            if (!server.IsTestingServer)
             {
-                var settingsDialog = new UnifiedSettingsDialog();
-                await settingsDialog.ShowDialog(this);
-                if (settingsDialog.SettingsChanged)
+                var requiredStableVersion = launcher.GetRequiredStableVersion(server);
+                if (!string.IsNullOrEmpty(requiredStableVersion) && !launcher.IsStableVersionInstalled(server))
                 {
-                    LoadSettings(restoreWindowLayout: false);
-                    _wadManager.RefreshCache();
-                    UpdateRowHeights();
-                    UpdateServerList();
+                    var installedStableVersion = _stableReleaseService.TryGetInstalledStableVersion(_settings.Settings.ZandronumPath, out var detectedVersion, out _)
+                        ? detectedVersion
+                        : null;
+
+                    var stableVersionMessage = string.IsNullOrEmpty(installedStableVersion)
+                        ? $"Stable version '{requiredStableVersion}' is not installed.\n\nWould you like to download it now into the separate StableVersions folder?"
+                        : _stableReleaseService.CompareStableVersions(requiredStableVersion, installedStableVersion) > 0
+                            ? $"This server requires stable version '{requiredStableVersion}', but your configured stable install is '{installedStableVersion}'.\n\nWould you like to download '{requiredStableVersion}' now into the separate StableVersions folder?"
+                            : $"This server requires older stable version '{requiredStableVersion}', but your configured stable install is '{installedStableVersion}'.\n\nWould you like to download '{requiredStableVersion}' now into the separate StableVersions folder?";
+
+                    var confirmDownload = await ShowConfirmDialogAsync(
+                        "Stable Version Not Found",
+                        stableVersionMessage);
+
+                    if (confirmDownload)
+                    {
+                        if (!await DownloadStableVersionAsync(requiredStableVersion))
+                        {
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        return;
+                    }
                 }
             }
-            return;
-        }
 
-        // For testing servers, check if the specific version is installed
-        if (server.IsTestingServer && !launcher.IsTestingVersionInstalled(server))
-        {
-            var hasArchive = !string.IsNullOrEmpty(server.TestingArchive);
-
-            if (hasArchive)
+            // For testing servers, check if the specific version is installed
+            if (server.IsTestingServer && !launcher.IsTestingVersionInstalled(server))
             {
-                var confirmDownload = await ShowConfirmDialogAsync(
-                    "Testing Version Not Found",
-                    $"Testing version '{server.GameVersion}' is not installed.\n\nWould you like to download it now?");
+                var hasArchive = !string.IsNullOrEmpty(server.TestingArchive);
 
-                if (confirmDownload)
+                if (hasArchive)
                 {
-                    if (!await DownloadTestingVersionAsync(server))
+                    var coreVersion = GameLauncher.ExtractCoreVersion(server.GameVersion);
+                    var confirmDownload = await ShowConfirmDialogAsync(
+                        "Testing Version Not Found",
+                        $"Testing version '{coreVersion}' is not installed.\n\nWould you like to download it now?");
+
+                    if (confirmDownload)
+                    {
+                        if (!await DownloadTestingVersionAsync(server))
+                        {
+                            return;
+                        }
+                    }
+                    else
                     {
                         return;
                     }
                 }
                 else
                 {
+                    _logger.Warning($"Testing version '{GameLauncher.ExtractCoreVersion(server.GameVersion)}' not installed and no download URL available");
                     return;
                 }
             }
-            else
+
+
+            var pendingWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
+            var optionalCandidateWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
+            var downloadBehavior = _settings.Settings.DownloadDialogBehavior;
+            var autoDownloadRequiredWads = downloadBehavior == DownloadDialogBehavior.AutoDownloadRequiredWads;
+            var optionalPwadMode = _settings.Settings.OptionalPwadDownloadMode;
+            var skippedOptionalPwads = GetSkippedOptionalPwadNames();
+            var downloadSelectionConfirmed = false;
+            var hasOptionalServerHashes = server.PWADs.Any(p => p.IsOptional && !string.IsNullOrEmpty(p.Hash));
+            var optionalHashMismatchesByName = new Dictionary<string, GameLauncher.WadHashMismatch>(StringComparer.OrdinalIgnoreCase);
+            var optionalWadsExcludedFromLaunch = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var optionalHashStateChanged = false;
+            var serverWadSourceUrl = Uri.TryCreate(server.Website, UriKind.Absolute, out var serverWebsiteUri)
+                ? serverWebsiteUri.ToString()
+                : null;
+
+            void AddWadsToDictionary(Dictionary<string, WadInfo> target, IEnumerable<WadInfo> wads, bool isOptional)
             {
-                _logger.Warning($"Testing version '{server.GameVersion}' not installed and no download URL available");
-                return;
+                foreach (var wad in wads)
+                {
+                    wad.ServerUrl ??= serverWadSourceUrl;
+                    wad.IsOptional = isOptional;
+                    target[wad.FileName] = wad;
+                }
             }
-        }
 
-        var pendingWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
-        var optionalCandidateWads = new Dictionary<string, WadInfo>(StringComparer.OrdinalIgnoreCase);
-        var optionalPwadMode = _settings.Settings.OptionalPwadDownloadMode;
-        var skippedOptionalPwads = GetSkippedOptionalPwadNames();
-        var downloadSelectionConfirmed = false;
-        var serverWadSourceUrl = Uri.TryCreate(server.Website, UriKind.Absolute, out var serverWebsiteUri)
-            ? serverWebsiteUri.ToString()
-            : null;
+            void AddPendingWads(IEnumerable<WadInfo> wads, bool isOptional = false) =>
+                AddWadsToDictionary(pendingWads, wads, isOptional);
 
-        void AddWadsToDictionary(Dictionary<string, WadInfo> target, IEnumerable<WadInfo> wads, bool isOptional)
-        {
-            foreach (var wad in wads)
+            void AddOptionalCandidateWads(IEnumerable<WadInfo> wads) =>
+                AddWadsToDictionary(optionalCandidateWads, wads, isOptional: true);
+
+            void ResolveSelectedOptionalHashMismatches(IEnumerable<WadInfo> selectedOptionalWads)
             {
-                wad.ServerUrl ??= serverWadSourceUrl;
-                wad.IsOptional = isOptional;
-                target[wad.FileName] = wad;
+                var selectedOptionalNames = selectedOptionalWads
+                    .Select(wad => wad.FileName)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                var selectedMismatches = optionalHashMismatchesByName.Values
+                    .Where(mismatch => selectedOptionalNames.Contains(mismatch.WadName))
+                    .ToList();
+
+                if (selectedMismatches.Count == 0)
+                {
+                    return;
+                }
+
+                AddPendingWads(launcher.ResolveHashMismatches(selectedMismatches), isOptional: true);
+                _wadManager.RefreshCache();
+                optionalHashStateChanged = true;
             }
-        }
-
-        void AddPendingWads(IEnumerable<WadInfo> wads, bool isOptional = false) =>
-            AddWadsToDictionary(pendingWads, wads, isOptional);
-
-        void AddOptionalCandidateWads(IEnumerable<WadInfo> wads) =>
-            AddWadsToDictionary(optionalCandidateWads, wads, isOptional: true);
 
         var (_, missingWads) = launcher.CheckRequiredWads(server);
-        AddPendingWads(launcher.ResolveMissingWadsByHash(missingWads));
-        _wadManager.RefreshCache();
-
-        var hasServerHashes = server.PWADs.Any(p => !p.IsOptional && !string.IsNullOrEmpty(p.Hash));
-        if (hasServerHashes)
+        var (requiredWadsNeedingDownload, requiredCacheChanged) = launcher.ResolveMissingWadsByHash(missingWads);
+        AddPendingWads(requiredWadsNeedingDownload);
+        if (requiredCacheChanged)
         {
-            var hashMismatches = await VerifyWadHashesWithDialogAsync(server);
-            if (hashMismatches.Count > 0)
-            {
-                AddPendingWads(launcher.ResolveHashMismatches(hashMismatches));
-                _wadManager.RefreshCache();
-            }
+            _wadManager.RefreshCache();
         }
 
-        var (_, remainingMissingWads) = launcher.CheckRequiredWads(server);
-        AddPendingWads(launcher.ResolveMissingWadsByHash(remainingMissingWads));
+        var hasHashedPwads = server.PWADs.Any(p => !string.IsNullOrEmpty(p.Hash));
+        if (hasHashedPwads)
+        {
+            var hashMismatches = await VerifyWadHashesWithDialogAsync(server);
+            var requiredHashMismatches = hashMismatches.Where(mismatch => !mismatch.IsOptional).ToList();
+            if (requiredHashMismatches.Count > 0)
+            {
+                AddPendingWads(launcher.ResolveHashMismatches(requiredHashMismatches));
+                _wadManager.RefreshCache();
+            }
+
+            var optionalHashMismatches = hashMismatches.Where(mismatch => mismatch.IsOptional).ToList();
+            foreach (var mismatch in optionalHashMismatches)
+            {
+                optionalHashMismatchesByName[mismatch.WadName] = mismatch;
+                optionalWadsExcludedFromLaunch.Add(mismatch.WadName);
+            }
+
+            if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
+            {
+                AddOptionalCandidateWads(optionalHashMismatches.Select(mismatch => new WadInfo(mismatch.WadName, mismatch.ExpectedHash)));
+            }
+        }
 
         if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
         {
             var (_, missingOptionalWads) = launcher.CheckOptionalWads(server);
-            AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(missingOptionalWads));
-            _wadManager.RefreshCache();
-
-            var (_, remainingOptionalWads) = launcher.CheckOptionalWads(server);
-            AddOptionalCandidateWads(launcher.ResolveMissingWadsByHash(remainingOptionalWads));
+            var (optionalWadsNeedingDownload, optionalCacheChanged) = launcher.ResolveMissingWadsByHash(missingOptionalWads);
+            AddOptionalCandidateWads(optionalWadsNeedingDownload);
+            if (optionalCacheChanged)
+            {
+                _wadManager.RefreshCache();
+            }
         }
 
         if (optionalCandidateWads.Count > 0)
@@ -1823,14 +2599,25 @@ public partial class MainWindow : Window
                 var autoSelectedOptionalWads = optionalCandidateWads.Values
                     .Where(wad => !skippedOptionalPwads.Contains(wad.FileName))
                     .ToList();
-                AddPendingWads(autoSelectedOptionalWads, isOptional: true);
+
+                var autoSelectedMissingOptionalWads = autoSelectedOptionalWads
+                    .Where(wad => !optionalHashMismatchesByName.ContainsKey(wad.FileName))
+                    .ToList();
+
+                AddPendingWads(autoSelectedMissingOptionalWads, isOptional: true);
+                ResolveSelectedOptionalHashMismatches(autoSelectedOptionalWads);
             }
             else if (optionalPwadMode == OptionalPwadDownloadMode.AskEachTime)
             {
+                var requiredSelectionWads = pendingWads.Values.Where(wad => !wad.IsOptional).OrderBy(wad => wad.FileName).ToList();
+                var optionalSelectionWads = optionalCandidateWads.Values.OrderBy(wad => wad.FileName).ToList();
+                _logger.Info($"Showing optional WAD selection dialog for {server.Address}:{server.Port}: {requiredSelectionWads.Count} required, {optionalSelectionWads.Count} optional.");
+
                 var selectionDialog = new OptionalWadSelectionDialog(
-                    pendingWads.Values.Where(wad => !wad.IsOptional).OrderBy(wad => wad.FileName).ToList(),
-                    optionalCandidateWads.Values.OrderBy(wad => wad.FileName).ToList(),
-                    skippedOptionalPwads);
+                    requiredSelectionWads,
+                    optionalSelectionWads,
+                    skippedOptionalPwads,
+                    allowOptionalSelection: true);
 
                 var selectionAccepted = await selectionDialog.ShowDialog<bool>(this);
                 if (!selectionAccepted)
@@ -1839,7 +2626,13 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                AddPendingWads(selectionDialog.SelectedOptionalWads, isOptional: true);
+                var selectedOptionalWads = selectionDialog.SelectedOptionalWads;
+                var selectedMissingOptionalWads = selectedOptionalWads
+                    .Where(wad => !optionalHashMismatchesByName.ContainsKey(wad.FileName))
+                    .ToList();
+
+                AddPendingWads(selectedMissingOptionalWads, isOptional: true);
+                ResolveSelectedOptionalHashMismatches(selectedOptionalWads);
                 downloadSelectionConfirmed = true;
 
                 if (selectionDialog.RememberSkippedSelections)
@@ -1858,15 +2651,32 @@ public partial class MainWindow : Window
 
             if (!downloadSelectionConfirmed)
             {
-                if (!hasRequiredWads && optionalPwadMode == OptionalPwadDownloadMode.AlwaysDownload)
+                if (hasRequiredWads && autoDownloadRequiredWads)
+                {
+                    if (optionalWads.Count > 0)
+                    {
+                        _logger.Info($"Auto-downloading {requiredWads.Count} required WAD(s) and {optionalWads.Count} optional WAD(s) based on settings.");
+                    }
+                    else
+                    {
+                        _logger.Info($"Auto-downloading {requiredWads.Count} required WAD(s) based on settings.");
+                    }
+                }
+                else if (!hasRequiredWads && optionalPwadMode == OptionalPwadDownloadMode.AlwaysDownload)
                 {
                     _logger.Info($"Auto-downloading {optionalWads.Count} optional WAD(s) based on settings.");
                 }
                 else
                 {
-                    shouldDownload = await ShowConfirmDialogAsync(
-                        hasRequiredWads ? "Server WADs" : "Optional WADs",
-                        BuildWadDownloadPromptMessage(requiredWads, optionalWads));
+                    _logger.Info($"Showing WAD review dialog for {server.Address}:{server.Port}: {requiredWads.Count} required, {optionalWads.Count} optional.");
+
+                    var reviewDialog = new OptionalWadSelectionDialog(
+                        requiredWads,
+                        optionalWads,
+                        skippedOptionalPwads: null,
+                        allowOptionalSelection: false);
+
+                    shouldDownload = await reviewDialog.ShowDialog<bool>(this);
                 }
             }
 
@@ -1900,43 +2710,59 @@ public partial class MainWindow : Window
                     _logger.Warning($"Still missing WADs: {string.Join(", ", stillMissing.Take(5).Select(w => w.Name))}");
                     return;
                 }
-
-                if (hasServerHashes)
-                {
-                    var remainingHashMismatches = await VerifyWadHashesWithDialogAsync(server);
-                    if (remainingHashMismatches.Count > 0)
-                    {
-                        _logger.Warning($"Still mismatched WADs: {string.Join(", ", remainingHashMismatches.Take(5).Select(w => w.WadName))}");
-                        return;
-                    }
-                }
             }
         }
 
-        // Prompt for passwords if needed
-        string? connectPassword = null;
-        string? joinPassword = null;
-
-        if (server.IsPassworded)
+        if (hasOptionalServerHashes && optionalHashStateChanged)
         {
-            connectPassword = await PromptForPasswordAsync("Connect Password", "This server requires a password to connect:");
-            if (connectPassword == null) return;
+            optionalWadsExcludedFromLaunch = (await VerifyOptionalWadHashesWithDialogAsync(server))
+                .Select(mismatch => mismatch.WadName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
-        if (server.RequiresJoinPassword)
-        {
-            joinPassword = await PromptForPasswordAsync("Join Password", "This server requires a password to join the game:");
-            if (joinPassword == null) return;
-        }
+            // Prompt for passwords if needed
+            string? connectPassword = null;
+            string? joinPassword = null;
 
-        // Launch the game
-        if (launcher.LaunchGame(server, connectPassword, joinPassword))
+            if (server.IsPassworded)
+            {
+                connectPassword = await PromptForPasswordAsync("Connect Password", "This server requires a password to connect:");
+                if (connectPassword == null) return;
+            }
+
+            if (server.RequiresJoinPassword)
+            {
+                joinPassword = await PromptForPasswordAsync("Join Password", "This server requires a password to join the game:");
+                if (joinPassword == null) return;
+            }
+
+            // Launch the game
+            if (launcher.LaunchGame(server, connectPassword, joinPassword, optionalWadsExcludedFromLaunch))
+            {
+                _logger.Success($"Launched connection to {server.Name}");
+            }
+        }
+        catch (Exception ex)
         {
-            _logger.Success($"Launched connection to {server.Name}");
+            _logger.Exception($"Launch flow failed for {server.Address}:{server.Port}", ex);
+            _logger.Error($"Join failed unexpectedly. See {_logger.LogFilePath} for details.");
         }
     }
 
+    private Task<List<GameLauncher.WadHashMismatch>> VerifyOptionalWadHashesWithDialogAsync(ServerInfo server)
+    {
+        return VerifyWadHashesWithDialogAsync(server, "Verifying Optional PWAD Hashes", GameLauncher.Instance.VerifyOptionalWadHashesAsync);
+    }
+
     private async Task<List<GameLauncher.WadHashMismatch>> VerifyWadHashesWithDialogAsync(ServerInfo server)
+    {
+        return await VerifyWadHashesWithDialogAsync(server, "Verifying WAD Hashes", GameLauncher.Instance.VerifyWadHashesAsync);
+    }
+
+    private async Task<List<GameLauncher.WadHashMismatch>> VerifyWadHashesWithDialogAsync(
+        ServerInfo server,
+        string dialogTitle,
+        Func<ServerInfo, IProgress<GameLauncher.HashVerificationProgress>, CancellationToken, Task<List<GameLauncher.WadHashMismatch>>> verifyAsync)
     {
         var settings = SettingsService.Instance.Settings;
         var concurrency = settings.HashVerificationConcurrency;
@@ -1953,7 +2779,7 @@ public partial class MainWindow : Window
 
         var progressWindow = new Window
         {
-            Title = "Verifying WAD Hashes",
+            Title = dialogTitle,
             Width = 500,
             Height = isConcurrent ? dialogHeight : 180,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -2152,7 +2978,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                mismatches = await GameLauncher.Instance.VerifyWadHashesAsync(server, progress, cts.Token);
+                mismatches = await verifyAsync(server, progress, cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -2174,20 +3000,50 @@ public partial class MainWindow : Window
 
         var progressWindow = new Window
         {
-            Title = $"Downloading {server.GameVersion}",
-            Width = 450,
-            Height = 150,
+            Title = $"Downloading {GameLauncher.ExtractCoreVersion(server.GameVersion)}",
+            Width = 480,
+            Height = 210,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             CanResize = false
         };
 
-        var statusLabel = new TextBlock { Text = "Starting download...", Margin = new Thickness(20, 20, 20, 5) };
-        var progressBar = new ProgressBar { Margin = new Thickness(20, 5, 20, 5), Height = 20, Minimum = 0, Maximum = 100 };
+        var statusLabel = new TextBlock
+        {
+            Text = "Starting download...",
+            Margin = new Thickness(20, 20, 20, 4),
+            FontSize = 14,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var progressDetailLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var speedLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var etaLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var threadsLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 6),
+            Foreground = Brushes.LightGray
+        };
+        var progressBar = new ProgressBar { Margin = new Thickness(20, 4, 20, 5), Height = 20, Minimum = 0, Maximum = 100 };
         var cancelButton = new Button { Content = "Cancel", Width = 100, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center, Margin = new Thickness(0, 10, 0, 0) };
 
         progressWindow.Content = new StackPanel
         {
-            Children = { statusLabel, progressBar, cancelButton }
+            Children = { statusLabel, progressDetailLabel, speedLabel, etaLabel, threadsLabel, progressBar, cancelButton }
         };
 
         var cancelled = false;
@@ -2195,12 +3051,30 @@ public partial class MainWindow : Window
 
         var result = false;
 
-        void OnProgress(object? sender, (string Message, int Progress) e)
+        void OnProgress(object? sender, GameLauncher.TestingBuildDownloadProgress e)
         {
             Dispatcher.UIThread.Post(() =>
             {
-                statusLabel.Text = e.Message;
-                progressBar.Value = e.Progress;
+                statusLabel.Text = e.Status;
+                progressBar.Value = e.ProgressPercent;
+
+                progressDetailLabel.Text = e.TotalBytes > 0
+                    ? $"Transferred: {FormatUtils.FormatBytes(e.DownloadedBytes)} / {FormatUtils.FormatBytes(e.TotalBytes)}"
+                    : e.DownloadedBytes > 0
+                        ? $"Transferred: {FormatUtils.FormatBytes(e.DownloadedBytes)}"
+                        : string.Empty;
+
+                speedLabel.Text = e.BytesPerSecond > 0
+                    ? $"Speed: {FormatUtils.FormatSpeed(e.BytesPerSecond)}"
+                    : string.Empty;
+
+                etaLabel.Text = e.EstimatedTimeRemaining.HasValue
+                    ? $"ETA: {FormatDownloadEta(e.EstimatedTimeRemaining.Value)}"
+                    : string.Empty;
+
+                threadsLabel.Text = e.ThreadCount > 1
+                    ? $"Threads: {e.ThreadCount}"
+                    : string.Empty;
             });
         }
 
@@ -2227,6 +3101,312 @@ public partial class MainWindow : Window
         launcher.DownloadProgress -= OnProgress;
 
         return result && !cancelled;
+    }
+
+    private async Task<bool> DownloadStableVersionAsync(string version)
+    {
+        if (!_stableReleaseService.TryCreateReleaseManifestForVersion(version, out var release, out var errorMessage))
+        {
+            await ShowMessageAsync("Stable Download Unavailable", errorMessage ?? "Automatic stable installs are not available on this platform yet.");
+            return false;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = release.DownloadUrl,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync("Browser Launch Failed", $"Could not open the official Zandronum download in your browser:\n{ex.Message}");
+            return false;
+        }
+
+        var readyToExtract = await ShowConfirmDialogAsync(
+            "Choose Downloaded Archive",
+            $"Your browser should now be downloading the official Zandronum {release.Version} archive. Save it wherever you want.\n\nClick Yes when the download finishes and you are ready to let ZScape extract it.");
+
+        if (!readyToExtract)
+        {
+            return false;
+        }
+
+        var archiveFiles = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = $"Select the downloaded Zandronum {release.Version} archive",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Zandronum Archive") { Patterns = _stableReleaseService.GetArchivePickerPatterns(release) },
+                new FilePickerFileType("All Files") { Patterns = ["*"] }
+            ]
+        });
+
+        if (archiveFiles.Count == 0)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_settings.Settings.ZandronumPath) || !File.Exists(_settings.Settings.ZandronumPath))
+        {
+            await ShowMessageAsync("Stable Path Missing", "ZScape needs your configured stable Zandronum executable before it can place archived stable builds.");
+            return false;
+        }
+
+        var installDirectory = _stableReleaseService.GetArchivedVersionInstallPath(_settings.Settings.ZandronumPath, release.Version);
+        if (string.IsNullOrEmpty(installDirectory))
+        {
+            await ShowMessageAsync("Stable Install Folder Unavailable", "ZScape could not determine where to store the requested stable version.");
+            return false;
+        }
+
+        if (Directory.Exists(installDirectory) && Directory.EnumerateFileSystemEntries(installDirectory).Any())
+        {
+            var confirmed = await ShowConfirmDialogAsync(
+                "Overwrite Existing Folder",
+                $"{installDirectory}\n\nalready exists and is not empty. Replace it with a fresh Zandronum {release.Version} install?");
+
+            if (!confirmed)
+            {
+                return false;
+            }
+
+            try
+            {
+                Directory.Delete(installDirectory, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync("Unable To Replace Folder", $"Could not clear the existing install folder:\n{ex.Message}");
+                return false;
+            }
+        }
+
+        var archivePath = archiveFiles[0].Path.LocalPath;
+        var installResult = await ShowStableInstallProgressAsync(release, archivePath, installDirectory);
+        if (installResult == null)
+        {
+            return false;
+        }
+
+        await ShowMessageAsync(
+            "Zandronum Installed",
+            $"Zandronum {installResult.Version} was installed successfully.\n\nExecutable:\n{installResult.ExecutablePath}");
+
+        return true;
+    }
+
+    private async Task<ZandronumStableReleaseService.InstallResult?> ShowStableInstallProgressAsync(
+        ZandronumStableReleaseService.ReleaseManifest release,
+        string archivePath,
+        string installDirectory)
+    {
+        var progressWindow = new Window
+        {
+            Title = $"Installing Zandronum {release.Version}",
+            Width = 480,
+            Height = 220,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowInTaskbar = false
+        };
+
+        var statusLabel = new TextBlock
+        {
+            Text = "Preparing extraction...",
+            Margin = new Thickness(20, 20, 20, 4),
+            FontSize = 14,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var progressDetailLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var speedLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 2),
+            Foreground = Brushes.LightGray
+        };
+        var etaLabel = new TextBlock
+        {
+            Text = string.Empty,
+            Margin = new Thickness(20, 0, 20, 6),
+            Foreground = Brushes.LightGray
+        };
+        var progressBar = new ProgressBar
+        {
+            Margin = new Thickness(20, 4, 20, 5),
+            Height = 20,
+            Minimum = 0,
+            Maximum = 100
+        };
+        var cancelButton = new Button
+        {
+            Content = "Cancel",
+            Width = 100,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+
+        progressWindow.Content = new StackPanel
+        {
+            Children = { statusLabel, progressDetailLabel, speedLabel, etaLabel, progressBar, cancelButton }
+        };
+
+        using var cts = new CancellationTokenSource();
+        var cancelled = false;
+        Exception? failure = null;
+        ZandronumStableReleaseService.InstallResult? result = null;
+
+        cancelButton.Click += (_, _) =>
+        {
+            cancelled = true;
+            cancelButton.IsEnabled = false;
+            statusLabel.Text = "Cancelling...";
+            cts.Cancel();
+        };
+
+        var progress = new Progress<ZandronumStableReleaseService.InstallProgress>(update =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                statusLabel.Text = update.Status;
+                progressBar.Value = update.ProgressPercent;
+
+                progressDetailLabel.Text = update.TotalBytes > 0
+                    ? $"Transferred: {FormatUtils.FormatBytes(update.DownloadedBytes)} / {FormatUtils.FormatBytes(update.TotalBytes)}"
+                    : update.DownloadedBytes > 0
+                        ? $"Transferred: {FormatUtils.FormatBytes(update.DownloadedBytes)}"
+                        : string.Empty;
+
+                speedLabel.Text = update.BytesPerSecond > 0
+                    ? $"Speed: {FormatUtils.FormatSpeed(update.BytesPerSecond)}"
+                    : string.Empty;
+
+                etaLabel.Text = update.EstimatedTimeRemaining.HasValue
+                    ? $"ETA: {FormatDownloadEta(update.EstimatedTimeRemaining.Value)}"
+                    : string.Empty;
+            });
+        });
+
+        progressWindow.Opened += async (_, _) =>
+        {
+            try
+            {
+                result = await _stableReleaseService.InstallFromArchiveAsync(release, archivePath, installDirectory, progress, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+            finally
+            {
+                if (progressWindow.IsVisible)
+                {
+                    progressWindow.Close();
+                }
+            }
+        };
+
+        await progressWindow.ShowDialog(this);
+
+        if (failure != null)
+        {
+            await ShowMessageAsync("Install Failed", failure.Message);
+            return null;
+        }
+
+        return cancelled ? null : result;
+    }
+
+    private static string FormatDownloadEta(TimeSpan eta)
+    {
+        if (eta < TimeSpan.Zero)
+        {
+            eta = TimeSpan.Zero;
+        }
+
+        if (eta.TotalHours >= 1)
+        {
+            return $"{(int)eta.TotalHours}:{eta.Minutes:D2}:{eta.Seconds:D2}";
+        }
+
+        if (eta.TotalMinutes >= 1)
+        {
+            return $"{(int)eta.TotalMinutes}:{eta.Seconds:D2}";
+        }
+
+        return $"{Math.Max(1, (int)Math.Ceiling(eta.TotalSeconds))}s";
+    }
+
+    private async Task ShowMessageAsync(string title, string message)
+    {
+        var messageLineCount = message.Split('\n').Length;
+        var isLargeMessage = messageLineCount > 4 || message.Length > 160;
+
+        var contentGrid = new Grid
+        {
+            Margin = new Thickness(20),
+            RowDefinitions = new RowDefinitions("*,Auto")
+        };
+
+        var messageBlock = new TextBlock
+        {
+            Text = message,
+            TextWrapping = TextWrapping.WrapWithOverflow
+        };
+
+        var messageScrollViewer = new ScrollViewer
+        {
+            Content = messageBlock,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = isLargeMessage ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled
+        };
+        Grid.SetRow(messageScrollViewer, 0);
+        contentGrid.Children.Add(messageScrollViewer);
+
+        var dialog = new Window
+        {
+            Title = title,
+            Width = isLargeMessage ? 620 : 400,
+            Height = isLargeMessage ? Math.Min(520, 170 + (messageLineCount * 22)) : 170,
+            MinWidth = 400,
+            MinHeight = 170,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = isLargeMessage,
+            Content = contentGrid
+        };
+
+        var button = new Button
+        {
+            Content = "OK",
+            Width = 80,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Margin = new Thickness(0, 15, 0, 0)
+        };
+        button.Click += (_, _) => dialog.Close();
+
+        var buttonPanel = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Margin = new Thickness(0, 15, 0, 0),
+            Children = { button }
+        };
+        Grid.SetRow(buttonPanel, 1);
+        contentGrid.Children.Add(buttonPanel);
+
+        await dialog.ShowDialog(this);
     }
 
     private async Task<string?> PromptForPasswordAsync(string title, string message)
@@ -2277,40 +3457,59 @@ public partial class MainWindow : Window
     private async Task<bool> ShowConfirmDialogAsync(string title, string message)
     {
         var result = false;
+        var messageLineCount = message.Split('\n').Length;
+        var isLargeMessage = messageLineCount > 4 || message.Length > 160;
+
+        var contentGrid = new Grid
+        {
+            Margin = new Thickness(20),
+            RowDefinitions = new RowDefinitions("*,Auto")
+        };
+
+        var messageBlock = new TextBlock
+        {
+            Text = message,
+            TextWrapping = TextWrapping.WrapWithOverflow
+        };
+
+        var messageScrollViewer = new ScrollViewer
+        {
+            Content = messageBlock,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = isLargeMessage ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled
+        };
+        Grid.SetRow(messageScrollViewer, 0);
+        contentGrid.Children.Add(messageScrollViewer);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Spacing = 10,
+            Margin = new Thickness(0, 15, 0, 0),
+            Children =
+            {
+                new Button { Content = "Yes", Width = 80 },
+                new Button { Content = "No", Width = 80 }
+            }
+        };
+        Grid.SetRow(buttons, 1);
+        contentGrid.Children.Add(buttons);
+
         var dialog = new Window
         {
             Title = title,
-            Width = 400,
-            Height = 150,
+            Width = isLargeMessage ? 620 : 400,
+            Height = isLargeMessage ? Math.Min(520, 170 + (messageLineCount * 22)) : 170,
+            MinWidth = 400,
+            MinHeight = 170,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            CanResize = false,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 15,
-                Children =
-                {
-                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    new StackPanel
-                    {
-                        Orientation = Avalonia.Layout.Orientation.Horizontal,
-                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                        Spacing = 10,
-                        Children =
-                        {
-                            new Button { Content = "Yes", Width = 80 },
-                            new Button { Content = "No", Width = 80 }
-                        }
-                    }
-                }
-            }
+            CanResize = isLargeMessage,
+            Content = contentGrid
         };
 
-        if (dialog.Content is StackPanel sp && sp.Children.LastOrDefault() is StackPanel buttons)
-        {
-            if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { result = true; dialog.Close(); };
-            if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
-        }
+        if (buttons.Children[0] is Button yesBtn) yesBtn.Click += (_, _) => { result = true; dialog.Close(); };
+        if (buttons.Children[1] is Button noBtn) noBtn.Click += (_, _) => dialog.Close();
 
         await dialog.ShowDialog(this);
         return result;
@@ -2345,46 +3544,6 @@ public partial class MainWindow : Window
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
         _settings.Save();
-    }
-
-    private static string BuildWadDownloadPromptMessage(List<WadInfo> requiredWads, List<WadInfo> optionalWads)
-    {
-        var lines = new List<string>();
-
-        if (requiredWads.Count > 0)
-        {
-            lines.Add("Required WADs:");
-            lines.AddRange(FormatWadPromptLines(requiredWads));
-        }
-
-        if (optionalWads.Count > 0)
-        {
-            if (lines.Count > 0)
-            {
-                lines.Add(string.Empty);
-            }
-
-            lines.Add("Optional WADs:");
-            lines.AddRange(FormatWadPromptLines(optionalWads));
-        }
-
-        lines.Add(string.Empty);
-        lines.Add("Would you like to download them?");
-        return string.Join("\n", lines);
-    }
-
-    private static IEnumerable<string> FormatWadPromptLines(List<WadInfo> wads)
-    {
-        if (wads.Count == 0)
-            return [];
-
-        var lines = wads.Take(10).Select(wad => $"  - {wad.FileName}").ToList();
-        if (wads.Count > 10)
-        {
-            lines.Add($"  ... and {wads.Count - 10} more");
-        }
-
-        return lines;
     }
 
     #endregion
@@ -2430,7 +3589,9 @@ public partial class MainWindow : Window
 
             if (e.Success)
             {
-                if (StatusLabel != null) StatusLabel.Text = "Ready";
+                _lastRefreshTime = DateTime.Now;
+                if (StatusLabel != null) StatusLabel.Text = $"Finished - {_lastRefreshTime:HH:mm:ss}";
+                UpdateAutoRefreshStatus();
                 UpdateServerList();
             }
             else
@@ -2552,6 +3713,7 @@ public partial class MainWindow : Window
         _notificationService.Dispose();
         _browserService.CancelRefresh();
         _browserService.Dispose();
+        _controller.Dispose();
         base.OnClosing(e);
     }
 
@@ -2666,7 +3828,7 @@ public partial class MainWindow : Window
         return foundPaths;
     }
 
-    private async Task ShowFirstTimeSetupAsync()
+    private async Task<UpdateServerState?> ShowFirstTimeSetupAsync()
     {
         var dialog = new FirstTimeSetupDialog();
         var result = await dialog.ShowDialog<bool?>(this);
@@ -2676,6 +3838,8 @@ public partial class MainWindow : Window
         {
             Environment.Exit(0);
         }
+
+        return dialog.PrefetchedServerState;
     }
 
     private async Task CheckForUpdatesAsync()
@@ -2716,6 +3880,20 @@ public partial class MainWindow : Window
         await CheckServersForAlertsAsync();
     }
 
+    private void UpdateAlertTimerSettings()
+    {
+        var settings = _settings.Settings;
+        _alertTimer.Stop();
+        _alertTimer.Interval = TimeSpan.FromSeconds(settings.AlertCheckIntervalSeconds > 0
+            ? settings.AlertCheckIntervalSeconds
+            : 60);
+
+        if (settings.EnableFavoriteServerAlerts || settings.EnableManualServerAlerts)
+        {
+            _alertTimer.Start();
+        }
+    }
+
     private async Task CheckServersForAlertsAsync()
     {
         var settings = _settings.Settings;
@@ -2724,10 +3902,11 @@ public partial class MainWindow : Window
 
         foreach (var server in _browserService.Servers.Where(s => s.IsOnline && s.IsQueried))
         {
-            var address = $"{server.Address}:{server.Port}";
+            var address = ServerRuleUtility.GetServerAddress(server);
             var hasMinPlayers = server.CurrentPlayers >= minPlayers;
 
-            var isFavorite = settings.FavoriteServers.Contains(address);
+            var favoriteMatch = GetFavoriteMatch(server);
+            var isFavorite = favoriteMatch.IsFavorite;
             var isManual = settings.ManualServers.Any(m => m.FullAddress == address);
 
             if (!isFavorite && !isManual)
@@ -2785,16 +3964,58 @@ public partial class MainWindow : Window
     {
         Dispatcher.UIThread.Post(() =>
         {
-            Activate();
-
-            var address = $"{e.Server.Address}:{e.Server.Port}";
-            var vm = Servers.FirstOrDefault(s => s.AddressDisplay == address);
-            if (vm != null)
+            if (e.IsTestAlert)
             {
-                // Select via built-in highlighting (also fires SelectionChanged)
-                ServerListView.SelectItem(vm);
+                _logger.Info($"Notification test action received: {e.Action} ({e.Server?.Name ?? e.ServerAddress ?? "no server"})");
+            }
+
+            FocusMainWindow();
+
+            if (e.Action == ServerAlertAction.FocusWindow)
+            {
+                return;
+            }
+
+            if (!TrySelectServerFromAlert(e, out var server))
+            {
+                return;
+            }
+
+            if (e.Action == ServerAlertAction.Connect && !e.IsTestAlert)
+            {
+                _ = LaunchServerAsync(server);
             }
         });
+    }
+
+    private void FocusMainWindow()
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+    }
+
+    private bool TrySelectServerFromAlert(ServerAlertEventArgs alertArgs, out ServerInfo server)
+    {
+        server = alertArgs.Server ?? _browserService.Servers.FirstOrDefault(currentServer =>
+            ServerRuleUtility.GetServerAddress(currentServer) == alertArgs.ServerAddress)!;
+
+        if (server == null)
+        {
+            return false;
+        }
+
+        var address = ServerRuleUtility.GetServerAddress(server);
+        var vm = Servers.FirstOrDefault(item => item.AddressDisplay == address);
+        if (vm != null)
+        {
+            ServerListView.SelectItem(vm);
+        }
+
+        return true;
     }
 
     #endregion
@@ -2957,29 +4178,29 @@ internal class ServerAlertState
 public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
 {
     private ServerInfo _server;
-    private bool _isFavorite;
+    private FavoriteMatchResult _favoriteMatch;
     private bool _isManual;
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
-    public ServerViewModel(ServerInfo server, bool isFavorite, bool isManual = false)
+    public ServerViewModel(ServerInfo server, FavoriteMatchResult favoriteMatch, bool isManual = false)
     {
         _server = server;
-        _isFavorite = isFavorite;
+        _favoriteMatch = favoriteMatch;
         _isManual = isManual;
     }
 
     /// <summary>
     /// Update this view model in-place with new server data.
     /// </summary>
-    public void UpdateFrom(ServerInfo server, bool isFavorite, bool isManual)
+    public void UpdateFrom(ServerInfo server, FavoriteMatchResult favoriteMatch, bool isManual)
     {
         _server = server;
 
-        bool favoriteChanged = _isFavorite != isFavorite;
+        bool favoriteChanged = _favoriteMatch != favoriteMatch;
         bool manualChanged = _isManual != isManual;
 
-        _isFavorite = isFavorite;
+        _favoriteMatch = favoriteMatch;
         _isManual = isManual;
 
         // Notify all data-bound properties that may have changed
@@ -3009,8 +4230,13 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     }
 
     public ServerInfo Server => _server;
-    public string FavoriteIcon => _isFavorite ? "\u2605" : "\u2606"; // Filled/empty star
-    public IBrush FavoriteColor => _isFavorite ? Brushes.Gold : Brushes.Gray;
+    public string FavoriteIcon => _favoriteMatch.IsFavorite ? "\u2605" : "\u2606";
+    public IBrush FavoriteColor => _favoriteMatch.Kind switch
+    {
+        FavoriteMatchKind.ExplicitAddress => Brushes.Gold,
+        FavoriteMatchKind.NameRule => Brushes.LightSteelBlue,
+        _ => Brushes.Gray
+    };
     public bool ShowFavoritesColumn => SettingsService.Instance.Settings.ShowFavoritesColumn;
     public bool IsPassworded => _server.IsPassworded;
     public int RowHeight => SettingsService.Instance.Settings.ServerListRowHeight;
@@ -3049,9 +4275,9 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     public string AddressDisplay => $"{_server.Address}:{_server.Port}";
     public int CurrentPlayers => _server.CurrentPlayers;
     public int BotCount => _server.BotCount;
-    public bool IsFavorite => _isFavorite;
+    public bool IsFavorite => _favoriteMatch.IsFavorite;
     public bool IsManualServer => _isManual;
-    public bool IsPinned => _isFavorite || _isManual;
+    public bool IsPinned => _favoriteMatch.IsFavorite || _isManual;
 
     // Row coloring based on server state
     public IBrush RowBackground
@@ -3059,11 +4285,11 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
         get
         {
             if (_server.IsFull)
-                return new SolidColorBrush(Color.FromRgb(60, 45, 45)); // Dark red tint
+                return ThemeService.GetBrush("RowFullBrush", "#3C2D2D");
             if (_server.IsEmpty)
-                return new SolidColorBrush(Color.FromRgb(45, 45, 50)); // Slightly dimmer
+                return ThemeService.GetBrush("RowEmptyBrush", "#2D2D32");
             if (_server.IsPassworded)
-                return new SolidColorBrush(Color.FromRgb(60, 55, 40)); // Dark yellow tint
+                return ThemeService.GetBrush("RowPasswordedBrush", "#3C3728");
             return Brushes.Transparent;
         }
     }

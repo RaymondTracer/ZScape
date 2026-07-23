@@ -3,20 +3,41 @@
         x:Class="ZScape.Views.OptionalWadSelectionDialog"
         x:CompileBindings="False"
         Title="Server WAD Downloads"
-        Width="720" Height="420"
+        Width="820" Height="560"
         WindowStartupLocation="CenterOwner"
-        MinWidth="560" MinHeight="320"
+        MinWidth="640" MinHeight="360"
         ExtendClientAreaToDecorationsHint="False">
 
-    <Grid Margin="12" RowDefinitions="Auto,*,Auto,Auto">
+    <Grid Margin="12" RowDefinitions="Auto,Auto,*,Auto,Auto">
         <TextBlock Grid.Row="0"
+                   x:Name="DescriptionTextBlock"
                    Text="Required WADs will always be downloaded. Optional WADs can be unchecked to skip for this join."
                    TextWrapping="Wrap" Margin="0,0,0,10"/>
 
-        <Border Grid.Row="1" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="2">
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,10">
+            <TextBlock x:Name="SummaryTextBlock"
+                       VerticalAlignment="Center"
+                       Foreground="Gray"/>
+            <Button Grid.Column="1"
+                    x:Name="SelectAllOptionalButton"
+                    Content="Select All Optional"
+                    Width="140"
+                    Height="28"
+                    Margin="12,0,0,0"
+                    Click="SelectAllOptionalButton_Click"/>
+            <Button Grid.Column="2"
+                    x:Name="ClearOptionalButton"
+                    Content="Clear Optional"
+                    Width="110"
+                    Height="28"
+                    Margin="8,0,0,0"
+                    Click="ClearOptionalButton_Click"/>
+        </Grid>
+
+        <Border Grid.Row="2" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="2">
             <Grid RowDefinitions="Auto,*">
                 <Border Grid.Row="0" Background="#252526" BorderBrush="#3F3F46" BorderThickness="0,0,0,1">
-                    <Grid ColumnDefinitions="90,100,*,160" Height="30">
+                    <Grid ColumnDefinitions="90,100,*,170" Height="30">
                         <TextBlock Grid.Column="0" Text="Download" VerticalAlignment="Center" Margin="8,0" FontWeight="SemiBold"/>
                         <TextBlock Grid.Column="1" Text="Type" VerticalAlignment="Center" Margin="8,0" FontWeight="SemiBold"/>
                         <TextBlock Grid.Column="2" Text="File" VerticalAlignment="Center" Margin="8,0" FontWeight="SemiBold"/>
@@ -28,16 +49,27 @@
                     <ItemsControl x:Name="SelectionItemsControl">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="#1E1E1E" BorderBrush="#3F3F46" BorderThickness="0,0,0,1" Height="30">
-                                    <Grid ColumnDefinitions="90,100,*,160">
+                                <Border Background="#1E1E1E" BorderBrush="#3F3F46" BorderThickness="0,0,0,1" Height="34">
+                                    <Grid ColumnDefinitions="90,100,*,170">
                                         <CheckBox Grid.Column="0"
                                                   IsChecked="{Binding IsSelected}"
                                                   IsEnabled="{Binding CanChangeSelection}"
                                                   HorizontalAlignment="Center"
                                                   VerticalAlignment="Center"/>
                                         <TextBlock Grid.Column="1" Text="{Binding TypeLabel}" VerticalAlignment="Center" Margin="8,0"/>
-                                        <TextBlock Grid.Column="2" Text="{Binding FileName}" VerticalAlignment="Center" Margin="8,0" TextTrimming="CharacterEllipsis"/>
-                                        <TextBlock Grid.Column="3" Text="{Binding DetailLabel}" VerticalAlignment="Center" Margin="8,0" TextTrimming="CharacterEllipsis" Foreground="Gray"/>
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding FileName}"
+                                                   VerticalAlignment="Center"
+                                                   Margin="8,0"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding FileName}"/>
+                                        <TextBlock Grid.Column="3"
+                                                   Text="{Binding DetailLabel}"
+                                                   VerticalAlignment="Center"
+                                                   Margin="8,0"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Foreground="Gray"
+                                                   ToolTip.Tip="{Binding DetailLabel}"/>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
@@ -47,12 +79,12 @@
             </Grid>
         </Border>
 
-        <CheckBox Grid.Row="2" x:Name="RememberSkippedCheckBox"
+        <CheckBox Grid.Row="3" x:Name="RememberSkippedCheckBox"
                   Content="Remember unchecked optional PWAD names in Settings"
                   Margin="0,10,0,0"/>
 
-        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,12,0,0">
-            <Button x:Name="ContinueButton" Content="Continue" Width="90" Height="28" Click="ContinueButton_Click"/>
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,12,0,0">
+            <Button x:Name="ContinueButton" Content="Continue" MinWidth="180" Height="28" Click="ContinueButton_Click"/>
             <Button Content="Cancel" Width="90" Height="28" Click="CancelButton_Click"/>
         </StackPanel>
     </Grid>

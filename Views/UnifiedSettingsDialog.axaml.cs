@@ -14,6 +14,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using ZScape.Controls;
+using ZScape.Models;
 using ZScape.Services;
 using ZScape.Utilities;
 
@@ -26,6 +27,8 @@ public partial class UnifiedSettingsDialog : Window
     private readonly SettingsService _settingsService;
     private AppSettings Settings => _settingsService.Settings;
     private ObservableCollection<string> _favorites = new();
+    private ObservableCollection<TextMatchRule> _favoriteNameRules = new();
+    private ObservableCollection<TextMatchRule> _hiddenServerRules = new();
     private ObservableCollection<string> _manualServers = new();
     private ObservableCollection<string> _wadPaths = new();
     private ObservableCollection<string> _downloadSites = new();
@@ -33,6 +36,7 @@ public partial class UnifiedSettingsDialog : Window
     private ObservableCollection<DomainThreadDisplay> _domainConfigs = new();
     private string _lastValidDownloadPath = string.Empty;
     private bool _updatingIntervalControls;
+    private bool _updatingAutoRefreshControls;
 
     public bool SettingsChanged { get; private set; }
     public event EventHandler<int>? RowHeightPreviewChanged;
@@ -43,6 +47,8 @@ public partial class UnifiedSettingsDialog : Window
         _settingsService = SettingsService.Instance;
         
         CategoryList.SelectionChanged += CategoryList_SelectionChanged;
+        FavoriteNameRulesListBox.SelectionChanged += (_, _) => UpdateFavoriteRuleButtons();
+        HiddenServerRulesListBox.SelectionChanged += (_, _) => UpdateFavoriteRuleButtons();
         WadPathsListBox.SelectionChanged += WadPathsListBox_SelectionChanged;
         SkippedOptionalPwadsListBox.SelectionChanged += SkippedOptionalPwadsListBox_SelectionChanged;
         WadDownloadPathTextBox.TextChanged += WadDownloadPathTextBox_TextChanged;
@@ -55,6 +61,12 @@ public partial class UnifiedSettingsDialog : Window
         UpdateIntervalPresets.SelectionChanged += UpdateIntervalPresets_SelectionChanged;
         UpdateCheckIntervalValue.ValueChanged += (_, _) => UpdateInterval_ManualChanged();
         UpdateCheckIntervalUnit.SelectionChanged += (_, _) => UpdateInterval_ManualChanged();
+
+        // Sync full and favorites auto-refresh controls
+        AutoRefreshIntervalNumeric.ValueChanged += (_, newValue) => AutoRefreshIntervalNumeric_ValueChanged(newValue);
+        AutoRefreshFavoritesIntervalNumeric.ValueChanged += (_, newValue) => AutoRefreshFavoritesIntervalNumeric_ValueChanged(newValue);
+        UseFullRefreshTimerForFavoritesCheckBox.IsCheckedChanged += (_, _) =>
+            UseFullRefreshTimerForFavoritesChanged(UseFullRefreshTimerForFavoritesCheckBox.IsChecked == true);
         
         // Handle Escape/Enter keys
         KeyDown += OnDialogKeyDown;
@@ -119,38 +131,6 @@ public partial class UnifiedSettingsDialog : Window
             }
         });
 
-        // DL Lim (editable number)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "DL Lim",
-            Width = 50,
-            MinWidth = 35,
-            IsFixedWidth = true,
-            CellContentFactory = () =>
-            {
-                var tb = new TextBox();
-                tb.Classes.Add("editCellNum");
-                tb.Bind(TextBox.TextProperty, new Binding("MaxConcurrentDownloads") { Mode = BindingMode.TwoWay });
-                return tb;
-            }
-        });
-
-        // Initial (editable number)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "Initial",
-            Width = 50,
-            MinWidth = 35,
-            IsFixedWidth = true,
-            CellContentFactory = () =>
-            {
-                var tb = new TextBox();
-                tb.Classes.Add("editCellNum");
-                tb.Bind(TextBox.TextProperty, new Binding("InitialThreads") { Mode = BindingMode.TwoWay });
-                return tb;
-            }
-        });
-
         // Seg KB (editable number)
         DomainListView.AddColumn(new ListViewColumn
         {
@@ -183,45 +163,6 @@ public partial class UnifiedSettingsDialog : Window
                 };
                 cb.Bind(CheckBox.IsCheckedProperty, new Binding("AdaptiveLearning") { Mode = BindingMode.TwoWay });
                 return cb;
-            }
-        });
-
-        // OK count (read-only)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "OK",
-            BindingPath = "SuccessCount",
-            Width = 40,
-            MinWidth = 30,
-            IsFixedWidth = true,
-            ContentAlignment = HorizontalAlignment.Center,
-            Foreground = new SolidColorBrush(Color.Parse("#888"))
-        });
-
-        // Fail count (read-only)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "Fail",
-            BindingPath = "FailureCount",
-            Width = 40,
-            MinWidth = 30,
-            IsFixedWidth = true,
-            ContentAlignment = HorizontalAlignment.Center,
-            Foreground = new SolidColorBrush(Color.Parse("#888"))
-        });
-
-        // Notes (editable text, star-sized)
-        DomainListView.AddColumn(new ListViewColumn
-        {
-            Header = "Notes",
-            IsStar = true,
-            MinWidth = 60,
-            CellContentFactory = () =>
-            {
-                var tb = new TextBox { Margin = new Thickness(2, 0, 4, 0) };
-                tb.Classes.Add("editCell");
-                tb.Bind(TextBox.TextProperty, new Binding("Notes") { Mode = BindingMode.TwoWay });
-                return tb;
             }
         });
 
@@ -299,11 +240,20 @@ public partial class UnifiedSettingsDialog : Window
         // Favorites
         _favorites = new ObservableCollection<string>(Settings.FavoriteServers);
         FavoritesListBox.ItemsSource = _favorites;
+        _favoriteNameRules = new ObservableCollection<TextMatchRule>(Settings.FavoriteServerNameRules.Select(rule => rule.Clone()));
+        FavoriteNameRulesListBox.ItemsSource = _favoriteNameRules;
+        _hiddenServerRules = new ObservableCollection<TextMatchRule>(Settings.HiddenServerNameRules.Select(rule => rule.Clone()));
+        HiddenServerRulesListBox.ItemsSource = _hiddenServerRules;
         _manualServers = new ObservableCollection<string>(Settings.ManualServers.Select(m => m.FullAddress));
         ManualServersListBox.ItemsSource = _manualServers;
+        PopulateFavoriteStarClickBehaviorComboBox();
+        UpdateFavoriteRuleButtons();
         
         EnableFavoriteAlertsCheckBox.IsChecked = Settings.EnableFavoriteServerAlerts;
         EnableManualAlertsCheckBox.IsChecked = Settings.EnableManualServerAlerts;
+        PopulateAlertNotificationModeComboBox();
+        PopulateCustomNotificationCornerComboBox();
+        CustomNotificationDurationNumeric.Value = Settings.CustomNotificationDurationSeconds;
         ShowFavoritesColumnCheckBox.IsChecked = Settings.ShowFavoritesColumn;
         AlertMinPlayersNumeric.Value = Settings.AlertMinPlayers;
         AlertIntervalNumeric.Value = Settings.AlertCheckIntervalSeconds;
@@ -361,8 +311,7 @@ public partial class UnifiedSettingsDialog : Window
         QueryRetryDelayMsNumeric.Value = Settings.QueryRetryDelayMs;
         MasterServerRetryCountNumeric.Value = Settings.MasterServerRetryCount;
         ConsecutiveFailuresNumeric.Value = Settings.ConsecutiveFailuresBeforeOffline;
-        AutoRefreshIntervalNumeric.Value = Settings.AutoRefreshIntervalMinutes;
-        AutoRefreshFavoritesOnlyCheckBox.IsChecked = Settings.AutoRefreshFavoritesOnly;
+        LoadAutoRefreshSettings();
 
         // Updates
         UpdateBehaviorComboBox.SelectedIndex = (int)Settings.UpdateBehavior;
@@ -396,6 +345,36 @@ public partial class UnifiedSettingsDialog : Window
         OptionalPwadModeComboBox.SelectedIndex = AppConstants.OptionalPwadDownloadModeLabels.GetIndex(Settings.OptionalPwadDownloadMode);
     }
 
+    private void PopulateAlertNotificationModeComboBox()
+    {
+        AlertNotificationModeComboBox.Items.Clear();
+        foreach (var option in AppConstants.NotificationDisplayModeLabels.Options)
+        {
+            AlertNotificationModeComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
+        }
+        AlertNotificationModeComboBox.SelectedIndex = AppConstants.NotificationDisplayModeLabels.GetIndex(Settings.AlertNotificationMode);
+    }
+
+    private void PopulateCustomNotificationCornerComboBox()
+    {
+        CustomNotificationCornerComboBox.Items.Clear();
+        foreach (var option in AppConstants.CustomNotificationCornerLabels.Options)
+        {
+            CustomNotificationCornerComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
+        }
+        CustomNotificationCornerComboBox.SelectedIndex = AppConstants.CustomNotificationCornerLabels.GetIndex(Settings.CustomNotificationCorner);
+    }
+
+    private void PopulateFavoriteStarClickBehaviorComboBox()
+    {
+        FavoriteStarClickBehaviorComboBox.Items.Clear();
+        foreach (var option in AppConstants.FavoriteStarClickBehaviorLabels.Options)
+        {
+            FavoriteStarClickBehaviorComboBox.Items.Add(new ComboBoxItem { Content = option.Label });
+        }
+        FavoriteStarClickBehaviorComboBox.SelectedIndex = AppConstants.FavoriteStarClickBehaviorLabels.GetIndex(Settings.FavoriteStarClickBehavior);
+    }
+
     private void LoadDomainConfigs()
     {
         _domainConfigs.Clear();
@@ -405,13 +384,8 @@ public partial class UnifiedSettingsDialog : Window
             display.InitializeFromSettings(
                 config.Key,
                 config.Value.MaxThreads,
-                config.Value.MaxConcurrentDownloads,
-                config.Value.InitialThreads,
                 config.Value.MinSegmentSizeKb,
                 config.Value.AdaptiveLearning,
-                config.Value.SuccessCount,
-                config.Value.FailureCount,
-                config.Value.Notes ?? "",
                 _domainConfigs.Count
             );
             _domainConfigs.Add(display);
@@ -534,6 +508,89 @@ public partial class UnifiedSettingsDialog : Window
         }
     }
 
+    private void LoadAutoRefreshSettings()
+    {
+        _updatingAutoRefreshControls = true;
+        try
+        {
+            AutoRefreshIntervalNumeric.Value = NormalizeAutoRefreshInterval(Settings.AutoRefreshIntervalMinutes);
+            UseFullRefreshTimerForFavoritesCheckBox.IsChecked = Settings.AutoRefreshFavoritesUseFullRefreshTimer;
+            AutoRefreshFavoritesIntervalNumeric.Value = Settings.AutoRefreshFavoritesUseFullRefreshTimer
+                ? AutoRefreshIntervalNumeric.Value
+                : NormalizeAutoRefreshInterval(Settings.AutoRefreshFavoritesIntervalMinutes);
+            AutoRefreshFavoritesOnlyCheckBox.IsChecked = Settings.AutoRefreshFavoritesOnly;
+        }
+        finally
+        {
+            _updatingAutoRefreshControls = false;
+        }
+    }
+
+    private void AutoRefreshIntervalNumeric_ValueChanged(int newValue)
+    {
+        if (_updatingAutoRefreshControls)
+        {
+            return;
+        }
+
+        if (UseFullRefreshTimerForFavoritesCheckBox.IsChecked == true)
+        {
+            _updatingAutoRefreshControls = true;
+            try
+            {
+                AutoRefreshFavoritesIntervalNumeric.Value = newValue;
+            }
+            finally
+            {
+                _updatingAutoRefreshControls = false;
+            }
+        }
+    }
+
+    private void AutoRefreshFavoritesIntervalNumeric_ValueChanged(int newValue)
+    {
+        if (_updatingAutoRefreshControls)
+        {
+            return;
+        }
+
+        if (UseFullRefreshTimerForFavoritesCheckBox.IsChecked == true && newValue != AutoRefreshIntervalNumeric.Value)
+        {
+            _updatingAutoRefreshControls = true;
+            try
+            {
+                UseFullRefreshTimerForFavoritesCheckBox.IsChecked = false;
+            }
+            finally
+            {
+                _updatingAutoRefreshControls = false;
+            }
+        }
+    }
+
+    private void UseFullRefreshTimerForFavoritesChanged(bool isChecked)
+    {
+        if (_updatingAutoRefreshControls || !isChecked)
+        {
+            return;
+        }
+
+        _updatingAutoRefreshControls = true;
+        try
+        {
+            AutoRefreshFavoritesIntervalNumeric.Value = AutoRefreshIntervalNumeric.Value;
+        }
+        finally
+        {
+            _updatingAutoRefreshControls = false;
+        }
+    }
+
+    private static int NormalizeAutoRefreshInterval(int intervalMinutes)
+    {
+        return intervalMinutes < 1 ? 5 : intervalMinutes;
+    }
+
     private void SaveSettings()
     {
         // General
@@ -547,6 +604,8 @@ public partial class UnifiedSettingsDialog : Window
 
         // Favorites
         Settings.FavoriteServers = _favorites.ToHashSet();
+        Settings.FavoriteServerNameRules = NormalizeTextMatchRules(_favoriteNameRules);
+        Settings.HiddenServerNameRules = NormalizeTextMatchRules(_hiddenServerRules);
         Settings.ManualServers = _manualServers.Select(addr => {
             var parts = addr.Split(':');
             return new ManualServerEntry {
@@ -554,8 +613,12 @@ public partial class UnifiedSettingsDialog : Window
                 Port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 10666
             };
         }).ToList();
+        Settings.FavoriteStarClickBehavior = AppConstants.FavoriteStarClickBehaviorLabels.GetValue(FavoriteStarClickBehaviorComboBox.SelectedIndex);
         Settings.EnableFavoriteServerAlerts = EnableFavoriteAlertsCheckBox.IsChecked ?? false;
         Settings.EnableManualServerAlerts = EnableManualAlertsCheckBox.IsChecked ?? false;
+        Settings.AlertNotificationMode = AppConstants.NotificationDisplayModeLabels.GetValue(AlertNotificationModeComboBox.SelectedIndex);
+        Settings.CustomNotificationCorner = AppConstants.CustomNotificationCornerLabels.GetValue(CustomNotificationCornerComboBox.SelectedIndex);
+        Settings.CustomNotificationDurationSeconds = CustomNotificationDurationNumeric.Value;
         Settings.ShowFavoritesColumn = ShowFavoritesColumnCheckBox.IsChecked ?? false;
         Settings.AlertMinPlayers = AlertMinPlayersNumeric.Value;
         Settings.AlertCheckIntervalSeconds = AlertIntervalNumeric.Value;
@@ -610,6 +673,10 @@ public partial class UnifiedSettingsDialog : Window
         Settings.MasterServerRetryCount = MasterServerRetryCountNumeric.Value;
         Settings.ConsecutiveFailuresBeforeOffline = ConsecutiveFailuresNumeric.Value;
         Settings.AutoRefreshIntervalMinutes = AutoRefreshIntervalNumeric.Value;
+        Settings.AutoRefreshFavoritesUseFullRefreshTimer = UseFullRefreshTimerForFavoritesCheckBox.IsChecked ?? true;
+        Settings.AutoRefreshFavoritesIntervalMinutes = Settings.AutoRefreshFavoritesUseFullRefreshTimer
+            ? AutoRefreshIntervalNumeric.Value
+            : AutoRefreshFavoritesIntervalNumeric.Value;
         Settings.AutoRefreshFavoritesOnly = AutoRefreshFavoritesOnlyCheckBox.IsChecked ?? false;
 
         // Updates
@@ -619,6 +686,12 @@ public partial class UnifiedSettingsDialog : Window
 
         _settingsService.Save();
         SettingsChanged = true;
+    }
+
+    private void TestCustomNotificationButton_Click(object? sender, RoutedEventArgs e)
+    {
+        var selectedCorner = AppConstants.CustomNotificationCornerLabels.GetValue(CustomNotificationCornerComboBox.SelectedIndex);
+        NotificationService.Instance.ShowCustomPreviewNotification(this, selectedCorner, CustomNotificationDurationNumeric.Value);
     }
 
     private void SaveDomainConfigs()
@@ -634,14 +707,8 @@ public partial class UnifiedSettingsDialog : Window
             domainSettings[domain] = new DomainSettings
             {
                 MaxThreads = item.MaxThreads,
-                MaxConcurrentDownloads = item.MaxConcurrentDownloads,
-                InitialThreads = item.InitialThreads,
                 MinSegmentSizeKb = item.MinSegmentSizeKb,
-                AdaptiveLearning = item.AdaptiveLearning,
-                SuccessCount = item.SuccessCount,
-                FailureCount = item.FailureCount,
-                Notes = string.IsNullOrWhiteSpace(item.Notes) ? null : item.Notes,
-                LastUpdated = DateTime.UtcNow
+                AdaptiveLearning = item.AdaptiveLearning
             };
         }
         SettingsService.Instance.SaveDomainSettings();
@@ -733,6 +800,80 @@ public partial class UnifiedSettingsDialog : Window
         }
     }
 
+    private async void AddFavoriteNameRule_Click(object? sender, RoutedEventArgs e)
+    {
+        var rule = await ShowTextMatchRuleDialogAsync("Add Favorite Name Rule");
+        if (rule != null)
+        {
+            _favoriteNameRules.Add(rule);
+        }
+    }
+
+    private async void EditFavoriteNameRule_Click(object? sender, RoutedEventArgs e)
+    {
+        if (FavoriteNameRulesListBox.SelectedItem is not TextMatchRule rule)
+        {
+            return;
+        }
+
+        var editedRule = await ShowTextMatchRuleDialogAsync("Edit Favorite Name Rule", rule);
+        if (editedRule == null)
+        {
+            return;
+        }
+
+        var index = _favoriteNameRules.IndexOf(rule);
+        if (index >= 0)
+        {
+            _favoriteNameRules[index] = editedRule;
+        }
+    }
+
+    private void RemoveFavoriteNameRule_Click(object? sender, RoutedEventArgs e)
+    {
+        if (FavoriteNameRulesListBox.SelectedItem is TextMatchRule rule)
+        {
+            _favoriteNameRules.Remove(rule);
+        }
+    }
+
+    private async void AddHiddenServerRule_Click(object? sender, RoutedEventArgs e)
+    {
+        var rule = await ShowTextMatchRuleDialogAsync("Add Hidden Server Rule");
+        if (rule != null)
+        {
+            _hiddenServerRules.Add(rule);
+        }
+    }
+
+    private async void EditHiddenServerRule_Click(object? sender, RoutedEventArgs e)
+    {
+        if (HiddenServerRulesListBox.SelectedItem is not TextMatchRule rule)
+        {
+            return;
+        }
+
+        var editedRule = await ShowTextMatchRuleDialogAsync("Edit Hidden Server Rule", rule);
+        if (editedRule == null)
+        {
+            return;
+        }
+
+        var index = _hiddenServerRules.IndexOf(rule);
+        if (index >= 0)
+        {
+            _hiddenServerRules[index] = editedRule;
+        }
+    }
+
+    private void RemoveHiddenServerRule_Click(object? sender, RoutedEventArgs e)
+    {
+        if (HiddenServerRulesListBox.SelectedItem is TextMatchRule rule)
+        {
+            _hiddenServerRules.Remove(rule);
+        }
+    }
+
     private void ClearFavorites_Click(object? sender, RoutedEventArgs e)
     {
         _favorites.Clear();
@@ -764,6 +905,50 @@ public partial class UnifiedSettingsDialog : Window
         {
             _manualServers.Remove(server);
         }
+    }
+
+    private void UpdateFavoriteRuleButtons()
+    {
+        EditFavoriteNameRuleButton.IsEnabled = FavoriteNameRulesListBox.SelectedItem is TextMatchRule;
+        RemoveFavoriteNameRuleButton.IsEnabled = FavoriteNameRulesListBox.SelectedItem is TextMatchRule;
+        EditHiddenServerRuleButton.IsEnabled = HiddenServerRulesListBox.SelectedItem is TextMatchRule;
+        RemoveHiddenServerRuleButton.IsEnabled = HiddenServerRulesListBox.SelectedItem is TextMatchRule;
+    }
+
+    private async Task<TextMatchRule?> ShowTextMatchRuleDialogAsync(string title, TextMatchRule? existingRule = null)
+    {
+        var dialog = new TextMatchRuleDialog(title, existingRule);
+        await dialog.ShowDialog(this);
+        return dialog.Confirmed ? dialog.Rule.Clone() : null;
+    }
+
+    private static List<TextMatchRule> NormalizeTextMatchRules(IEnumerable<TextMatchRule> rules)
+    {
+        var normalizedRules = new List<TextMatchRule>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rule in rules)
+        {
+            var pattern = rule.Pattern?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                continue;
+            }
+
+            var key = $"{rule.Mode}:{pattern}";
+            if (!seen.Add(key))
+            {
+                continue;
+            }
+
+            normalizedRules.Add(new TextMatchRule
+            {
+                Pattern = pattern,
+                Mode = rule.Mode
+            });
+        }
+
+        return normalizedRules;
     }
 
     private async void AddWadPath_Click(object? sender, RoutedEventArgs e)
@@ -1024,13 +1209,8 @@ public partial class UnifiedSettingsDialog : Window
         display.InitializeFromSettings(
             "example.com",
             0,       // MaxThreads: 0 = use global default
-            0,       // MaxConcurrentDownloads: 0 = unlimited
-            2,       // InitialThreads
             256,     // MinSegmentSizeKb
             true,    // AdaptiveLearning
-            0,       // SuccessCount
-            0,       // FailureCount
-            "",      // Notes
             _domainConfigs.Count  // Index
         );
         _domainConfigs.Add(display);
@@ -1145,13 +1325,8 @@ public partial class UnifiedSettingsDialog : Window
     {
         private string _domain = "";
         private int _maxThreads;
-        private int _maxConcurrentDownloads;
-        private int _initialThreads;
         private int _minSegmentSizeKb;
         private bool _adaptiveLearning;
-        private int _successCount;
-        private int _failureCount;
-        private string _notes = "";
         private int _index;
         
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
@@ -1159,19 +1334,13 @@ public partial class UnifiedSettingsDialog : Window
         /// <summary>
         /// Initializes all fields from settings without triggering property setters' side effects.
         /// </summary>
-        public void InitializeFromSettings(string domain, int maxThreads, int maxConcurrentDownloads,
-            int initialThreads, int minSegmentSizeKb, bool adaptiveLearning,
-            int successCount, int failureCount, string notes, int index)
+        public void InitializeFromSettings(string domain, int maxThreads,
+            int minSegmentSizeKb, bool adaptiveLearning, int index)
         {
             _domain = domain;
             _maxThreads = maxThreads;
-            _maxConcurrentDownloads = maxConcurrentDownloads;
-            _initialThreads = initialThreads;
             _minSegmentSizeKb = minSegmentSizeKb;
             _adaptiveLearning = adaptiveLearning;
-            _successCount = successCount;
-            _failureCount = failureCount;
-            _notes = notes;
             _index = index;
         }
         
@@ -1188,19 +1357,6 @@ public partial class UnifiedSettingsDialog : Window
             set { _maxThreads = Math.Max(0, value); OnPropertyChanged(nameof(MaxThreads)); }
         }
         
-        /// <summary>Max concurrent downloads from this domain. 0 = unlimited.</summary>
-        public int MaxConcurrentDownloads
-        {
-            get => _maxConcurrentDownloads;
-            set { _maxConcurrentDownloads = Math.Max(0, value); OnPropertyChanged(nameof(MaxConcurrentDownloads)); }
-        }
-        
-        public int InitialThreads
-        {
-            get => _initialThreads;
-            set { _initialThreads = Math.Clamp(value, 1, 32); OnPropertyChanged(nameof(InitialThreads)); }
-        }
-        
         public int MinSegmentSizeKb
         {
             get => _minSegmentSizeKb;
@@ -1211,24 +1367,6 @@ public partial class UnifiedSettingsDialog : Window
         {
             get => _adaptiveLearning;
             set { _adaptiveLearning = value; OnPropertyChanged(nameof(AdaptiveLearning)); }
-        }
-        
-        public int SuccessCount
-        {
-            get => _successCount;
-            set { _successCount = value; OnPropertyChanged(nameof(SuccessCount)); }
-        }
-        
-        public int FailureCount
-        {
-            get => _failureCount;
-            set { _failureCount = value; OnPropertyChanged(nameof(FailureCount)); }
-        }
-        
-        public string Notes
-        {
-            get => _notes;
-            set { _notes = value ?? ""; OnPropertyChanged(nameof(Notes)); }
         }
         
         public int Index

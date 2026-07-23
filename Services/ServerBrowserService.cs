@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Net;
 using System.Threading.Channels;
 using ZScape.Models;
 using ZScape.Protocol;
+using ZScape.Utilities;
 
 namespace ZScape.Services;
 
@@ -30,7 +32,7 @@ public class ServerBrowserService : IDisposable
     public event EventHandler<int>? RefreshProgress;
     public event EventHandler<RefreshCompletedEventArgs>? RefreshCompleted;
 
-    public IReadOnlyCollection<ServerInfo> Servers => _servers.Values.ToList();
+    public IReadOnlyCollection<ServerInfo> Servers => new ReadOnlyCollection<ServerInfo>(_servers.Values.ToList());
     public bool IsRefreshing { get; private set; }
     public bool HasEverRefreshed { get; private set; }
 
@@ -60,6 +62,10 @@ public class ServerBrowserService : IDisposable
         try
         {
             _logger.Info("Starting server refresh...");
+            var knownFavoriteAddresses = _servers.Values
+                .Where(server => ServerRuleUtility.GetFavoriteMatch(_settings.Settings, server).IsFavorite)
+                .Select(ServerRuleUtility.GetServerAddress)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             // Cache last known endpoints before clearing so we can fall back if master fails
             if (_servers.Count > 0)
@@ -129,9 +135,10 @@ public class ServerBrowserService : IDisposable
             // Sort endpoints: favorites first, then manual servers, then rest
             var favorites = _settings.Settings.FavoriteServers;
             var manualAddresses = new HashSet<string>(manualEndpoints.Select(e => e.ToString()));
+            knownFavoriteAddresses.UnionWith(favorites);
             
             endpoints = endpoints
-                .OrderByDescending(e => favorites.Contains(e.ToString()))  // Favorites first
+                .OrderByDescending(e => knownFavoriteAddresses.Contains(e.ToString()))  // Favorites first
                 .ThenByDescending(e => manualAddresses.Contains(e.ToString()))  // Then manual servers
                 .ToList();
             
@@ -180,8 +187,13 @@ public class ServerBrowserService : IDisposable
             return;
         }
 
-        var favorites = _settings.Settings.FavoriteServers;
-        if (favorites.Count == 0)
+        var favoriteAddresses = _settings.Settings.FavoriteServers
+            .Concat(_servers.Values
+                .Where(server => ServerRuleUtility.GetFavoriteMatch(_settings.Settings, server).IsRuleFavorite)
+                .Select(ServerRuleUtility.GetServerAddress))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (favoriteAddresses.Count == 0)
         {
             _logger.Info("No favorite servers to refresh");
             return;
@@ -194,10 +206,10 @@ public class ServerBrowserService : IDisposable
 
         try
         {
-            _logger.Info($"Refreshing {favorites.Count} favorite servers...");
+            _logger.Info($"Refreshing {favoriteAddresses.Count} favorite servers...");
 
             var endpoints = new List<IPEndPoint>();
-            foreach (var favKey in favorites)
+            foreach (var favKey in favoriteAddresses)
             {
                 if (IPEndPoint.TryParse(favKey, out var endpoint))
                 {
@@ -231,7 +243,7 @@ public class ServerBrowserService : IDisposable
         finally
         {
             // Clear pending flags for favorites
-            foreach (var favKey in favorites)
+            foreach (var favKey in favoriteAddresses)
             {
                 if (_servers.TryGetValue(favKey, out var server))
                 {

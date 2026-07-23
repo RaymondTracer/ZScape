@@ -10,8 +10,6 @@ namespace ZScape.Models;
 /// </summary>
 public class ServerInfo : INotifyPropertyChanged
 {
-    private string _name = string.Empty;
-    private string _map = string.Empty;
     private int _currentPlayers;
     private int _maxPlayers;
     private int _ping = -1;
@@ -37,12 +35,14 @@ public class ServerInfo : INotifyPropertyChanged
     public string Address => EndPoint.Address.ToString();
     public int Port => EndPoint.Port;
     
+    private string _name = string.Empty;
     public string Name 
     { 
         get => _name; 
         set => SetField(ref _name, value); 
     }
     
+    private string _map = string.Empty;
     public string Map 
     { 
         get => _map; 
@@ -80,7 +80,12 @@ public class ServerInfo : INotifyPropertyChanged
     }
     
     // Non-notifying properties (less frequently updated)
-    public int MaxClients { get; set; }
+    private int _maxClients;
+    public int MaxClients
+    {
+        get => _maxClients;
+        set { if (_maxClients != value) { _maxClients = value; OnPropertyChanged(nameof(IsFull)); } }
+    }
     public string IWAD { get; set; } = string.Empty;
     public List<PWadInfo> PWADs { get; set; } = [];
     public string GameVersion { get; set; } = string.Empty;
@@ -91,7 +96,7 @@ public class ServerInfo : INotifyPropertyChanged
     public int Skill { get; set; }
     public int BotSkill { get; set; }
     public List<PlayerInfo> Players { get; set; } = [];
-    public TeamInfo[] Teams { get; set; } = TeamInfo.DefaultTeams;
+    public List<TeamInfo> Teams { get; set; } = new(TeamInfo.DefaultTeams);
     public int NumTeams { get; set; } = 2;
     public int FragLimit { get; set; }
     public int TimeLimit { get; set; }

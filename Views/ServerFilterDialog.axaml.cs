@@ -52,6 +52,7 @@ public partial class ServerFilterDialog : Window
         
         Loaded += (_, _) =>
         {
+            PopulateMatchModeComboBoxes();
             PopulateGameModes();
             PopulateCountries();
             LoadFilterToControls();
@@ -62,6 +63,21 @@ public partial class ServerFilterDialog : Window
             IncludeCountrySearchBox.TextChanged += (_, _) => FilterCountryList(true, IncludeCountrySearchBox.Text ?? "");
             ExcludeCountrySearchBox.TextChanged += (_, _) => FilterCountryList(false, ExcludeCountrySearchBox.Text ?? "");
         };
+    }
+
+    private void PopulateMatchModeComboBoxes()
+    {
+        PopulateMatchModeComboBox(ServerNameMatchModeComboBox);
+        PopulateMatchModeComboBox(MapMatchModeComboBox);
+    }
+
+    private static void PopulateMatchModeComboBox(ComboBox comboBox)
+    {
+        comboBox.Items.Clear();
+        foreach (var option in AppConstants.TextMatchModeLabels.Options)
+        {
+            comboBox.Items.Add(new ComboBoxItem { Content = option.Label });
+        }
     }
     
     private void OnDialogKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
@@ -192,9 +208,9 @@ public partial class ServerFilterDialog : Window
 
         // Text filters
         ServerNameTextBox.Text = _filter.ServerNameFilter;
-        ServerNameRegexCheckBox.IsChecked = _filter.ServerNameIsRegex;
+        ServerNameMatchModeComboBox.SelectedIndex = AppConstants.TextMatchModeLabels.GetIndex(_filter.ServerNameMatchMode);
         MapTextBox.Text = _filter.MapFilter;
-        MapRegexCheckBox.IsChecked = _filter.MapIsRegex;
+        MapMatchModeComboBox.SelectedIndex = AppConstants.TextMatchModeLabels.GetIndex(_filter.MapMatchMode);
         VersionTextBox.Text = _filter.RequireVersion;
 
         // Game modes - set IsIncluded/IsExcluded based on filter
@@ -236,9 +252,9 @@ public partial class ServerFilterDialog : Window
 
         // Text filters
         _filter.ServerNameFilter = ServerNameTextBox.Text?.Trim() ?? "";
-        _filter.ServerNameIsRegex = ServerNameRegexCheckBox.IsChecked ?? false;
+        _filter.ServerNameMatchMode = AppConstants.TextMatchModeLabels.GetValue(ServerNameMatchModeComboBox.SelectedIndex);
         _filter.MapFilter = MapTextBox.Text?.Trim() ?? "";
-        _filter.MapIsRegex = MapRegexCheckBox.IsChecked ?? false;
+        _filter.MapMatchMode = AppConstants.TextMatchModeLabels.GetValue(MapMatchModeComboBox.SelectedIndex);
         _filter.RequireVersion = VersionTextBox.Text?.Trim() ?? "";
 
         // Game modes - get from IsIncluded/IsExcluded
@@ -316,9 +332,9 @@ public partial class ServerFilterDialog : Window
         _filter.PasswordedServers = preset.PasswordedServers;
         _filter.ShowUnresponsive = preset.ShowUnresponsive;
         _filter.ServerNameFilter = preset.ServerNameFilter;
-        _filter.ServerNameIsRegex = preset.ServerNameIsRegex;
+        _filter.ServerNameMatchMode = preset.ServerNameMatchMode;
         _filter.MapFilter = preset.MapFilter;
-        _filter.MapIsRegex = preset.MapIsRegex;
+        _filter.MapMatchMode = preset.MapMatchMode;
         _filter.IncludeGameModes = [.. preset.IncludeGameModes];
         _filter.ExcludeGameModes = [.. preset.ExcludeGameModes];
         _filter.RequireWads = [.. preset.RequireWads];
@@ -427,9 +443,9 @@ public partial class ServerFilterDialog : Window
         PopulatedFirstCheckBox.IsChecked = true;
 
         ServerNameTextBox.Text = "";
-        ServerNameRegexCheckBox.IsChecked = false;
+        ServerNameMatchModeComboBox.SelectedIndex = AppConstants.TextMatchModeLabels.GetIndex(TextMatchMode.Contains);
         MapTextBox.Text = "";
-        MapRegexCheckBox.IsChecked = false;
+        MapMatchModeComboBox.SelectedIndex = AppConstants.TextMatchModeLabels.GetIndex(TextMatchMode.Contains);
         VersionTextBox.Text = "";
 
         // Clear mode selections

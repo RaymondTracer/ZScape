@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -8,6 +8,7 @@
         x:Class="ZScape.Views.MainWindow"
         x:DataType="views:MainWindow"
         Title="ZScape"
+        Icon="/packaging/assets/ZScape.png"
         Width="1200" Height="700"
         MinWidth="800" MinHeight="500"
         WindowStartupLocation="CenterScreen">
@@ -25,6 +26,8 @@
         <!-- Menu Bar -->
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
+                <MenuItem Header="_Launch Game..." Click="LaunchGameMenuItem_Click" />
+                <Separator />
                 <MenuItem Header="_Refresh" Click="RefreshMenuItem_Click" InputGesture="F5" />
                 <MenuItem Header="_Stop" x:Name="StopMenuItem" Click="StopMenuItem_Click" IsEnabled="False" />
                 <Separator />
@@ -39,11 +42,13 @@
                 </MenuItem>
                 <Separator />
                 <MenuItem Header="Show _Favorites Column" x:Name="ShowFavoritesColumnMenuItem" Click="ShowFavoritesColumnMenuItem_Click" />
+                <Separator />
+                <MenuItem Header="Big UI Mode" x:Name="TouchModeMenuItem" Click="TouchModeMenuItem_Click" />
             </MenuItem>
             <MenuItem Header="_Settings">
                 <MenuItem Header="_Refresh on Launch" x:Name="RefreshOnLaunchMenuItem" Click="RefreshOnLaunchMenuItem_Click" />
                 <MenuItem Header="_Auto-Refresh" x:Name="AutoRefreshMenuItem" Click="AutoRefreshMenuItem_Click" />
-                <MenuItem Header="Auto-Refresh _Favorites Only" x:Name="AutoRefreshFavoritesOnlyMenuItem" Click="AutoRefreshFavoritesOnlyMenuItem_Click" />
+                <MenuItem Header="Auto-Refresh _Favorites" x:Name="AutoRefreshFavoritesOnlyMenuItem" Click="AutoRefreshFavoritesOnlyMenuItem_Click" />
                 <Separator />
                 <MenuItem Header="_WAD Browser..." Click="WadBrowserMenuItem_Click" />
                 <MenuItem Header="_Testing Version Manager..." Click="TestingVersionsMenuItem_Click" />
@@ -56,9 +61,9 @@
         </Menu>
         
         <!-- Toolbar -->
-        <Border DockPanel.Dock="Top" Background="{DynamicResource SecondaryBackgroundBrush}" Padding="4,2">
-            <StackPanel Orientation="Horizontal" Spacing="4">
-                <Button Content="Refresh" Click="RefreshButton_Click" Padding="8,2" />
+        <Border x:Name="ToolbarBorder" DockPanel.Dock="Top" Background="{DynamicResource SecondaryBackgroundBrush}" Padding="4,2">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button x:Name="RefreshButton" Content="Refresh" Click="RefreshButton_Click" Padding="8,2" />
                 <Button Content="Stop" x:Name="StopButton" Click="StopButton_Click" IsEnabled="False" Padding="8,2" />
                 <TextBlock Text="Search:" VerticalAlignment="Center" Margin="8,0,4,0" />
                 <TextBox x:Name="SearchBox" Watermark="" Width="120" 
@@ -77,8 +82,9 @@
                 <controls:PersistentComboBox x:Name="GameModeComboBox" Width="100" 
                           SelectedIndex="0"
                           SelectionChanged="GameModeComboBox_SelectionChanged" Padding="4,2" />
-                <Button Content="Advanced Filter..." Click="AdvancedFilterButton_Click" Padding="8,2" />
-                <Button Content="History" Click="HistoryButton_Click" Padding="8,2" />
+                <Button x:Name="AdvancedFilterButton" Content="Advanced Filter..." Click="AdvancedFilterButton_Click" Padding="8,2" />
+                <Button x:Name="HistoryButton" Content="History" Click="HistoryButton_Click" Padding="8,2" />
+                <Button x:Name="LaunchGameButton" Content="Launch Game..." Click="LaunchGameButton_Click" Padding="8,2" />
             </StackPanel>
         </Border>
         
@@ -97,11 +103,11 @@
         <!-- Main Content -->
         <Grid x:Name="MainContentGrid">
             <Grid.RowDefinitions>
-                <RowDefinition Height="*" MinHeight="150" />
+                <RowDefinition Height="3*" MinHeight="150" />
                 <RowDefinition Height="5" />
-                <RowDefinition Height="200" MinHeight="80" />
+                <RowDefinition Height="2*" MinHeight="80" />
                 <RowDefinition Height="5" />
-                <RowDefinition Height="100" MinHeight="50" />
+                <RowDefinition Height="1*" MinHeight="50" />
             </Grid.RowDefinitions>
             
             <!-- Server List -->

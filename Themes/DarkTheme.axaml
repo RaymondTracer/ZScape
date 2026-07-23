@@ -39,6 +39,39 @@
             <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource SuccessColor}" />
             <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource WarningColor}" />
             <SolidColorBrush x:Key="ErrorBrush" Color="{StaticResource ErrorColor}" />
+
+            <!-- Semantic row/status colors -->
+            <Color x:Key="RowEvenColor">#FF1E1E1E</Color>
+            <Color x:Key="RowOddColor">#FF252526</Color>
+            <Color x:Key="RowHoverColor">#2A2D2E</Color>
+            <Color x:Key="RowSelectedColor">#094771</Color>
+            <Color x:Key="RowFullColor">#3C2D2D</Color>
+            <Color x:Key="RowEmptyColor">#2D2D32</Color>
+            <Color x:Key="RowPasswordedColor">#3C3728</Color>
+            <Color x:Key="LogVerboseColor">#FFA9A9A9</Color>
+            <Color x:Key="LogInfoColor">#FFF1F1F1</Color>
+            <Color x:Key="LogSuccessColor">#FF32CD32</Color>
+            <Color x:Key="LogWarningColor">#FFFFD700</Color>
+            <Color x:Key="LogErrorColor">#FFFF6347</Color>
+            <Color x:Key="PasswordLockColor">#FFFFCC00</Color>
+            <Color x:Key="OnlineColor">#FF32CD32</Color>
+            <Color x:Key="OfflineColor">#FFFF6347</Color>
+
+            <SolidColorBrush x:Key="RowEvenBrush" Color="{StaticResource RowEvenColor}" />
+            <SolidColorBrush x:Key="RowOddBrush" Color="{StaticResource RowOddColor}" />
+            <SolidColorBrush x:Key="RowHoverBrush" Color="{StaticResource RowHoverColor}" />
+            <SolidColorBrush x:Key="RowSelectedBrush" Color="{StaticResource RowSelectedColor}" />
+            <SolidColorBrush x:Key="RowFullBrush" Color="{StaticResource RowFullColor}" />
+            <SolidColorBrush x:Key="RowEmptyBrush" Color="{StaticResource RowEmptyColor}" />
+            <SolidColorBrush x:Key="RowPasswordedBrush" Color="{StaticResource RowPasswordedColor}" />
+            <SolidColorBrush x:Key="LogVerboseBrush" Color="{StaticResource LogVerboseColor}" />
+            <SolidColorBrush x:Key="LogInfoBrush" Color="{StaticResource LogInfoColor}" />
+            <SolidColorBrush x:Key="LogSuccessBrush" Color="{StaticResource LogSuccessColor}" />
+            <SolidColorBrush x:Key="LogWarningBrush" Color="{StaticResource LogWarningColor}" />
+            <SolidColorBrush x:Key="LogErrorBrush" Color="{StaticResource LogErrorColor}" />
+            <SolidColorBrush x:Key="PasswordLockBrush" Color="{StaticResource PasswordLockColor}" />
+            <SolidColorBrush x:Key="OnlineBrush" Color="{StaticResource OnlineColor}" />
+            <SolidColorBrush x:Key="OfflineBrush" Color="{StaticResource OfflineColor}" />
         </Style.Resources>
     </Style>
 

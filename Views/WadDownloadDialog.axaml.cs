@@ -281,6 +281,10 @@ public partial class WadDownloadDialog : Window
                     Close();
                 }
                 break;
+
+            case DownloadDialogBehavior.AutoDownloadRequiredWads:
+                Close();
+                break;
                 
             case DownloadDialogBehavior.AlwaysClose:
                 // Legacy setting: treat as immediate close on success only.
@@ -414,7 +418,7 @@ public partial class WadDownloadDialog : Window
     /// <summary>
     /// Log entry with color based on log level.
     /// </summary>
-    public class LogEntry : INotifyPropertyChanged
+    public class LogEntry
     {
         private static readonly IBrush VerboseColor = new SolidColorBrush(Color.Parse("#9D9D9D"));
         private static readonly IBrush InfoColor = new SolidColorBrush(Color.Parse("#CCCCCC"));
@@ -447,7 +451,5 @@ public partial class WadDownloadDialog : Window
         };
 
         public string FullText => $"[{Timestamp}] {Prefix} {Message}";
-
-        public event PropertyChangedEventHandler? PropertyChanged;
     }
 }

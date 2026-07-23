@@ -6,8 +6,7 @@ namespace ZScape.Protocol;
 /// </summary>
 public class HuffmanCodec
 {
-    private static HuffmanCodec? _instance;
-    private static readonly object _lock = new();
+    private static readonly Lazy<HuffmanCodec> _instance = new(() => new HuffmanCodec());
 
     private readonly HuffmanNode _root;
     private readonly HuffmanNode?[] _codeTable;
@@ -86,20 +85,7 @@ public class HuffmanCodec
     /// <summary>
     /// Gets the singleton instance of the Huffman codec.
     /// </summary>
-    public static HuffmanCodec Instance
-    {
-        get
-        {
-            if (_instance == null)
-            {
-                lock (_lock)
-                {
-                    _instance ??= new HuffmanCodec();
-                }
-            }
-            return _instance;
-        }
-    }
+    public static HuffmanCodec Instance => _instance.Value;
 
     /// <summary>
     /// Encodes data using Huffman encoding.

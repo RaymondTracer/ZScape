@@ -7,17 +7,42 @@ public class LoggingService
 {
     public static LoggingService Instance { get; } = new();
 
+    private readonly object _fileLock = new();
+    private readonly string _logFilePath = Path.Combine(AppContext.BaseDirectory, "runtime.log");
+
     public event EventHandler<LogEntry>? LogAdded;
     
     public bool VerboseMode { get; set; } = false;
-    public bool ShowHexDumps { get; set; } = false;
 
-    private LoggingService() { }
+    private const long MaxLogFileSize = 10 * 1024 * 1024; // 10 MB
+    private const int MaxLogFiles = 3;
+
+    private LoggingService()
+    {
+        try
+        {
+            RotateLogIfNeeded();
+            File.AppendAllText(_logFilePath, $"=== ZScape runtime log started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}");
+        }
+        catch
+        {
+            // Best-effort logging only.
+        }
+    }
+
+    public string LogFilePath => _logFilePath;
 
     public void Log(string message, LogLevel level = LogLevel.Info)
     {
         var entry = new LogEntry(message, level, DateTime.Now);
+        WriteToFile(entry.ToString());
         LogAdded?.Invoke(this, entry);
+    }
+
+    public void Exception(string context, Exception ex, LogLevel level = LogLevel.Error)
+    {
+        var prefix = string.IsNullOrWhiteSpace(context) ? "Unhandled exception" : context;
+        Log($"{prefix}{Environment.NewLine}{ex}", level);
     }
 
     public void Verbose(string message)
@@ -28,47 +53,61 @@ public class LoggingService
         }
     }
 
-    public void LogHexDump(byte[] data, string label)
-    {
-        if (!VerboseMode || !ShowHexDumps || data == null || data.Length == 0)
-            return;
-
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"[HEX] {label} ({data.Length} bytes):");
-        
-        const int bytesPerLine = 16;
-        for (int offset = 0; offset < data.Length; offset += bytesPerLine)
-        {
-            int lineSize = Math.Min(bytesPerLine, data.Length - offset);
-            
-            // Hex part
-            sb.Append($"  {offset:X8}: ");
-            for (int i = 0; i < lineSize; i++)
-            {
-                sb.Append($"{data[offset + i]:X2} ");
-            }
-            for (int i = lineSize; i < bytesPerLine; i++)
-            {
-                sb.Append("   ");
-            }
-            
-            // ASCII part
-            sb.Append("| ");
-            for (int i = 0; i < lineSize; i++)
-            {
-                char c = (char)data[offset + i];
-                sb.Append(c >= 0x20 && c <= 0x7E ? c : '.');
-            }
-            sb.AppendLine();
-        }
-        
-        Log(sb.ToString(), LogLevel.Verbose);
-    }
-
     public void Info(string message) => Log(message, LogLevel.Info);
     public void Warning(string message) => Log(message, LogLevel.Warning);
     public void Error(string message) => Log(message, LogLevel.Error);
     public void Success(string message) => Log(message, LogLevel.Success);
+
+    private void WriteToFile(string message)
+    {
+        try
+        {
+            lock (_fileLock)
+            {
+                RotateLogIfNeeded();
+                File.AppendAllText(_logFilePath, message + Environment.NewLine);
+            }
+        }
+        catch
+        {
+            // Best-effort logging only.
+        }
+    }
+
+    private void RotateLogIfNeeded()
+    {
+        try
+        {
+            if (!File.Exists(_logFilePath)) return;
+            var info = new FileInfo(_logFilePath);
+            if (info.Length < MaxLogFileSize) return;
+
+            var dir = Path.GetDirectoryName(_logFilePath) ?? ".";
+            var baseName = Path.GetFileNameWithoutExtension(_logFilePath);
+            var ext = Path.GetExtension(_logFilePath);
+
+            // Shift existing backups: runtime.2.log -> runtime.3.log, runtime.1.log -> runtime.2.log
+            for (int i = MaxLogFiles - 1; i >= 1; i--)
+            {
+                var oldPath = Path.Combine(dir, $"{baseName}.{i}{ext}");
+                var newPath = Path.Combine(dir, $"{baseName}.{i + 1}{ext}");
+                if (File.Exists(oldPath))
+                {
+                    if (File.Exists(newPath)) File.Delete(newPath);
+                    File.Move(oldPath, newPath);
+                }
+            }
+
+            // Rename current log to .1
+            var backupPath = Path.Combine(dir, $"{baseName}.1{ext}");
+            if (File.Exists(backupPath)) File.Delete(backupPath);
+            File.Move(_logFilePath, backupPath);
+        }
+        catch
+        {
+            // Best-effort rotation only.
+        }
+    }
 }
 
 public class LogEntry : EventArgs

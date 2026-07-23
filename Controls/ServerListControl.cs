@@ -37,11 +37,10 @@ public class ServerListControl : UserControl
             GridLinesVisibility = DataGridGridLinesVisibility.None,
             Background = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x30)),
             RowBackground = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x30)),
-            BorderBrush = new SolidColorBrush(Colors.Red), // DEBUG: Make border visible
-            BorderThickness = new Thickness(3),             // DEBUG: Thick border
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x3F, 0x3F, 0x46)),
+            BorderThickness = new Thickness(0),
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch,
-            MinHeight = 100 // DEBUG: Ensure minimum height
+            VerticalAlignment = VerticalAlignment.Stretch
         };
         
         // Build columns programmatically

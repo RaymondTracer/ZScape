@@ -1,0 +1,60 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:ZScape.Views"
+        x:Class="ZScape.Views.ThemeEditorDialog"
+        x:CompileBindings="False"
+        Title="Theme Editor"
+        Width="700" Height="560"
+        MinWidth="550" MinHeight="400"
+        WindowStartupLocation="CenterOwner">
+
+    <DockPanel>
+        <!-- Top toolbar -->
+        <Border DockPanel.Dock="Top" Padding="8,4" Background="{DynamicResource SecondaryBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+                <TextBlock Grid.Column="0" Text="Theme:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <TextBox Grid.Column="1" x:Name="ThemeNameBox" Watermark="My Custom Theme" VerticalAlignment="Center"
+                         TextChanged="ThemeNameBox_TextChanged" Padding="4,2"/>
+                <Button Grid.Column="2" x:Name="LoadButton" Content="Load..." Width="70" Margin="4,0,4,0"
+                        Click="LoadButton_Click"/>
+                <Button Grid.Column="3" x:Name="SaveButton" Content="Save" Width="60" Margin="0,0,4,0"
+                        Click="SaveButton_Click"/>
+                <Button Grid.Column="4" x:Name="CloseButton" Content="Close" Width="60"
+                        Click="CloseButton_Click"/>
+            </Grid>
+        </Border>
+
+        <!-- Main area -->
+        <Grid ColumnDefinitions="*,180">
+            <ScrollViewer Grid.Column="0" Margin="8,4,4,8">
+                <StackPanel x:Name="ColorEditorPanel" Spacing="6"/>
+            </ScrollViewer>
+
+            <!-- Right: live preview -->
+            <Border Grid.Column="1" Classes="panel" Margin="4,4,8,8" Padding="8"
+                    Background="{DynamicResource SecondaryBackgroundBrush}">
+                <StackPanel>
+                    <TextBlock Classes="header" Text="Preview" Margin="0,0,0,6"/>
+                    <TextBlock Text="Server Name" FontWeight="Bold" FontSize="12" Margin="0,2"/>
+                    <TextBlock Text="Map: MAP01" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2"/>
+                    <Border Background="{DynamicResource RowFullBrush}" Margin="0,6,0,2">
+                        <TextBlock Text="Full server row" Padding="4,2" FontSize="10"/>
+                    </Border>
+                    <Border Background="{DynamicResource RowEmptyBrush}" Margin="0,2">
+                        <TextBlock Text="Empty server row" Padding="4,2" FontSize="10"/>
+                    </Border>
+                    <Border Background="{DynamicResource RowPasswordedBrush}" Margin="0,2">
+                        <TextBlock Text="Passworded server row" Padding="4,2" FontSize="10"/>
+                    </Border>
+                    <Border Background="{DynamicResource AccentBrush}" Margin="0,10,0,2" Padding="4,2">
+                        <TextBlock Text="Accent button" Foreground="White" FontSize="10"/>
+                    </Border>
+                    <TextBlock Text="SUCCESS: log entry" Foreground="{DynamicResource SuccessBrush}" FontSize="9" Margin="0,4,0,1"/>
+                    <TextBlock Text="WARNING: log entry" Foreground="{DynamicResource WarningBrush}" FontSize="9" Margin="0,1"/>
+                    <TextBlock Text="ERROR: log entry" Foreground="{DynamicResource ErrorBrush}" FontSize="9" Margin="0,1"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>
