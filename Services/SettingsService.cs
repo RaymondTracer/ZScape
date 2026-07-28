@@ -11,6 +11,8 @@ namespace ZScape.Services;
 /// </summary>
 public class SettingsService
 {
+    private const int CurrentDomainSettingsSchemaVersion = 2;
+
     private static readonly Lazy<SettingsService> _instance = new(() => new SettingsService());
     public static SettingsService Instance => _instance.Value;
 
@@ -241,6 +243,24 @@ public class SettingsService
                 if (loaded != null)
                 {
                     _domainSettingsData = loaded;
+
+                    using var doc = JsonDocument.Parse(json);
+                    var schemaVersion = doc.RootElement.TryGetProperty("schemaVersion", out var versionElement) &&
+                                        versionElement.TryGetInt32(out var parsedVersion)
+                        ? parsedVersion
+                        : 1;
+
+                    if (schemaVersion < CurrentDomainSettingsSchemaVersion)
+                    {
+                        var migratedCount = MigrateLegacySegmentSizeDefaults(_domainSettingsData.Domains);
+                        _domainSettingsData.SchemaVersion = CurrentDomainSettingsSchemaVersion;
+                        SaveDomainSettings();
+
+                        LoggingService.Instance.Info(
+                            migratedCount > 0
+                                ? $"Migrated {migratedCount} domain Seg KB defaults from 256 to 0 (use global)"
+                                : "Updated domain settings format");
+                    }
                 }
             }
             else
@@ -274,9 +294,13 @@ public class SettingsService
                 
                 if (domains != null && domains.Count > 0)
                 {
+                    var migratedCount = MigrateLegacySegmentSizeDefaults(domains);
                     _domainSettingsData.Domains = domains;
+                    _domainSettingsData.SchemaVersion = CurrentDomainSettingsSchemaVersion;
                     SaveDomainSettings();
-                    LoggingService.Instance.Info($"Migrated {domains.Count} domain settings to domain-settings.json");
+                    LoggingService.Instance.Info(
+                        $"Migrated {domains.Count} domain settings to domain-settings.json" +
+                        (migratedCount > 0 ? $"; {migratedCount} Seg KB defaults now use the global value" : string.Empty));
                 }
             }
         }
@@ -284,6 +308,24 @@ public class SettingsService
         {
             LoggingService.Instance.Warning($"Failed to migrate legacy domain settings: {ex.Message}");
         }
+    }
+
+    private static int MigrateLegacySegmentSizeDefaults(Dictionary<string, DomainSettings> domains)
+    {
+        // Before schema v2, every new domain was persisted with 256 KB. That was
+        // effectively the global default rather than an intentional override.
+        // Preserve every other value, including genuine custom values such as 1024.
+        var migratedCount = 0;
+        foreach (var settings in domains.Values)
+        {
+            if (settings.MinSegmentSizeKb != 256)
+                continue;
+
+            settings.MinSegmentSizeKb = 0;
+            migratedCount++;
+        }
+
+        return migratedCount;
     }
 
     public void Save()
@@ -726,6 +768,7 @@ public class ConnectionHistoryData
 /// </summary>
 public class DomainSettingsData
 {
+    public int SchemaVersion { get; set; } = 2;
     public Dictionary<string, DomainSettings> Domains { get; set; } = new();
 }
 

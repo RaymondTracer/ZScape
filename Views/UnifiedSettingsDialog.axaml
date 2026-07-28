@@ -389,7 +389,8 @@
                     </TabItem.Styles>
                     <Grid RowDefinitions="Auto,Auto,*,40" Margin="5">
                         <TextBlock Grid.Row="0" Text="Domain Thread Settings" FontWeight="Bold" FontSize="14"/>
-                        <TextBlock Grid.Row="1" Text="Per-domain download thread settings. Click cells to edit." 
+                        <TextBlock Grid.Row="1"
+                                   Text="Per-domain overrides. Threads = 0 uses automatic/global behavior; Seg KB = 0 uses Downloads → Min Segment KB. Positive Seg KB values override the global value for that domain. Click cells to edit."
                                    Foreground="Gray" Margin="0,5,0,10"/>
                         
                         <controls:ResizableListView Grid.Row="2" x:Name="DomainListView" />

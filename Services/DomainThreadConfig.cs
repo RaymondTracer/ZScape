@@ -195,8 +195,11 @@ public class DomainSettings
     /// <summary>Maximum concurrent threads per file for this domain. 0 = use global default.</summary>
     public int MaxThreads { get; set; } = 0;
     
-    /// <summary>Minimum bytes per download segment (KB). Smaller = more threads for small files.</summary>
-    public int MinSegmentSizeKb { get; set; } = 256;
+    /// <summary>
+    /// Minimum bytes per download segment (KB). 0 = use the global
+    /// DefaultMinSegmentSizeKb value.
+    /// </summary>
+    public int MinSegmentSizeKb { get; set; } = 0;
     
     /// <summary>Enable adaptive learning (probing and auto-backoff on failures).</summary>
     public bool AdaptiveLearning { get; set; } = true;

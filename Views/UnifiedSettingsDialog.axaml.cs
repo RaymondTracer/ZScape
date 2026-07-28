@@ -1209,7 +1209,7 @@ public partial class UnifiedSettingsDialog : Window
         display.InitializeFromSettings(
             "example.com",
             0,       // MaxThreads: 0 = use global default
-            256,     // MinSegmentSizeKb
+            0,       // MinSegmentSizeKb: 0 = use global default
             true,    // AdaptiveLearning
             _domainConfigs.Count  // Index
         );
@@ -1360,7 +1360,11 @@ public partial class UnifiedSettingsDialog : Window
         public int MinSegmentSizeKb
         {
             get => _minSegmentSizeKb;
-            set { _minSegmentSizeKb = Math.Clamp(value, 64, 4096); OnPropertyChanged(nameof(MinSegmentSizeKb)); }
+            set
+            {
+                _minSegmentSizeKb = value <= 0 ? 0 : Math.Clamp(value, 64, 4096);
+                OnPropertyChanged(nameof(MinSegmentSizeKb));
+            }
         }
         
         public bool AdaptiveLearning
