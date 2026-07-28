@@ -46,6 +46,7 @@
     <Color x:Key="RowFullColor">#20FF0000</Color>
     <Color x:Key="RowEmptyColor">#20CCCCCC</Color>
     <Color x:Key="RowPasswordedColor">#20DAA520</Color>
+    <Color x:Key="HistoryOnlineRowColor">#FFE4F3E8</Color>
     <Color x:Key="LogVerboseColor">#FF999999</Color>
     <Color x:Key="LogInfoColor">#FF1A1A1A</Color>
     <Color x:Key="LogSuccessColor">#FF107C10</Color>
@@ -62,6 +63,7 @@
     <SolidColorBrush x:Key="RowFullBrush" Color="{StaticResource RowFullColor}" />
     <SolidColorBrush x:Key="RowEmptyBrush" Color="{StaticResource RowEmptyColor}" />
     <SolidColorBrush x:Key="RowPasswordedBrush" Color="{StaticResource RowPasswordedColor}" />
+    <SolidColorBrush x:Key="HistoryOnlineRowBrush" Color="{StaticResource HistoryOnlineRowColor}" />
     <SolidColorBrush x:Key="LogVerboseBrush" Color="{StaticResource LogVerboseColor}" />
     <SolidColorBrush x:Key="LogInfoBrush" Color="{StaticResource LogInfoColor}" />
     <SolidColorBrush x:Key="LogSuccessBrush" Color="{StaticResource LogSuccessColor}" />

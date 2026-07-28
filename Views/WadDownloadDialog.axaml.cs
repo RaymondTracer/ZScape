@@ -10,6 +10,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using ZScape.Controls;
 using ZScape.Models;
 using ZScape.Services;
 using ZScape.Utilities;
@@ -50,7 +51,8 @@ public partial class WadDownloadDialog : Window
         _tasks = missingWads.Select(w => new WadDownloadTask { Wad = w }).ToList();
         
         InitializeComponent();
-        
+
+        SetupWadList();
         WadListControl.ItemsSource = _displayItems;
         LogControl.ItemsSource = _logEntries;
         
@@ -90,6 +92,129 @@ public partial class WadDownloadDialog : Window
         
         // Handle Escape key
         KeyDown += OnDialogKeyDown;
+    }
+
+    private void SetupWadList()
+    {
+        WadListControl.SelectionMode = ListViewSelectionMode.None;
+        WadListControl.RowBaseBackgroundPath = "RowBackground";
+        WadListControl.RowHeight = 26;
+
+        WadListControl.AddColumn(new ListViewColumn
+        {
+            Key = "file",
+            Header = "File",
+            IsStar = true,
+            MinWidth = 180,
+            CellContentFactory = () => CreateStatusCell(
+                "FileName",
+                TextTrimming.CharacterEllipsis,
+                new Avalonia.Thickness(8, 0))
+        });
+        WadListControl.AddColumn(new ListViewColumn
+        {
+            Key = "status",
+            Header = "Status",
+            Width = 105,
+            MinWidth = 80,
+            CellContentFactory = () => CreateStatusCell("StatusDisplay")
+        });
+        WadListControl.AddColumn(new ListViewColumn
+        {
+            Key = "progress",
+            Header = "Progress",
+            Width = 210,
+            MinWidth = 140,
+            CellContentFactory = CreateProgressCell
+        });
+        WadListControl.AddColumn(new ListViewColumn
+        {
+            Key = "speed",
+            Header = "Speed",
+            Width = 100,
+            MinWidth = 80,
+            CellContentFactory = () => CreateStatusCell("SpeedText")
+        });
+        WadListControl.AddColumn(new ListViewColumn
+        {
+            Key = "threads",
+            Header = "Threads",
+            Width = 70,
+            MinWidth = 60,
+            CellContentFactory = () => CreateStatusCell(
+                "ThreadsDisplay",
+                horizontalAlignment:
+                    Avalonia.Layout.HorizontalAlignment.Center)
+        });
+        WadListControl.AddColumn(new ListViewColumn
+        {
+            Key = "source",
+            Header = "Source",
+            Width = 180,
+            MinWidth = 120,
+            CellContentFactory = () => CreateStatusCell(
+                "SourceHost",
+                TextTrimming.CharacterEllipsis)
+        });
+
+        WadListControl.Build(ListViewOverflowMode.AutoScroll);
+    }
+
+    private static Control CreateStatusCell(
+        string bindingPath,
+        TextTrimming? textTrimming = null,
+        Avalonia.Thickness? padding = null,
+        Avalonia.Layout.HorizontalAlignment horizontalAlignment =
+            Avalonia.Layout.HorizontalAlignment.Left)
+    {
+        var textBlock = new TextBlock
+        {
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            HorizontalAlignment = horizontalAlignment,
+            TextTrimming = textTrimming ?? TextTrimming.None,
+            Padding = padding ?? new Avalonia.Thickness(4, 0)
+        };
+        textBlock.Bind(
+            TextBlock.TextProperty,
+            new Avalonia.Data.Binding(bindingPath));
+        textBlock.Bind(
+            TextBlock.ForegroundProperty,
+            new Avalonia.Data.Binding("StatusColor"));
+        return textBlock;
+    }
+
+    private static Control CreateProgressCell()
+    {
+        var grid = new Grid
+        {
+            Margin = new Avalonia.Thickness(4, 3)
+        };
+        var progressBar = new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Opacity = 0.45
+        };
+        progressBar.Bind(
+            Avalonia.Controls.Primitives.RangeBase.ValueProperty,
+            new Avalonia.Data.Binding("ProgressPercent"));
+
+        var text = new TextBlock
+        {
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            FontSize = 11
+        };
+        text.Bind(
+            TextBlock.TextProperty,
+            new Avalonia.Data.Binding("ProgressText"));
+        text.Bind(
+            TextBlock.ForegroundProperty,
+            new Avalonia.Data.Binding("StatusColor"));
+
+        grid.Children.Add(progressBar);
+        grid.Children.Add(text);
+        return grid;
     }
     
     private void OnDialogKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
@@ -371,6 +496,8 @@ public partial class WadDownloadDialog : Window
         public string StatusDisplay => Task.Status.ToString();
         
         public string ProgressText => Task.ProgressText;
+
+        public double ProgressPercent => Task.ProgressPercent;
         
         public string SpeedText => Task.SpeedText;
         
@@ -402,6 +529,7 @@ public partial class WadDownloadDialog : Window
         {
             OnPropertyChanged(nameof(StatusDisplay));
             OnPropertyChanged(nameof(ProgressText));
+            OnPropertyChanged(nameof(ProgressPercent));
             OnPropertyChanged(nameof(SpeedText));
             OnPropertyChanged(nameof(ThreadsDisplay));
             OnPropertyChanged(nameof(SourceHost));

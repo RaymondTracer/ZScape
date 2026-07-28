@@ -42,6 +42,7 @@
                 </MenuItem>
                 <Separator />
                 <MenuItem Header="Show _Favorites Column" x:Name="ShowFavoritesColumnMenuItem" Click="ShowFavoritesColumnMenuItem_Click" />
+                <MenuItem Header="Server List _Columns" x:Name="ServerListColumnsMenuItem" />
                 <Separator />
                 <MenuItem Header="Big UI Mode" x:Name="TouchModeMenuItem" Click="TouchModeMenuItem_Click" />
             </MenuItem>
@@ -66,7 +67,10 @@
                 <Button x:Name="RefreshButton" Content="Refresh" Click="RefreshButton_Click" Padding="8,2" />
                 <Button Content="Stop" x:Name="StopButton" Click="StopButton_Click" IsEnabled="False" Padding="8,2" />
                 <TextBlock Text="Search:" VerticalAlignment="Center" Margin="8,0,4,0" />
-                <TextBox x:Name="SearchBox" Watermark="" Width="120" 
+                <TextBox x:Name="SearchBox"
+                         Watermark="Name, map, WAD, address…"
+                         ToolTip.Tip="Search is punctuation-insensitive and includes every server WAD."
+                         Width="180"
                          TextChanged="SearchBox_TextChanged" Padding="4,2" />
                 <ToggleButton x:Name="HideEmptyCheckBox" Content="Hide Empty" 
                           IsCheckedChanged="FilterCheckBox_Changed" VerticalAlignment="Center" Padding="8,2" />
@@ -84,7 +88,6 @@
                           SelectionChanged="GameModeComboBox_SelectionChanged" Padding="4,2" />
                 <Button x:Name="AdvancedFilterButton" Content="Advanced Filter..." Click="AdvancedFilterButton_Click" Padding="8,2" />
                 <Button x:Name="HistoryButton" Content="History" Click="HistoryButton_Click" Padding="8,2" />
-                <Button x:Name="LaunchGameButton" Content="Launch Game..." Click="LaunchGameButton_Click" Padding="8,2" />
             </StackPanel>
         </Border>
         

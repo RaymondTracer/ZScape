@@ -6,11 +6,13 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using System;
 using System.Collections.ObjectModel;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using ZScape.Controls;
 using ZScape.Models;
 using ZScape.Services;
+using ZScape.Utilities;
 
 namespace ZScape.Views;
 
@@ -25,7 +27,13 @@ public partial class ConnectionHistoryDialog : Window
     public event EventHandler<ConnectionHistoryEntry>? ReconnectRequested;
 
     public ObservableCollection<HistoryEntryViewModel> HistoryEntries { get; } = [];
-    
+    private readonly List<HistoryEntryViewModel> _allHistoryEntries = [];
+    private readonly List<ListViewSortDescriptor> _sortDescriptors =
+    [
+        new(8, "last-played", false),
+        new(1, "name", true)
+    ];
+
     private ServerBrowserService? _serverBrowserService;
 
     public ConnectionHistoryDialog()
@@ -33,45 +41,87 @@ public partial class ConnectionHistoryDialog : Window
         InitializeComponent();
         DataContext = this;
         
-        // Configure the list view columns
+        // Configure the list as a compact version of the main server browser.
         HistoryListView.AlternatingRowColors = true;
+        HistoryListView.RowBaseBackgroundPath = "RowBackground";
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Header = "Server Name", Width = 180, MinWidth = 80,
+            Key = "status", Header = "Status", Width = 80, MinWidth = 65,
+            BindingPath = "StatusDisplay",
+            Foreground = Brushes.Gray,
+            CanSort = true
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Key = "name", Header = "Server Name", IsStar = true, MinWidth = 180,
             BindingPath = "DisplayServerName",
             TextTrimming = TextTrimming.CharacterEllipsis,
-            CellPadding = new Thickness(8, 0)
+            CellPadding = new Thickness(8, 0),
+            CanUserHide = false,
+            CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Header = "Address", Width = 140, MinWidth = 80,
+            Key = "players", Header = "Players", Width = 75, MinWidth = 60,
+            BindingPath = "PlayersDisplay",
+            CanSort = true,
+            DefaultSortDescending = true
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Key = "ping", Header = "Ping", Width = 60, MinWidth = 45,
+            BindingPath = "PingDisplay",
+            CanSort = true
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Key = "map", Header = "Map", Width = 95, MinWidth = 65,
+            BindingPath = "Map",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CanSort = true
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Key = "mode", Header = "Mode", Width = 90, MinWidth = 65,
+            BindingPath = "DisplayGameMode",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CanSort = true
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Key = "iwad", Header = "IWAD", Width = 100, MinWidth = 70,
+            BindingPath = "IWAD",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            CanSort = true
+        });
+        HistoryListView.AddColumn(new ListViewColumn
+        {
+            Key = "address", Header = "Address", Width = 150, MinWidth = 110,
             BindingPath = "DisplayAddress",
             TextTrimming = TextTrimming.CharacterEllipsis,
-            CellPadding = new Thickness(5, 0)
+            CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Header = "Last Played", Width = 90, MinWidth = 60,
+            Key = "last-played", Header = "Last Played", Width = 105, MinWidth = 80,
             BindingPath = "LastPlayedDisplay",
-            CellPadding = new Thickness(5, 0)
+            CanSort = true,
+            DefaultSortDescending = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Header = "Count", Width = 55, MinWidth = 40,
+            Key = "count", Header = "Visits", Width = 60, MinWidth = 50,
             BindingPath = "ConnectionCount",
-            CellPadding = new Thickness(5, 0)
-        });
-        HistoryListView.AddColumn(new ListViewColumn
-        {
-            Header = "Mode", IsStar = true, MinWidth = 60,
-            BindingPath = "GameMode",
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            CellPadding = new Thickness(5, 0)
+            CanSort = true,
+            DefaultSortDescending = true
         });
         HistoryListView.Build(ListViewOverflowMode.AutoScroll);
+        HistoryListView.SetSortDescriptors(_sortDescriptors);
 
         // Wire up row events
         HistoryListView.RowDoubleTapped += OnHistoryRowDoubleTapped;
+        HistoryListView.SelectionChanged += (_, _) => UpdateActionState();
+        HistoryListView.SortRequested += HistoryListView_SortRequested;
 
         // Handle Escape key
         KeyDown += OnDialogKeyDown;
@@ -79,12 +129,16 @@ public partial class ConnectionHistoryDialog : Window
         Loaded += (_, _) =>
         {
             LoadHistory();
-            HistoryListView.ItemsSource = HistoryEntries;
             MaxEntriesNumeric.Value = SettingsService.Instance.Settings.MaxHistoryEntries;
             MaxEntriesNumeric.ValueChanged += MaxEntriesNumeric_ValueChanged;
             
             // Set tracking mode combo box
             TrackingModeComboBox.SelectedIndex = (int)SettingsService.Instance.Settings.HistoryTrackingMode;
+            UpdateTrackingModeHelp();
+            if (_serverBrowserService != null)
+                UpdateAllEntriesFromServerList();
+            else
+                ApplyHistoryView();
         };
         
         Closed += OnDialogClosed;
@@ -118,11 +172,11 @@ public partial class ConnectionHistoryDialog : Window
     {
         Dispatcher.UIThread.Post(() =>
         {
-            var trackingMode = SettingsService.Instance.Settings.HistoryTrackingMode;
-            foreach (var entry in HistoryEntries)
+            foreach (var entry in _allHistoryEntries)
             {
-                entry.SetRefreshing(trackingMode);
+                entry.SetRefreshing();
             }
+            ApplyHistoryView();
         });
     }
     
@@ -141,13 +195,14 @@ public partial class ConnectionHistoryDialog : Window
         var trackingMode = SettingsService.Instance.Settings.HistoryTrackingMode;
         var serverAddress = $"{server.Address}:{server.Port}";
         
-        foreach (var entry in HistoryEntries)
+        var updated = false;
+        foreach (var entry in _allHistoryEntries)
         {
             bool matches = trackingMode switch
             {
                 HistoryTrackingMode.ByAddress => entry.Entry.FullAddress.Equals(serverAddress, StringComparison.OrdinalIgnoreCase),
                 HistoryTrackingMode.ByServerName => entry.Entry.ServerName.Equals(server.Name, StringComparison.OrdinalIgnoreCase),
-                HistoryTrackingMode.Both => entry.Entry.FullAddress.Equals(serverAddress, StringComparison.OrdinalIgnoreCase) ||
+                HistoryTrackingMode.Both => entry.Entry.FullAddress.Equals(serverAddress, StringComparison.OrdinalIgnoreCase) &&
                                             entry.Entry.ServerName.Equals(server.Name, StringComparison.OrdinalIgnoreCase),
                 _ => false
             };
@@ -155,8 +210,12 @@ public partial class ConnectionHistoryDialog : Window
             if (matches)
             {
                 entry.UpdateFromServer(server, trackingMode);
+                updated = true;
             }
         }
+
+        if (updated)
+            ApplyHistoryView();
     }
     
     private void UpdateAllEntriesFromServerList()
@@ -168,21 +227,27 @@ public partial class ConnectionHistoryDialog : Window
         var isRefreshing = _serverBrowserService.IsRefreshing;
         var hasEverRefreshed = _serverBrowserService.HasEverRefreshed;
         
-        foreach (var entry in HistoryEntries)
+        foreach (var entry in _allHistoryEntries)
         {
-            ServerInfo? matchingServer = null;
-            
-            if (trackingMode == HistoryTrackingMode.ByAddress || trackingMode == HistoryTrackingMode.Both)
+            ServerInfo? matchingServer = trackingMode switch
             {
-                matchingServer = servers.FirstOrDefault(s => 
-                    $"{s.Address}:{s.Port}".Equals(entry.Entry.FullAddress, StringComparison.OrdinalIgnoreCase));
-            }
-            
-            if (matchingServer == null && (trackingMode == HistoryTrackingMode.ByServerName || trackingMode == HistoryTrackingMode.Both))
-            {
-                matchingServer = servers.FirstOrDefault(s => 
-                    s.Name?.Equals(entry.Entry.ServerName, StringComparison.OrdinalIgnoreCase) == true);
-            }
+                HistoryTrackingMode.ByAddress => servers.FirstOrDefault(server =>
+                    $"{server.Address}:{server.Port}".Equals(
+                        entry.Entry.FullAddress,
+                        StringComparison.OrdinalIgnoreCase)),
+                HistoryTrackingMode.ByServerName => servers.FirstOrDefault(server =>
+                    server.Name?.Equals(
+                        entry.Entry.ServerName,
+                        StringComparison.OrdinalIgnoreCase) == true),
+                HistoryTrackingMode.Both => servers.FirstOrDefault(server =>
+                    $"{server.Address}:{server.Port}".Equals(
+                        entry.Entry.FullAddress,
+                        StringComparison.OrdinalIgnoreCase)
+                    && server.Name?.Equals(
+                        entry.Entry.ServerName,
+                        StringComparison.OrdinalIgnoreCase) == true),
+                _ => null
+            };
             
             if (matchingServer != null)
             {
@@ -190,17 +255,18 @@ public partial class ConnectionHistoryDialog : Window
             }
             else if (isRefreshing)
             {
-                entry.SetRefreshing(trackingMode);
+                entry.SetRefreshing();
             }
             else if (!hasEverRefreshed)
             {
-                entry.SetUnknown(trackingMode);
+                entry.SetUnknown();
             }
             else
             {
-                entry.SetOffline(trackingMode);
+                entry.SetOffline();
             }
         }
+        ApplyHistoryView();
     }
     
     private void OnDialogKeyDown(object? sender, KeyEventArgs e)
@@ -214,13 +280,148 @@ public partial class ConnectionHistoryDialog : Window
 
     private void LoadHistory()
     {
-        HistoryEntries.Clear();
+        _allHistoryEntries.Clear();
         var history = SettingsService.Instance.ConnectionHistory;
         int index = 0;
         foreach (var entry in history)
         {
-            HistoryEntries.Add(new HistoryEntryViewModel(entry, index++));
+            _allHistoryEntries.Add(new HistoryEntryViewModel(entry, index++));
         }
+    }
+
+    private void HistorySearchBox_TextChanged(object? sender, TextChangedEventArgs e)
+    {
+        ApplyHistoryView();
+    }
+
+    private void HistoryListView_SortRequested(
+        object? sender,
+        ListViewSortEventArgs e)
+    {
+        _sortDescriptors.Clear();
+        _sortDescriptors.AddRange(e.SortDescriptors);
+        ApplyHistoryView();
+    }
+
+    private void ApplyHistoryView()
+    {
+        var selected = GetSelectedEntry();
+        var query = HistorySearchBox?.Text?.Trim() ?? string.Empty;
+        IEnumerable<HistoryEntryViewModel> view = _allHistoryEntries;
+
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            view = view.Where(entry => entry.MatchesSearch(query));
+        }
+
+        IOrderedEnumerable<HistoryEntryViewModel>? ordered = null;
+        foreach (var descriptor in _sortDescriptors)
+        {
+            ordered = descriptor.ColumnKey switch
+            {
+                "status" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.StatusSortOrder,
+                    descriptor.Ascending),
+                "name" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.DisplayServerName,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                "players" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.PlayerSortValue,
+                    descriptor.Ascending),
+                "ping" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.PingSortValue,
+                    descriptor.Ascending),
+                "map" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.Map,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                "mode" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.DisplayGameMode,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                "iwad" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.IWAD,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                "address" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.DisplayAddress,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                "last-played" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.Entry.LastConnected,
+                    descriptor.Ascending),
+                "count" => ApplyHistorySort(
+                    view,
+                    ordered,
+                    entry => entry.ConnectionCount,
+                    descriptor.Ascending),
+                _ => ordered
+            };
+        }
+
+        var materialized = (ordered ?? view.OrderBy(_ => 0)).ToList();
+        HistoryEntries.Clear();
+        foreach (var entry in materialized)
+            HistoryEntries.Add(entry);
+        HistoryListView.ItemsSource = HistoryEntries;
+
+        if (selected != null && HistoryEntries.Contains(selected))
+            HistoryListView.SelectItem(selected);
+        else
+            HistoryListView.ClearSelection();
+
+        var onlineCount = HistoryEntries.Count(entry => entry.IsOnline);
+        InfoLabel.Text = string.IsNullOrWhiteSpace(query)
+            ? $"{HistoryEntries.Count} entries · {onlineCount} online · Double-click to reconnect"
+            : $"{HistoryEntries.Count} matches · {onlineCount} online";
+        UpdateActionState();
+    }
+
+    private static IOrderedEnumerable<HistoryEntryViewModel> ApplyHistorySort<TKey>(
+        IEnumerable<HistoryEntryViewModel> source,
+        IOrderedEnumerable<HistoryEntryViewModel>? ordered,
+        Func<HistoryEntryViewModel, TKey> selector,
+        bool ascending,
+        IComparer<TKey>? comparer = null)
+    {
+        if (ordered == null)
+        {
+            return ascending
+                ? source.OrderBy(selector, comparer)
+                : source.OrderByDescending(selector, comparer);
+        }
+
+        return ascending
+            ? ordered.ThenBy(selector, comparer)
+            : ordered.ThenByDescending(selector, comparer);
+    }
+
+    private void UpdateActionState()
+    {
+        var hasSelection = GetSelectedEntry() != null;
+        ReconnectButton.IsEnabled = hasSelection;
+        CopyAddressButton.IsEnabled = hasSelection;
+        RemoveButton.IsEnabled = hasSelection;
+        ClearButton.IsEnabled = _allHistoryEntries.Count > 0;
     }
     
     private HistoryEntryViewModel? GetSelectedEntry() => HistoryListView.SelectedItem as HistoryEntryViewModel;
@@ -256,23 +457,16 @@ public partial class ConnectionHistoryDialog : Window
         var entry = GetSelectedEntry();
         if (entry == null) return;
 
-        var index = HistoryEntries.IndexOf(entry);
-        if (index >= 0)
+        var history = SettingsService.Instance.ConnectionHistory;
+        var historyIndex = history.IndexOf(entry.Entry);
+        if (historyIndex >= 0)
         {
-            var history = SettingsService.Instance.ConnectionHistory;
-            if (index < history.Count)
-            {
-                history.RemoveAt(index);
-                SettingsService.Instance.SaveHistory();
-                HistoryEntries.RemoveAt(index);
-                HistoryListView.ClearSelection();
-                
-                // Update indices for remaining items
-                for (int i = 0; i < HistoryEntries.Count; i++)
-                {
-                    HistoryEntries[i].Index = i;
-                }
-            }
+            history.RemoveAt(historyIndex);
+            _allHistoryEntries.Remove(entry);
+            SettingsService.Instance.SaveHistory();
+            for (var i = 0; i < _allHistoryEntries.Count; i++)
+                _allHistoryEntries[i].Index = i;
+            ApplyHistoryView();
         }
     }
 
@@ -324,14 +518,15 @@ public partial class ConnectionHistoryDialog : Window
         if (result)
         {
             SettingsService.Instance.ClearConnectionHistory();
-            HistoryEntries.Clear();
-            HistoryListView.ClearSelection();
+            _allHistoryEntries.Clear();
+            ApplyHistoryView();
         }
     }
 
     private void MaxEntriesNumeric_ValueChanged(object? sender, int e)
     {
         SettingsService.Instance.Settings.MaxHistoryEntries = e;
+        SettingsService.Instance.Save();
     }
     
     private void TrackingModeComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -339,7 +534,25 @@ public partial class ConnectionHistoryDialog : Window
         if (TrackingModeComboBox.SelectedIndex >= 0)
         {
             SettingsService.Instance.Settings.HistoryTrackingMode = (HistoryTrackingMode)TrackingModeComboBox.SelectedIndex;
+            SettingsService.Instance.Save();
+            UpdateTrackingModeHelp();
+            UpdateAllEntriesFromServerList();
         }
+    }
+
+    private void UpdateTrackingModeHelp()
+    {
+        TrackingModeHelpText.Text =
+            SettingsService.Instance.Settings.HistoryTrackingMode switch
+            {
+                HistoryTrackingMode.ByAddress =>
+                    "Address keeps one entry per IP:port and refreshes the displayed server name. Best when an endpoint is stable.",
+                HistoryTrackingMode.ByServerName =>
+                    "Server name merges matching names even when the address changes. Best for communities that move servers.",
+                HistoryTrackingMode.Both =>
+                    "Address + name keeps each exact pair separate. Neither a matching name nor a matching address alone will merge entries.",
+                _ => string.Empty
+            };
     }
 
     private void CloseButton_Click(object? sender, RoutedEventArgs e)
@@ -353,13 +566,11 @@ public partial class ConnectionHistoryDialog : Window
 /// </summary>
 public class HistoryEntryViewModel : INotifyPropertyChanged
 {
-    private const string OfflineIndicator = "<Offline>";
-    private const string RefreshingIndicator = "<Refreshing>";
-    private const string UnknownIndicator = "<Unknown>";
-    
     private int _index;
     private string? _displayServerName;
     private string? _displayAddress;
+    private ServerInfo? _liveServer;
+    private HistoryLiveStatus _liveStatus = HistoryLiveStatus.Unknown;
     
     public ConnectionHistoryEntry Entry { get; }
     
@@ -369,31 +580,16 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
     {
         Entry = entry;
         _index = index;
-        // Initialize display values - will be updated when server list is available
         _displayServerName = entry.ServerName;
         _displayAddress = entry.FullAddress;
     }
     
-    /// <summary>
-    /// Sets the entry to unknown state (before first refresh).
-    /// </summary>
-    public void SetUnknown(HistoryTrackingMode trackingMode)
+    public void SetUnknown()
     {
-        switch (trackingMode)
-        {
-            case HistoryTrackingMode.ByAddress:
-                DisplayAddress = Entry.FullAddress;
-                DisplayServerName = UnknownIndicator;
-                break;
-            case HistoryTrackingMode.ByServerName:
-                DisplayServerName = Entry.ServerName;
-                DisplayAddress = UnknownIndicator;
-                break;
-            case HistoryTrackingMode.Both:
-                DisplayServerName = Entry.ServerName;
-                DisplayAddress = Entry.FullAddress;
-                break;
-        }
+        ResetIdentity();
+        _liveServer = null;
+        SetLiveStatus(HistoryLiveStatus.Unknown);
+        NotifyLiveColumns();
     }
     
     public int Index
@@ -437,7 +633,61 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
     public string ServerName => Entry.ServerName;
     public string FullAddress => Entry.FullAddress;
     public int ConnectionCount => Entry.ConnectionCount;
-    public string? GameMode => Entry.GameMode;
+    public string StatusDisplay => _liveStatus switch
+    {
+        HistoryLiveStatus.Online => "Online",
+        HistoryLiveStatus.Refreshing => "Refreshing",
+        HistoryLiveStatus.Offline => "Offline",
+        _ => "Unknown"
+    };
+    public int StatusSortOrder => _liveStatus switch
+    {
+        HistoryLiveStatus.Online => 0,
+        HistoryLiveStatus.Refreshing => 1,
+        HistoryLiveStatus.Unknown => 2,
+        _ => 3
+    };
+    public bool IsOnline => _liveStatus == HistoryLiveStatus.Online;
+    public int PlayerSortValue => _liveServer?.HumanPlayerCount ?? -1;
+    public int PingSortValue => _liveServer?.Ping ?? int.MaxValue;
+    public string PlayersDisplay
+    {
+        get
+        {
+            if (_liveServer == null || !IsOnline)
+                return "—";
+
+            var active = _liveServer.HumanPlayerCount;
+            var bots = _liveServer.BotCount;
+            var spectators = _liveServer.SpectatorCount;
+            if (bots > 0 && spectators > 0)
+                return $"{active}+{bots}b+{spectators}s/{_liveServer.MaxPlayers}";
+            if (bots > 0)
+                return $"{active}+{bots}b/{_liveServer.MaxPlayers}";
+            if (spectators > 0)
+                return $"{active}+{spectators}s/{_liveServer.MaxPlayers}";
+            return $"{active}/{_liveServer.MaxPlayers}";
+        }
+    }
+    public string PingDisplay => _liveServer != null && IsOnline && _liveServer.Ping >= 0
+        ? _liveServer.Ping.ToString()
+        : "—";
+    public string Map => _liveServer != null && IsOnline
+        ? _liveServer.Map
+        : "—";
+    public string DisplayGameMode => _liveServer != null && IsOnline
+        ? _liveServer.GameMode.ShortName
+        : Entry.GameMode ?? "—";
+    public string IWAD => _liveServer != null && IsOnline
+        ? _liveServer.IWAD
+        : "—";
+    public IBrush RowBackground => _liveStatus switch
+    {
+        HistoryLiveStatus.Online => ThemeService.GetBrush("HistoryOnlineRowBrush", "#183A2A"),
+        HistoryLiveStatus.Refreshing => ThemeService.GetBrush("RowPasswordedBrush", "#3C3728"),
+        HistoryLiveStatus.Offline => ThemeService.GetBrush("RowEmptyBrush", "#2D2D32"),
+        _ => Brushes.Transparent
+    };
     
     /// <summary>
     /// Updates display values from a matching server.
@@ -445,81 +695,97 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
     public void UpdateFromServer(ServerInfo server, HistoryTrackingMode trackingMode)
     {
         var serverAddress = $"{server.Address}:{server.Port}";
+        _liveServer = server;
         
         switch (trackingMode)
         {
             case HistoryTrackingMode.ByAddress:
-                // Address is static, update name from server
                 DisplayAddress = Entry.FullAddress;
-                if (server.IsOnline && server.IsQueried)
-                    DisplayServerName = server.Name ?? Entry.ServerName;
-                else if (!server.IsQueried)
-                    DisplayServerName = RefreshingIndicator;
-                else
-                    DisplayServerName = OfflineIndicator;
+                DisplayServerName = !string.IsNullOrWhiteSpace(server.Name)
+                    ? server.Name
+                    : Entry.ServerName;
                 break;
                 
             case HistoryTrackingMode.ByServerName:
-                // Name is static, update address from server
                 DisplayServerName = Entry.ServerName;
-                if (server.IsOnline && server.IsQueried)
-                    DisplayAddress = serverAddress;
-                else if (!server.IsQueried)
-                    DisplayAddress = RefreshingIndicator;
-                else
-                    DisplayAddress = OfflineIndicator;
+                DisplayAddress = serverAddress;
                 break;
                 
             case HistoryTrackingMode.Both:
-                // Both are tracked exactly as recorded
                 DisplayServerName = Entry.ServerName;
                 DisplayAddress = Entry.FullAddress;
                 break;
         }
+
+        SetLiveStatus(!server.IsQueried
+            ? HistoryLiveStatus.Refreshing
+            : server.IsOnline
+                ? HistoryLiveStatus.Online
+                : HistoryLiveStatus.Offline);
+        NotifyLiveColumns();
     }
     
     /// <summary>
     /// Sets the entry to refreshing state.
     /// </summary>
-    public void SetRefreshing(HistoryTrackingMode trackingMode)
+    public void SetRefreshing()
     {
-        switch (trackingMode)
-        {
-            case HistoryTrackingMode.ByAddress:
-                DisplayAddress = Entry.FullAddress;
-                DisplayServerName = RefreshingIndicator;
-                break;
-            case HistoryTrackingMode.ByServerName:
-                DisplayServerName = Entry.ServerName;
-                DisplayAddress = RefreshingIndicator;
-                break;
-            case HistoryTrackingMode.Both:
-                DisplayServerName = Entry.ServerName;
-                DisplayAddress = Entry.FullAddress;
-                break;
-        }
+        ResetIdentity();
+        SetLiveStatus(HistoryLiveStatus.Refreshing);
+        NotifyLiveColumns();
     }
     
     /// <summary>
     /// Sets the entry to offline state.
     /// </summary>
-    public void SetOffline(HistoryTrackingMode trackingMode)
+    public void SetOffline()
     {
-        switch (trackingMode)
+        ResetIdentity();
+        _liveServer = null;
+        SetLiveStatus(HistoryLiveStatus.Offline);
+        NotifyLiveColumns();
+    }
+
+    public bool MatchesSearch(string query)
+    {
+        return new[]
         {
-            case HistoryTrackingMode.ByAddress:
-                DisplayAddress = Entry.FullAddress;
-                DisplayServerName = OfflineIndicator;
-                break;
-            case HistoryTrackingMode.ByServerName:
-                DisplayServerName = Entry.ServerName;
-                DisplayAddress = OfflineIndicator;
-                break;
-            case HistoryTrackingMode.Both:
-                DisplayServerName = Entry.ServerName;
-                DisplayAddress = Entry.FullAddress;
-                break;
-        }
+            DisplayServerName,
+            DisplayAddress,
+            Map,
+            DisplayGameMode,
+            IWAD,
+            StatusDisplay
+        }.Any(value => TextMatchUtility.IsLooseSearchMatch(value, query));
+    }
+
+    private void ResetIdentity()
+    {
+        DisplayServerName = Entry.ServerName;
+        DisplayAddress = Entry.FullAddress;
+    }
+
+    private void SetLiveStatus(HistoryLiveStatus status)
+    {
+        if (_liveStatus == status)
+            return;
+        _liveStatus = status;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusDisplay)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusSortOrder)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsOnline)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowBackground)));
+    }
+
+    private void NotifyLiveColumns()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PlayersDisplay)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PlayerSortValue)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PingDisplay)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PingSortValue)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Map)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayGameMode)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IWAD)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowBackground)));
     }
 
     public string LastPlayedDisplay
@@ -541,5 +807,13 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
 
             return Entry.LastConnected.ToLocalTime().ToString("MMM d, yyyy");
         }
+    }
+
+    private enum HistoryLiveStatus
+    {
+        Unknown,
+        Refreshing,
+        Online,
+        Offline
     }
 }

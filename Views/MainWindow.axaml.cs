@@ -27,6 +27,20 @@ namespace ZScape.Views;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private const string FavoriteColumnKey = "favorite";
+    private const string NameColumnKey = "name";
+    private const string PlayersColumnKey = "players";
+    private const string PingColumnKey = "ping";
+    private const string MapColumnKey = "map";
+    private const string ModeColumnKey = "mode";
+    private const string IwadColumnKey = "iwad";
+    private const string AddressColumnKey = "address";
+    private const string CountryColumnKey = "country";
+    private const string WadsColumnKey = "wads";
+    private const string VersionColumnKey = "version";
+    private const string BotsColumnKey = "bots";
+    private const string SpectatorsColumnKey = "spectators";
+
     private readonly ServerBrowserService _browserService = new();
     private readonly LoggingService _logger = LoggingService.Instance;
     private readonly SettingsService _settings = SettingsService.Instance;
@@ -46,9 +60,13 @@ public partial class MainWindow : Window
     private DateTime? _lastRefreshTime;
 
     private ServerInfo? _selectedServer;
-    private int _sortColumnIndex = 3; // Default to Players column
-    private bool _sortAscending = false;
+    private readonly List<ListViewSortDescriptor> _sortDescriptors =
+    [
+        new(2, PlayersColumnKey, false),
+        new(1, NameColumnKey, true)
+    ];
     private bool _isInitializing = true;
+    private bool _synchronizingListPreferences;
     private BigUIShell? _bigUIShell;
 
     // Server alert state tracking
@@ -194,159 +212,7 @@ public partial class MainWindow : Window
 
     private void SetupServerListView()
     {
-        // Semantic row base colours (full=red tint, empty=dim, passworded=yellow tint)
-        ServerListView.RowBaseBackgroundPath = "RowBackground";
-        ServerListView.RowHeightPath = "RowHeight";
-
-        // Column 0: Favorites star (fixed, toggleable)
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "",
-            Width = 30,
-            IsFixedWidth = true,
-            CellContentFactory = () =>
-            {
-                var btn = new Button
-                {
-                    Background = Brushes.Transparent,
-                    BorderThickness = new Thickness(0),
-                    Padding = new Thickness(0),
-                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
-                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
-                    HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
-                    VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
-                    Width = 30
-                };
-                btn.Bind(Button.IsVisibleProperty, new Avalonia.Data.Binding("ShowFavoritesColumn"));
-                var tb = new TextBlock { FontSize = 14 };
-                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("FavoriteIcon"));
-                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("FavoriteColor"));
-                btn.Content = tb;
-                btn.Click += FavoriteButton_Click;
-                return btn;
-            }
-        });
-
-        // Column 1: Legacy lock-icon spacer (kept at zero width to preserve column indices)
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "",
-            Width = 0,
-            MinWidth = 0,
-            IsFixedWidth = true,
-            CellContentFactory = () => new Border { Width = 0, Height = 0 }
-        });
-
-        // Column 2: Server Name with inline password icon (star-sized, resizable)
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "Server Name",
-            IsStar = true,
-            MinWidth = 100,
-            CellContentFactory = () =>
-            {
-                var panel = new Grid
-                {
-                    ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    Margin = new Thickness(4, 0, 4, 0)
-                };
-
-                var viewbox = new Viewbox
-                {
-                    Width = 14,
-                    Height = 14,
-                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
-                    Margin = new Thickness(0, 0, 4, 0)
-                };
-                viewbox.Bind(Viewbox.IsVisibleProperty, new Avalonia.Data.Binding("IsPassworded"));
-                viewbox.Child = new Avalonia.Controls.Shapes.Path
-                {
-                    Fill = new SolidColorBrush(Avalonia.Media.Color.Parse("#FFCC00")),
-                    Data = Avalonia.Media.Geometry.Parse("M 12 2 C 9.79 2 8 3.79 8 6 L 8 8 L 6 8 C 4.9 8 4 8.9 4 10 L 4 20 C 4 21.1 4.9 22 6 22 L 18 22 C 19.1 22 20 21.1 20 20 L 20 10 C 20 8.9 19.1 8 18 8 L 16 8 L 16 6 C 16 3.79 14.21 2 12 2 Z M 10 6 C 10 4.9 10.9 4 12 4 C 13.1 4 14 4.9 14 6 L 14 8 L 10 8 Z M 12 17 C 10.9 17 10 16.1 10 15 C 10 13.9 10.9 13 12 13 C 13.1 13 14 13.9 14 15 C 14 16.1 13.1 17 12 17 Z")
-                };
-                Grid.SetColumn(viewbox, 0);
-
-                var textBlock = new TextBlock
-                {
-                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    TextTrimming = TextTrimming.CharacterEllipsis
-                };
-                textBlock.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("Name"));
-                Grid.SetColumn(textBlock, 1);
-
-                panel.Children.Add(viewbox);
-                panel.Children.Add(textBlock);
-                return panel;
-            },
-            SortClick = SortByName_Click
-        });
-
-        // Column 3: Players
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "Players",
-            Width = 80,
-            MinWidth = 40,
-            BindingPath = "PlayersDisplay",
-            SortClick = SortByPlayers_Click
-        });
-
-        // Column 4: Ping
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "Ping",
-            Width = 60,
-            MinWidth = 35,
-            BindingPath = "Ping",
-            SortClick = SortByPing_Click
-        });
-
-        // Column 5: Map
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "Map",
-            Width = 100,
-            MinWidth = 50,
-            BindingPath = "Map",
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            SortClick = SortByMap_Click
-        });
-
-        // Column 6: Mode
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "Mode",
-            Width = 80,
-            MinWidth = 40,
-            BindingPath = "GameModeDisplay",
-            SortClick = SortByMode_Click
-        });
-
-        // Column 7: IWAD
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "IWAD",
-            Width = 100,
-            MinWidth = 50,
-            BindingPath = "IWAD",
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            SortClick = SortByIwad_Click
-        });
-
-        // Column 8: Address
-        ServerListView.AddColumn(new ListViewColumn
-        {
-            Header = "Address",
-            Width = 140,
-            MinWidth = 80,
-            BindingPath = "AddressDisplay",
-            SortClick = SortByAddress_Click
-        });
-
-        ServerListView.Build(ListViewOverflowMode.Fill);
+        ConfigureServerListColumns(ServerListView, bigUi: false);
         ServerListView.ItemsSource = Servers;
 
         // Set up context menu on the scroll viewer
@@ -400,6 +266,271 @@ public partial class MainWindow : Window
 
         // Wire up scroll viewer events for middle-click
         ServerListView.ScrollViewer.PointerPressed += ServerScrollViewer_PointerPressed;
+    }
+
+    private void ConfigureServerListColumns(ResizableListView list, bool bigUi)
+    {
+        list.RowBaseBackgroundPath = "RowBackground";
+        list.RowHeightPath = bigUi ? null : "RowHeight";
+        if (bigUi)
+            list.RowHeight = 48;
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = FavoriteColumnKey,
+            Header = "",
+            Width = bigUi ? 36 : 30,
+            MinWidth = bigUi ? 36 : 30,
+            IsFixedWidth = true,
+            CanUserHide = false,
+            CellContentFactory = () => CreateFavoriteCell(bigUi ? 36 : 30)
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = NameColumnKey,
+            Header = "Server Name",
+            IsStar = true,
+            MinWidth = bigUi ? 200 : 120,
+            CanSort = true,
+            CanUserHide = false,
+            CellContentFactory = CreateServerNameCell
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = PlayersColumnKey,
+            Header = "Players",
+            Width = bigUi ? 100 : 80,
+            MinWidth = 60,
+            BindingPath = "PlayersDisplay",
+            CanSort = true,
+            DefaultSortDescending = true
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = PingColumnKey,
+            Header = "Ping",
+            Width = bigUi ? 80 : 60,
+            MinWidth = 45,
+            BindingPath = "Ping",
+            CanSort = true
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = MapColumnKey,
+            Header = "Map",
+            Width = bigUi ? 120 : 100,
+            MinWidth = 70,
+            CanSort = true,
+            CellContentFactory = () => CreateSearchCell("Map")
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = ModeColumnKey,
+            Header = "Mode",
+            Width = bigUi ? 100 : 80,
+            MinWidth = 60,
+            CanSort = true,
+            CellContentFactory = () => CreateSearchCell("GameModeDisplay")
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = IwadColumnKey,
+            Header = "IWAD",
+            Width = bigUi ? 120 : 100,
+            MinWidth = 70,
+            CanSort = true,
+            CellContentFactory = () => CreateSearchCell("IWAD")
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = AddressColumnKey,
+            Header = "Address",
+            Width = bigUi ? 180 : 140,
+            MinWidth = 110,
+            CanSort = true,
+            CellContentFactory = () => CreateSearchCell("AddressDisplay")
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = CountryColumnKey,
+            Header = "Country",
+            Width = 100,
+            MinWidth = 70,
+            IsVisibleByDefault = false,
+            CanSort = true,
+            CellContentFactory = () => CreateSearchCell("Country")
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = WadsColumnKey,
+            Header = "WADs",
+            Width = 260,
+            MinWidth = 120,
+            IsVisibleByDefault = false,
+            CanSort = true,
+            CellContentFactory = () => CreateSearchCell("WadsDisplay")
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = VersionColumnKey,
+            Header = "Version",
+            Width = 220,
+            MinWidth = 120,
+            IsVisibleByDefault = false,
+            CanSort = true,
+            CellContentFactory = () => CreateSearchCell("GameVersion")
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = BotsColumnKey,
+            Header = "Bots",
+            Width = 60,
+            MinWidth = 45,
+            IsVisibleByDefault = false,
+            BindingPath = "BotCount",
+            CanSort = true,
+            DefaultSortDescending = true
+        });
+
+        list.AddColumn(new ListViewColumn
+        {
+            Key = SpectatorsColumnKey,
+            Header = "Spectators",
+            Width = 85,
+            MinWidth = 60,
+            IsVisibleByDefault = false,
+            BindingPath = "SpectatorCount",
+            CanSort = true,
+            DefaultSortDescending = true
+        });
+
+        list.Build(ListViewOverflowMode.AutoScroll);
+        list.SetSortDescriptors(_sortDescriptors);
+        list.SortRequested += ServerListView_SortRequested;
+        list.ColumnVisibilityChanged += ServerListView_ColumnVisibilityChanged;
+        if (ReferenceEquals(list, ServerListView))
+            PopulateServerListColumnsMenu();
+    }
+
+    private Control CreateFavoriteCell(double width)
+    {
+        var button = new Button
+        {
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
+            HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+            Width = width
+        };
+        button.Bind(Button.IsVisibleProperty, new Avalonia.Data.Binding("ShowFavoritesColumn"));
+        var icon = new TextBlock { FontSize = width > 30 ? 16 : 14 };
+        icon.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("FavoriteIcon"));
+        icon.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("FavoriteColor"));
+        button.Content = icon;
+        button.Click += FavoriteButton_Click;
+        return button;
+    }
+
+    private static Control CreateServerNameCell()
+    {
+        var panel = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            Margin = new Thickness(4, 0)
+        };
+
+        var viewbox = new Viewbox
+        {
+            Width = 14,
+            Height = 14,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            Margin = new Thickness(0, 0, 4, 0)
+        };
+        viewbox.Bind(Viewbox.IsVisibleProperty, new Avalonia.Data.Binding("IsPassworded"));
+        viewbox.Child = new Avalonia.Controls.Shapes.Path
+        {
+            Fill = ThemeService.GetBrush("PasswordLockBrush", "#FFCC00"),
+            Data = Avalonia.Media.Geometry.Parse(
+                "M 12 2 C 9.79 2 8 3.79 8 6 L 8 8 L 6 8 C 4.9 8 4 8.9 4 10 L 4 20 C 4 21.1 4.9 22 6 22 L 18 22 C 19.1 22 20 21.1 20 20 L 20 10 C 20 8.9 19.1 8 18 8 L 16 8 L 16 6 C 16 3.79 14.21 2 12 2 Z M 10 6 C 10 4.9 10.9 4 12 4 C 13.1 4 14 4.9 14 6 L 14 8 L 10 8 Z M 12 17 C 10.9 17 10 16.1 10 15 C 10 13.9 10.9 13 12 13 C 13.1 13 14 13.9 14 15 C 14 16.1 13.1 17 12 17 Z")
+        };
+
+        var textBlock = new SearchHighlightTextBlock
+        {
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        textBlock.Bind(
+            SearchHighlightTextBlock.SourceTextProperty,
+            new Avalonia.Data.Binding("Name"));
+        textBlock.Bind(
+            SearchHighlightTextBlock.SearchTextProperty,
+            new Avalonia.Data.Binding("SearchText"));
+        Grid.SetColumn(textBlock, 1);
+
+        panel.Children.Add(viewbox);
+        panel.Children.Add(textBlock);
+        return panel;
+    }
+
+    private static Control CreateSearchCell(string bindingPath)
+    {
+        var textBlock = new SearchHighlightTextBlock
+        {
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Padding = new Thickness(4, 0)
+        };
+        textBlock.Bind(
+            SearchHighlightTextBlock.SourceTextProperty,
+            new Avalonia.Data.Binding(bindingPath));
+        textBlock.Bind(
+            SearchHighlightTextBlock.SearchTextProperty,
+            new Avalonia.Data.Binding("SearchText"));
+        return textBlock;
+    }
+
+    private void PopulateServerListColumnsMenu()
+    {
+        if (ServerListColumnsMenuItem == null)
+            return;
+
+        ServerListColumnsMenuItem.Items.Clear();
+        for (var i = 0; i < ServerListView.Columns.Count; i++)
+        {
+            var column = ServerListView.Columns[i];
+            if (!column.CanUserHide || string.IsNullOrWhiteSpace(column.Header))
+                continue;
+
+            var columnIndex = i;
+            var item = new MenuItem
+            {
+                Header = column.Header,
+                Icon = ServerListView.IsColumnVisible(i)
+                    ? new TextBlock { Text = "\u2713" }
+                    : null
+            };
+            item.Click += (_, _) => ServerListView.SetColumnVisible(
+                columnIndex,
+                !ServerListView.IsColumnVisible(columnIndex));
+            ServerListColumnsMenuItem.Items.Add(item);
+        }
     }
 
     #region Event Subscriptions
@@ -653,9 +784,8 @@ public partial class MainWindow : Window
                 WindowState = WindowState.Maximized;
             }
 
-            // Sorting - only on initial load
-            _sortColumnIndex = settings.SortColumnIndex;
-            _sortAscending = settings.SortAscending;
+            // Sorting - restore the ordered chain, migrating older single-sort settings.
+            RestoreServerListSorts(settings);
 
             // Column widths - restore saved widths for non-fixed columns
             if (settings.ColumnWidths.Count > 0)
@@ -664,12 +794,16 @@ public partial class MainWindow : Window
                 {
                     var col = ServerListView.Columns[i];
                     if (col.IsFixedWidth || string.IsNullOrEmpty(col.Header)) continue;
-                    if (settings.ColumnWidths.TryGetValue(col.Header, out int savedWidth) && savedWidth > 0)
+                    if ((settings.ColumnWidths.TryGetValue(col.Key, out int savedWidth)
+                         || settings.ColumnWidths.TryGetValue(col.Header, out savedWidth))
+                        && savedWidth > 0)
                     {
                         ServerListView.SetColumnWidth(i, new GridLength(savedWidth));
                     }
                 }
             }
+
+            RestoreServerListColumnVisibility(settings);
 
             // Filters - only on initial load (user changes these live during session)
             if (HideEmptyCheckBox != null) HideEmptyCheckBox.IsChecked = settings.HideEmpty;
@@ -741,6 +875,108 @@ public partial class MainWindow : Window
         _wadManager.RefreshCache();
     }
 
+    private void RestoreServerListSorts(AppSettings settings)
+    {
+        var restored = new List<ListViewSortDescriptor>();
+        var savedSorts = settings.ServerListSorts ?? [];
+        foreach (var setting in savedSorts)
+        {
+            var index = GetServerColumnIndex(setting.ColumnKey);
+            if (index >= 0 && restored.All(item => item.ColumnIndex != index))
+            {
+                restored.Add(new ListViewSortDescriptor(
+                    index,
+                    ServerListView.Columns[index].Key,
+                    setting.Ascending));
+            }
+        }
+
+        var shouldUseDefaultSort =
+            restored.Count == 0
+            && (!settings.ServerListSortsConfigured
+                || savedSorts.Count > 0);
+        if (shouldUseDefaultSort)
+        {
+            var legacyKey = settings.SortColumnIndex switch
+            {
+                2 => NameColumnKey,
+                3 => PlayersColumnKey,
+                4 => PingColumnKey,
+                5 => MapColumnKey,
+                6 => ModeColumnKey,
+                7 => IwadColumnKey,
+                8 => AddressColumnKey,
+                _ => PlayersColumnKey
+            };
+            var legacyIndex = GetServerColumnIndex(legacyKey);
+            restored.Add(new ListViewSortDescriptor(
+                legacyIndex,
+                legacyKey,
+                settings.SortColumnIndex is >= 2 and <= 8
+                    ? settings.SortAscending
+                    : false));
+
+            if (!legacyKey.Equals(NameColumnKey, StringComparison.OrdinalIgnoreCase))
+            {
+                restored.Add(new ListViewSortDescriptor(
+                    GetServerColumnIndex(NameColumnKey),
+                    NameColumnKey,
+                    true));
+            }
+        }
+
+        _sortDescriptors.Clear();
+        _sortDescriptors.AddRange(restored);
+        ServerListView.SetSortDescriptors(_sortDescriptors);
+        _bigUIShell?.ServerListView.SetSortDescriptors(_sortDescriptors);
+    }
+
+    private void RestoreServerListColumnVisibility(AppSettings settings)
+    {
+        for (var i = 0; i < ServerListView.Columns.Count; i++)
+        {
+            var column = ServerListView.Columns[i];
+            var visible = column.Key == FavoriteColumnKey
+                ? settings.ShowFavoritesColumn
+                : settings.ServerListColumnVisibility.TryGetValue(
+                    column.Key,
+                    out var savedVisibility)
+                    ? savedVisibility
+                    : column.IsVisibleByDefault;
+            ServerListView.SetColumnVisible(i, visible);
+            _bigUIShell?.ServerListView.SetColumnVisible(column.Key, visible);
+        }
+    }
+
+    private int GetServerColumnIndex(string columnKey)
+    {
+        for (var i = 0; i < ServerListView.Columns.Count; i++)
+        {
+            if (ServerListView.Columns[i].Key.Equals(
+                    columnKey,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int GetLegacySortIndex(string columnKey)
+    {
+        return columnKey switch
+        {
+            NameColumnKey => 2,
+            PlayersColumnKey => 3,
+            PingColumnKey => 4,
+            MapColumnKey => 5,
+            ModeColumnKey => 6,
+            IwadColumnKey => 7,
+            AddressColumnKey => 8,
+            _ => 3
+        };
+    }
+
     private void UpdateMenuCheckMark(MenuItem? menuItem, bool isChecked)
     {
         if (menuItem == null) return;
@@ -788,8 +1024,19 @@ public partial class MainWindow : Window
         settings.WindowMaximized = WindowState == WindowState.Maximized;
 
         // Sorting
-        settings.SortColumnIndex = _sortColumnIndex;
-        settings.SortAscending = _sortAscending;
+        settings.ServerListSorts = _sortDescriptors
+            .Select(descriptor => new ListSortSetting
+            {
+                ColumnKey = descriptor.ColumnKey,
+                Ascending = descriptor.Ascending
+            })
+            .ToList();
+        settings.ServerListSortsConfigured = true;
+        if (_sortDescriptors.Count > 0)
+        {
+            settings.SortColumnIndex = GetLegacySortIndex(_sortDescriptors[0].ColumnKey);
+            settings.SortAscending = _sortDescriptors[0].Ascending;
+        }
 
         // Column widths
         settings.ColumnWidths.Clear();
@@ -797,13 +1044,17 @@ public partial class MainWindow : Window
         {
             var col = ServerListView.Columns[i];
             if (col.IsFixedWidth || string.IsNullOrEmpty(col.Header)) continue;
-            int gridCol = ServerListView.GetGridColumnIndex(i);
-            if (gridCol >= 0 && gridCol < ServerListView.HeaderGrid.ColumnDefinitions.Count)
-            {
-                int actualWidth = (int)ServerListView.HeaderGrid.ColumnDefinitions[gridCol].ActualWidth;
-                if (actualWidth > 0)
-                    settings.ColumnWidths[col.Header] = actualWidth;
-            }
+            var actualWidth = (int)ServerListView.GetColumnWidth(i);
+            if (actualWidth > 0)
+                settings.ColumnWidths[col.Key] = actualWidth;
+        }
+
+        settings.ServerListColumnVisibility.Clear();
+        for (var i = 0; i < ServerListView.Columns.Count; i++)
+        {
+            var column = ServerListView.Columns[i];
+            settings.ServerListColumnVisibility[column.Key] =
+                ServerListView.IsColumnVisible(i);
         }
 
         // Filters
@@ -864,6 +1115,7 @@ public partial class MainWindow : Window
         var allServers = _browserService.Servers.ToList();
         var filtered = ApplyFilters(allServers);
         filtered = SortServers(filtered);
+        var searchText = GetCurrentSearchText();
         var manualAddresses = _settings.Settings.ManualServers
             .Select(m => m.FullAddress)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -895,7 +1147,7 @@ public partial class MainWindow : Window
             if (newServerMap.TryGetValue(vm.AddressDisplay, out var data))
             {
                 // Update existing item in-place
-                vm.UpdateFrom(data.Server, data.FavoriteMatch, data.IsManual);
+                vm.UpdateFrom(data.Server, data.FavoriteMatch, data.IsManual, searchText);
                 existingAddresses.Add(vm.AddressDisplay);
             }
             else
@@ -911,7 +1163,11 @@ public partial class MainWindow : Window
             if (!existingAddresses.Contains(address))
             {
                 var data = newServerMap[address];
-                var vm = new ServerViewModel(data.Server, data.FavoriteMatch, data.IsManual);
+                var vm = new ServerViewModel(
+                    data.Server,
+                    data.FavoriteMatch,
+                    data.IsManual,
+                    searchText);
                 Servers.Add(vm);
             }
         }
@@ -946,7 +1202,7 @@ public partial class MainWindow : Window
         var hideFull = HideFullCheckBox?.IsChecked ?? false;
         var hidePassworded = HidePasswordedCheckBox?.IsChecked ?? false;
         var favoritesOnly = FavoritesOnlyCheckBox?.IsChecked ?? false;
-        var searchText = SearchBox?.Text?.Trim() ?? "";
+        var searchText = GetCurrentSearchText();
         var gameModeIndex = GameModeComboBox?.SelectedIndex ?? 0;
 
         return servers.Where(s =>
@@ -987,10 +1243,23 @@ public partial class MainWindow : Window
             // Search filter
             if (!string.IsNullOrEmpty(searchText))
             {
-                if (!ServerRuleUtility.GetComparableServerName(s).Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
-                    !s.Map.Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
-                    !s.Address.Contains(searchText, StringComparison.OrdinalIgnoreCase) &&
-                    !s.IWAD.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                var searchableFields = new[]
+                {
+                    ServerRuleUtility.GetComparableServerName(s),
+                    s.Map,
+                    $"{s.Address}:{s.Port}",
+                    s.IWAD,
+                    s.GameMode.Name,
+                    s.GameMode.ShortName,
+                    s.Country,
+                    s.GameVersion
+                };
+                var matchesServerField = searchableFields.Any(
+                    field => TextMatchUtility.IsLooseSearchMatch(field, searchText));
+                var matchesWad = s.PWADs.Any(
+                    wad => TextMatchUtility.IsLooseSearchMatch(wad.Name, searchText));
+
+                if (!matchesServerField && !matchesWad)
                     return false;
             }
 
@@ -1027,20 +1296,108 @@ public partial class MainWindow : Window
 
     private System.Collections.Generic.List<ServerInfo> SortServerGroup(System.Collections.Generic.List<ServerInfo> servers)
     {
-        return _sortColumnIndex switch
+        IOrderedEnumerable<ServerInfo>? ordered = null;
+        foreach (var descriptor in _sortDescriptors)
         {
-            2 => (_sortAscending ? servers.OrderBy(s => s.Name) : servers.OrderByDescending(s => s.Name)).ToList(),
-            // Sort by players: prioritize human players, then spectators as tiebreaker, then total
-            3 => _sortAscending
-                ? servers.OrderBy(s => s.HumanPlayerCount).ThenBy(s => s.SpectatorCount).ThenBy(s => s.CurrentPlayers).ToList()
-                : servers.OrderByDescending(s => s.HumanPlayerCount).ThenByDescending(s => s.SpectatorCount).ThenByDescending(s => s.CurrentPlayers).ToList(),
-            4 => (_sortAscending ? servers.OrderBy(s => s.Ping) : servers.OrderByDescending(s => s.Ping)).ToList(),
-            5 => (_sortAscending ? servers.OrderBy(s => s.Map) : servers.OrderByDescending(s => s.Map)).ToList(),
-            6 => (_sortAscending ? servers.OrderBy(s => s.GameMode.Name) : servers.OrderByDescending(s => s.GameMode.Name)).ToList(),
-            7 => (_sortAscending ? servers.OrderBy(s => s.IWAD) : servers.OrderByDescending(s => s.IWAD)).ToList(),
-            8 => (_sortAscending ? servers.OrderBy(s => $"{s.Address}:{s.Port}") : servers.OrderByDescending(s => $"{s.Address}:{s.Port}")).ToList(),
-            _ => servers
-        };
+            ordered = descriptor.ColumnKey switch
+            {
+                NameColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => DoomColorCodes.StripColorCodes(server.Name),
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                PlayersColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => (
+                        server.HumanPlayerCount,
+                        server.SpectatorCount,
+                        server.CurrentPlayers),
+                    descriptor.Ascending),
+                PingColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => server.Ping,
+                    descriptor.Ascending),
+                MapColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => server.Map,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                ModeColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => server.GameMode.Name,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                IwadColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => server.IWAD,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                AddressColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => $"{server.Address}:{server.Port}",
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                CountryColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => server.Country,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                WadsColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => string.Join(
+                        ", ",
+                        server.PWADs.Select(wad => wad.Name)),
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                VersionColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => server.GameVersion,
+                    descriptor.Ascending,
+                    StringComparer.OrdinalIgnoreCase),
+                BotsColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => server.BotCount,
+                    descriptor.Ascending),
+                SpectatorsColumnKey => ApplyServerSort(
+                    servers,
+                    ordered,
+                    server => server.SpectatorCount,
+                    descriptor.Ascending),
+                _ => ordered
+            };
+        }
+
+        return (ordered ?? servers.OrderBy(_ => 0)).ToList();
+    }
+
+    private static IOrderedEnumerable<ServerInfo> ApplyServerSort<TKey>(
+        IEnumerable<ServerInfo> source,
+        IOrderedEnumerable<ServerInfo>? ordered,
+        Func<ServerInfo, TKey> selector,
+        bool ascending,
+        IComparer<TKey>? comparer = null)
+    {
+        if (ordered == null)
+        {
+            return ascending
+                ? source.OrderBy(selector, comparer)
+                : source.OrderByDescending(selector, comparer);
+        }
+
+        return ascending
+            ? ordered.ThenBy(selector, comparer)
+            : ordered.ThenByDescending(selector, comparer);
     }
 
     private FavoriteMatchResult GetFavoriteMatch(ServerInfo server)
@@ -1533,7 +1890,7 @@ public partial class MainWindow : Window
 
         _bigUIShell = new BigUIShell();
 
-        var dockPanel = (DockPanel)Content;
+        var dockPanel = (DockPanel)Content!;
         var idx = dockPanel.Children.IndexOf(MainContentGrid);
         if (idx >= 0)
             dockPanel.Children[idx] = _bigUIShell;
@@ -1557,16 +1914,24 @@ public partial class MainWindow : Window
         _bigUIShell.SearchTextChanged += text =>
         {
             _settings.Settings.SearchText = text;
-            UpdateServerList();
+            if (SearchBox != null
+                && !string.Equals(SearchBox.Text, text, StringComparison.Ordinal))
+            {
+                SearchBox.Text = text;
+            }
+            else
+            {
+                UpdateServerList();
+            }
         };
 
         if (ToolbarBorder != null) ToolbarBorder.IsVisible = false;
-        var menu = ((DockPanel)Content).Children.OfType<Menu>().FirstOrDefault();
+        var menu = ((DockPanel)Content!).Children.OfType<Menu>().FirstOrDefault();
         if (menu != null) menu.IsVisible = false;
         SetLogPanelVisible(false);
 
         // Also hide the standard status bar
-        var statusBar = ((DockPanel)Content).Children.OfType<Border>()
+        var statusBar = ((DockPanel)Content!).Children.OfType<Border>()
             .FirstOrDefault(b => b.Child is Grid g
                 && g.Children.OfType<TextBlock>().Any(t => t.Name == "ServerCountLabel"));
         if (statusBar != null) statusBar.IsVisible = false;
@@ -1578,7 +1943,7 @@ public partial class MainWindow : Window
 
         ServerListView.ItemsSource = Servers;
 
-        var dockPanel = (DockPanel)Content;
+        var dockPanel = (DockPanel)Content!;
         var idx = dockPanel.Children.IndexOf(_bigUIShell);
         if (idx >= 0)
             dockPanel.Children[idx] = MainContentGrid;
@@ -1586,11 +1951,11 @@ public partial class MainWindow : Window
         _bigUIShell = null;
 
         if (ToolbarBorder != null) ToolbarBorder.IsVisible = true;
-        var menu = ((DockPanel)Content).Children.OfType<Menu>().FirstOrDefault();
+        var menu = ((DockPanel)Content!).Children.OfType<Menu>().FirstOrDefault();
         if (menu != null) menu.IsVisible = true;
         SetLogPanelVisible(_settings.Settings.ShowLogPanel);
 
-        var statusBar = ((DockPanel)Content).Children.OfType<Border>()
+        var statusBar = ((DockPanel)Content!).Children.OfType<Border>()
             .FirstOrDefault(b => b.Child is Grid g
                 && g.Children.OfType<TextBlock>().Any(t => t.Name == "ServerCountLabel"));
         if (statusBar != null) statusBar.IsVisible = true;
@@ -1601,72 +1966,35 @@ public partial class MainWindow : Window
         if (_bigUIShell == null) return;
         var list = _bigUIShell.ServerListView;
 
-        list.RowBaseBackgroundPath = "RowBackground";
-        list.RowHeightPath = "RowHeight";
-        list.RowHeight = 48;
-
-        // Favorites star column
-        list.AddColumn(new ListViewColumn
+        ConfigureServerListColumns(list, bigUi: true);
+        foreach (var column in list.Columns)
         {
-            Header = "",
-            Width = 36,
-            IsFixedWidth = true,
-            CellContentFactory = () =>
-            {
-                var btn = new Button
-                {
-                    Background = Brushes.Transparent,
-                    BorderThickness = new Thickness(0),
-                    Padding = new Thickness(0),
-                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
-                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
-                    HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
-                    VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
-                    Width = 36
-                };
-                btn.Bind(Button.IsVisibleProperty, new Avalonia.Data.Binding("ShowFavoritesColumn"));
-                var tb = new TextBlock { FontSize = 16 };
-                tb.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding("FavoriteIcon"));
-                tb.Bind(TextBlock.ForegroundProperty, new Avalonia.Data.Binding("FavoriteColor"));
-                btn.Content = tb;
-                btn.Click += FavoriteButton_Click;
-                return btn;
-            }
-        });
-
-        list.AddColumn(new ListViewColumn { Header = "", Width = 0, MinWidth = 0, IsFixedWidth = true,
-            CellContentFactory = () => new Border { Width = 0, Height = 0 } });
-
-        list.AddColumn(new ListViewColumn { Header = "Server Name", IsStar = true, MinWidth = 200,
-            BindingPath = "Name", TextTrimming = TextTrimming.CharacterEllipsis,
-            SortClick = SortByName_Click });
-
-        list.AddColumn(new ListViewColumn { Header = "Players", Width = 100, MinWidth = 80,
-            BindingPath = "PlayersDisplay", SortClick = SortByPlayers_Click });
-
-        list.AddColumn(new ListViewColumn { Header = "Ping", Width = 80, MinWidth = 60,
-            BindingPath = "Ping", SortClick = SortByPing_Click });
-
-        list.AddColumn(new ListViewColumn { Header = "Map", Width = 120, MinWidth = 80,
-            BindingPath = "Map", TextTrimming = TextTrimming.CharacterEllipsis,
-            SortClick = SortByMap_Click });
-
-        list.AddColumn(new ListViewColumn { Header = "Mode", Width = 100, MinWidth = 80,
-            BindingPath = "GameModeDisplay", SortClick = SortByMode_Click });
-
-        list.AddColumn(new ListViewColumn { Header = "IWAD", Width = 120, MinWidth = 80,
-            BindingPath = "IWAD", TextTrimming = TextTrimming.CharacterEllipsis,
-            SortClick = SortByIwad_Click });
-
-        list.AddColumn(new ListViewColumn { Header = "Address", Width = 180, MinWidth = 120,
-            BindingPath = "AddressDisplay", SortClick = SortByAddress_Click });
-
-        list.Build(ListViewOverflowMode.Fill);
+            var visible = column.Key == FavoriteColumnKey
+                ? _settings.Settings.ShowFavoritesColumn
+                : _settings.Settings.ServerListColumnVisibility.TryGetValue(
+                    column.Key,
+                    out var savedVisibility)
+                    ? savedVisibility
+                    : column.IsVisibleByDefault;
+            list.SetColumnVisible(column.Key, visible);
+        }
         list.ItemsSource = Servers;
+        _bigUIShell.SetSearchText(
+            SearchBox?.Text
+            ?? _settings.Settings.SearchText
+            ?? string.Empty);
         list.KeyDown += (_, e) => {
             if (e.Key == Key.Enter) { _ = ShowLaunchGameDialogAsync(); e.Handled = true; }
         };
+    }
+
+    private string GetCurrentSearchText()
+    {
+        return (_bigUIShell?.GetSearchText()
+                ?? SearchBox?.Text
+                ?? _settings.Settings.SearchText
+                ?? string.Empty)
+            .Trim();
     }
 
     private void SetupControllerInput()
@@ -1730,8 +2058,9 @@ public partial class MainWindow : Window
 
     private void UpdateFavoritesColumnVisibility(bool visible)
     {
-        // Toggle the favorites column visibility (logical column 0)
-        ServerListView.SetColumnVisible(0, visible);
+        ServerListView.SetColumnVisible(FavoriteColumnKey, visible);
+        _bigUIShell?.ServerListView.SetColumnVisible(FavoriteColumnKey, visible);
+        _settings.Settings.ServerListColumnVisibility[FavoriteColumnKey] = visible;
 
         // Notify all server view models that the column visibility changed
         foreach (var serverVm in Servers)
@@ -1855,6 +2184,16 @@ public partial class MainWindow : Window
 
     private void SearchBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
+        var text = SearchBox?.Text ?? string.Empty;
+        if (_bigUIShell != null
+            && !string.Equals(
+                _bigUIShell.GetSearchText(),
+                text,
+                StringComparison.Ordinal))
+        {
+            _bigUIShell.SetSearchText(text);
+            return;
+        }
         UpdateServerList();
     }
 
@@ -1942,11 +2281,6 @@ public partial class MainWindow : Window
     }
 
     private async void LaunchGameMenuItem_Click(object? sender, RoutedEventArgs e)
-    {
-        await ShowLaunchGameDialogAsync();
-    }
-
-    private async void LaunchGameButton_Click(object? sender, RoutedEventArgs e)
     {
         await ShowLaunchGameDialogAsync();
     }
@@ -2244,99 +2578,65 @@ public partial class MainWindow : Window
         }
     }
 
-    // Legacy handlers kept for compatibility
-    private void ServerGrid_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private void ServerListView_SortRequested(
+        object? sender,
+        ListViewSortEventArgs e)
     {
-        // No longer used - selection handled by ServerRow_PointerPressed
-    }
-
-    private void ServerDataGrid_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        // No longer used - selection handled by ServerRow_PointerPressed
-    }
-
-    private void ServerDataGrid_DoubleTapped(object? sender, TappedEventArgs e)
-    {
-        if (_selectedServer != null)
+        _sortDescriptors.Clear();
+        _sortDescriptors.AddRange(e.SortDescriptors);
+        if (!ReferenceEquals(sender, ServerListView))
+            ServerListView.SetSortDescriptors(_sortDescriptors);
+        if (_bigUIShell != null
+            && !ReferenceEquals(sender, _bigUIShell.ServerListView))
         {
-            _ = LaunchServerAsync(_selectedServer);
-        }
-    }
-
-    private void ServerGrid_DoubleTapped(object? sender, TappedEventArgs e)
-    {
-        if (_selectedServer != null)
-        {
-            _ = LaunchServerAsync(_selectedServer);
-        }
-    }
-
-    private void ServerGrid_LoadingRow(object? sender, DataGridRowEventArgs e)
-    {
-        if (e.Row.DataContext is ServerViewModel vm)
-        {
-            e.Row.Background = vm.RowBackground;
-        }
-    }
-
-    private void ServerGrid_Sorting(object? sender, DataGridColumnEventArgs e)
-    {
-        // Map column header to sort index
-        var columnName = e.Column.Header?.ToString() ?? "";
-        var newSortIndex = columnName switch
-        {
-            "Server Name" => 2,
-            "Players" => 3,
-            "Ping" => 4,
-            "Map" => 5,
-            "Mode" => 6,
-            "IWAD" => 7,
-            "Address" => 8,
-            _ => -1
-        };
-
-        if (newSortIndex == -1) return;
-
-        // Toggle direction if same column, otherwise default to descending for Players, ascending for others
-        if (newSortIndex == _sortColumnIndex)
-        {
-            _sortAscending = !_sortAscending;
-        }
-        else
-        {
-            _sortColumnIndex = newSortIndex;
-            _sortAscending = newSortIndex != 3; // Players defaults to descending
+            _bigUIShell.ServerListView.SetSortDescriptors(_sortDescriptors);
         }
 
         UpdateServerList();
         SaveSettings();
-
-        // Prevent default sorting
-        e.Handled = true;
     }
 
-    private void SortByColumn(int columnIndex, bool defaultDescending = false)
+    private void ServerListView_ColumnVisibilityChanged(
+        object? sender,
+        ListViewColumnVisibilityChangedEventArgs e)
     {
-        if (columnIndex == _sortColumnIndex)
+        if (_synchronizingListPreferences)
+            return;
+
+        _synchronizingListPreferences = true;
+        try
         {
-            _sortAscending = !_sortAscending;
+            _settings.Settings.ServerListColumnVisibility[e.ColumnKey] = e.IsVisible;
+
+            if (!ReferenceEquals(sender, ServerListView))
+                ServerListView.SetColumnVisible(e.ColumnKey, e.IsVisible);
+            if (_bigUIShell != null
+                && !ReferenceEquals(sender, _bigUIShell.ServerListView))
+            {
+                _bigUIShell.ServerListView.SetColumnVisible(
+                    e.ColumnKey,
+                    e.IsVisible);
+            }
+
+            if (e.ColumnKey == FavoriteColumnKey)
+            {
+                _settings.Settings.ShowFavoritesColumn = e.IsVisible;
+                UpdateMenuCheckMark(
+                    ShowFavoritesColumnMenuItem,
+                    e.IsVisible);
+                foreach (var serverVm in Servers)
+                    serverVm.NotifyFavoritesColumnChanged();
+            }
+
+            PopulateServerListColumnsMenu();
         }
-        else
+        finally
         {
-            _sortColumnIndex = columnIndex;
-            _sortAscending = !defaultDescending;
+            _synchronizingListPreferences = false;
         }
-        UpdateServerList();
+
         SaveSettings();
     }
-
-    private void SortByName_Click(object? sender, RoutedEventArgs e) => SortByColumn(2);
-    private void SortByPlayers_Click(object? sender, RoutedEventArgs e) => SortByColumn(3, defaultDescending: true);
-    private void SortByPing_Click(object? sender, RoutedEventArgs e) => SortByColumn(4);
-    private void SortByMap_Click(object? sender, RoutedEventArgs e) => SortByColumn(5);
-    private void SortByMode_Click(object? sender, RoutedEventArgs e) => SortByColumn(6);
-    private void SortByIwad_Click(object? sender, RoutedEventArgs e) => SortByColumn(7);
-    private void SortByAddress_Click(object? sender, RoutedEventArgs e) => SortByColumn(8);
 
     private void ServerContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
@@ -2362,11 +2662,6 @@ public partial class MainWindow : Window
                 ToggleNameFavoriteMenuItem.IsEnabled = !string.IsNullOrWhiteSpace(comparableName);
             }
         }
-    }
-
-    private void ServerGrid_PointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        // No longer used - handled by ServerScrollViewer_PointerPressed
     }
 
     private async Task LaunchServerAsync(ServerInfo server)
@@ -4180,28 +4475,43 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     private ServerInfo _server;
     private FavoriteMatchResult _favoriteMatch;
     private bool _isManual;
+    private string _searchText;
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
-    public ServerViewModel(ServerInfo server, FavoriteMatchResult favoriteMatch, bool isManual = false)
+    public ServerViewModel(
+        ServerInfo server,
+        FavoriteMatchResult favoriteMatch,
+        bool isManual = false,
+        string searchText = "")
     {
         _server = server;
         _favoriteMatch = favoriteMatch;
         _isManual = isManual;
+        _searchText = searchText;
     }
 
     /// <summary>
     /// Update this view model in-place with new server data.
     /// </summary>
-    public void UpdateFrom(ServerInfo server, FavoriteMatchResult favoriteMatch, bool isManual)
+    public void UpdateFrom(
+        ServerInfo server,
+        FavoriteMatchResult favoriteMatch,
+        bool isManual,
+        string searchText = "")
     {
         _server = server;
 
         bool favoriteChanged = _favoriteMatch != favoriteMatch;
         bool manualChanged = _isManual != isManual;
+        bool searchChanged = !string.Equals(
+            _searchText,
+            searchText,
+            StringComparison.Ordinal);
 
         _favoriteMatch = favoriteMatch;
         _isManual = isManual;
+        _searchText = searchText;
 
         // Notify all data-bound properties that may have changed
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Name)));
@@ -4210,6 +4520,11 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Map)));
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(GameModeDisplay)));
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IWAD)));
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(WadsDisplay)));
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Country)));
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(GameVersion)));
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(BotCount)));
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(SpectatorCount)));
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsPassworded)));
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CurrentPlayers)));
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(RowBackground)));
@@ -4227,6 +4542,9 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsManualServer)));
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsPinned)));
         }
+
+        if (searchChanged)
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(SearchText)));
     }
 
     public ServerInfo Server => _server;
@@ -4272,9 +4590,14 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     public string Map => _server.Map;
     public string GameModeDisplay => _server.GameMode.ShortName;
     public string IWAD => _server.IWAD;
+    public string WadsDisplay => string.Join(", ", _server.PWADs.Select(wad => wad.Name));
+    public string Country => _server.Country;
+    public string GameVersion => _server.GameVersion;
     public string AddressDisplay => $"{_server.Address}:{_server.Port}";
     public int CurrentPlayers => _server.CurrentPlayers;
     public int BotCount => _server.BotCount;
+    public int SpectatorCount => _server.SpectatorCount;
+    public string SearchText => _searchText;
     public bool IsFavorite => _favoriteMatch.IsFavorite;
     public bool IsManualServer => _isManual;
     public bool IsPinned => _favoriteMatch.IsFavorite || _isManual;
@@ -4400,4 +4723,3 @@ public class LogEntryViewModel
         Color = color;
     }
 }
-

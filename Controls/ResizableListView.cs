@@ -4,6 +4,7 @@ using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
+using Avalonia.Data.Converters;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
@@ -13,6 +14,8 @@ using Avalonia.VisualTree;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using ZScape.Services;
 
 namespace ZScape.Controls;
@@ -91,6 +94,14 @@ public class ListViewRowPointerEventArgs : ListViewRowEventArgs
 }
 
 /// <summary>
+/// One level in a list view's ordered sort chain.
+/// </summary>
+public sealed record ListViewSortDescriptor(
+    int ColumnIndex,
+    string ColumnKey,
+    bool Ascending);
+
+/// <summary>
 /// Event args for sort requests from column header clicks.
 /// </summary>
 public class ListViewSortEventArgs : EventArgs
@@ -98,13 +109,51 @@ public class ListViewSortEventArgs : EventArgs
     /// <summary>The logical column index that was clicked.</summary>
     public int ColumnIndex { get; }
 
-    /// <summary>True when sorting ascending, false for descending.</summary>
+    /// <summary>The clicked column's resulting direction.</summary>
     public bool Ascending { get; }
 
+    /// <summary>
+    /// Complete ordered sort chain. The first entry is the primary sort;
+    /// later entries are tie-breakers.
+    /// </summary>
+    public IReadOnlyList<ListViewSortDescriptor> SortDescriptors { get; }
+
     public ListViewSortEventArgs(int columnIndex, bool ascending)
+        : this(
+            columnIndex,
+            ascending,
+            [new ListViewSortDescriptor(columnIndex, columnIndex.ToString(CultureInfo.InvariantCulture), ascending)])
+    {
+    }
+
+    public ListViewSortEventArgs(
+        int columnIndex,
+        bool ascending,
+        IReadOnlyList<ListViewSortDescriptor> sortDescriptors)
     {
         ColumnIndex = columnIndex;
         Ascending = ascending;
+        SortDescriptors = sortDescriptors;
+    }
+}
+
+/// <summary>
+/// Event args for a user-driven column visibility change.
+/// </summary>
+public sealed class ListViewColumnVisibilityChangedEventArgs : EventArgs
+{
+    public int ColumnIndex { get; }
+    public string ColumnKey { get; }
+    public bool IsVisible { get; }
+
+    public ListViewColumnVisibilityChangedEventArgs(
+        int columnIndex,
+        string columnKey,
+        bool isVisible)
+    {
+        ColumnIndex = columnIndex;
+        ColumnKey = columnKey;
+        IsVisible = isVisible;
     }
 }
 
@@ -138,6 +187,10 @@ public class ResizableListView : UserControl
     private readonly List<ListViewColumn> _columns = [];
     private readonly List<int> _columnGridIndices = [];
     private readonly List<(GridLength width, double minWidth)> _originalColumnDefs = [];
+    private readonly List<(GridLength width, double minWidth)> _lastVisibleColumnDefs = [];
+    private readonly List<Control> _headerCells = [];
+    private readonly List<bool> _columnVisibility = [];
+    private readonly List<ColumnWidthState> _columnWidthStates = [];
     private ListViewOverflowMode _overflowMode;
     private bool _isBuilt;
 
@@ -152,7 +205,9 @@ public class ResizableListView : UserControl
     // Sort state
     private int _sortColumnIndex = -1;
     private bool _sortAscending = true;
+    private readonly List<ListViewSortDescriptor> _sortDescriptors = [];
     private readonly List<TextBlock> _sortIndicators = [];
+    private KeyModifiers _pendingHeaderModifiers;
 
     // Expose internal controls for advanced scenarios
     public Grid HeaderGrid => _headerGrid;
@@ -173,6 +228,11 @@ public class ResizableListView : UserControl
     /// data source and updating <see cref="ItemsSource"/>.
     /// </summary>
     public event EventHandler<ListViewSortEventArgs>? SortRequested;
+
+    /// <summary>
+    /// Fired after a user shows or hides a column from the header menu.
+    /// </summary>
+    public event EventHandler<ListViewColumnVisibilityChangedEventArgs>? ColumnVisibilityChanged;
 
     /// <summary>
     /// Fired whenever the selection set changes (items added or removed).
@@ -260,6 +320,11 @@ public class ResizableListView : UserControl
     public bool SortAscending => _sortAscending;
 
     /// <summary>
+    /// Gets the complete primary-to-last tie-breaker sort chain.
+    /// </summary>
+    public IReadOnlyList<ListViewSortDescriptor> SortDescriptors => _sortDescriptors;
+
+    /// <summary>
     /// Context menu to attach to the scroll viewer.
     /// </summary>
     public new ContextMenu? ContextMenu
@@ -273,7 +338,13 @@ public class ResizableListView : UserControl
         ClipToBounds = true;
 
         _headerGrid = new Grid();
-        _scrollViewer = new ScrollViewer { Background = Brushes.Transparent };
+        _scrollViewer = new ScrollViewer
+        {
+            Background = Brushes.Transparent,
+            AllowAutoHide = false,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
+        };
         _itemsControl = new ItemsControl();
 
         _root = new DockPanel { ClipToBounds = true };
@@ -293,8 +364,9 @@ public class ResizableListView : UserControl
         _scrollViewer.Content = _itemsControl;
         _root.Children.Add(_scrollViewer);
 
-        // Sync column widths when header is resized
-        _headerGrid.LayoutUpdated += (_, _) => SyncColumnWidths();
+        // Publish arranged header widths into one observable layout model.
+        // Rows bind to this model directly; no per-row width copying is needed.
+        _headerGrid.LayoutUpdated += (_, _) => SyncColumnWidthStates();
 
         // Layout is finalized in Build() to apply OverflowMode
         Content = _root;
@@ -311,7 +383,35 @@ public class ResizableListView : UserControl
     public void AddColumn(ListViewColumn column)
     {
         if (_isBuilt) throw new InvalidOperationException("Cannot add columns after Build() has been called.");
+
+        if (string.IsNullOrWhiteSpace(column.Key))
+        {
+            var baseKey = string.IsNullOrWhiteSpace(column.Header)
+                ? $"column-{_columns.Count}"
+                : new string(column.Header
+                    .Trim()
+                    .ToLowerInvariant()
+                    .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
+                    .ToArray())
+                    .Trim('-');
+
+            if (string.IsNullOrEmpty(baseKey))
+                baseKey = $"column-{_columns.Count}";
+
+            var key = baseKey;
+            var suffix = 2;
+            while (_columns.Any(existing => existing.Key.Equals(key, StringComparison.OrdinalIgnoreCase)))
+                key = $"{baseKey}-{suffix++}";
+            column.Key = key;
+        }
+        else if (_columns.Any(existing =>
+                     existing.Key.Equals(column.Key, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ArgumentException($"Duplicate list column key '{column.Key}'.", nameof(column));
+        }
+
         _columns.Add(column);
+        _columnVisibility.Add(column.IsVisibleByDefault);
     }
 
     /// <summary>
@@ -344,128 +444,322 @@ public class ResizableListView : UserControl
 
         // Store original column dimensions for show/hide toggling
         _originalColumnDefs.Clear();
+        _lastVisibleColumnDefs.Clear();
         for (int i = 0; i < _columnGridIndices.Count; i++)
         {
             var gridCol = _columnGridIndices[i];
             var colDef = _headerGrid.ColumnDefinitions[gridCol];
             _originalColumnDefs.Add((colDef.Width, colDef.MinWidth));
+            _lastVisibleColumnDefs.Add((colDef.Width, colDef.MinWidth));
         }
 
-        // Header right-click context menu for column management
-        var resetItem = new MenuItem { Header = "Reset to Default" };
-        resetItem.Click += (_, _) => ResetColumnWidths();
-
-        var autoResizeItem = new MenuItem { Header = "Auto Resize" };
-        autoResizeItem.Click += (_, _) => AutoResizeColumns();
-
-        _headerBorder.ContextMenu = new ContextMenu
-        {
-            Items = { resetItem, autoResizeItem }
-        };
+        BuildHeaderContextMenu();
 
         // Enable keyboard navigation
         Focusable = true;
         KeyDown += HandleKeyDown;
 
-        // Apply horizontal overflow mode.
-        // Scroll/AutoScroll: wrap _root in an outer horizontal-only ScrollViewer.
-        // The inner _scrollViewer handles vertical scrolling with its bar HIDDEN,
-        // and an external ScrollBar is docked to the viewport's right edge
-        // (outside the horizontal scroll) so it never scrolls off-screen.
+        BuildScrollLayout();
+
+        for (var i = 0; i < _columnVisibility.Count; i++)
+            ApplyColumnVisibility(i, _columnVisibility[i], raiseEvent: false);
+    }
+
+    private void BuildHeaderContextMenu()
+    {
+        var menu = new ContextMenu();
+        menu.Opening += (_, _) => PopulateHeaderContextMenu(menu);
+        PopulateHeaderContextMenu(menu);
+        _headerBorder.ContextMenu = menu;
+    }
+
+    private void PopulateHeaderContextMenu(ContextMenu menu)
+    {
+        menu.Items.Clear();
+
+        var autoResizeItem = new MenuItem { Header = "Auto Size Visible Columns" };
+        autoResizeItem.Click += (_, _) => AutoResizeColumns();
+        menu.Items.Add(autoResizeItem);
+
+        var resetItem = new MenuItem { Header = "Reset Column Layout" };
+        resetItem.Click += (_, _) =>
+        {
+            ResetColumnWidths();
+            for (var i = 0; i < _columns.Count; i++)
+                SetColumnVisible(i, _columns[i].IsVisibleByDefault);
+        };
+        menu.Items.Add(resetItem);
+
+        var sortableColumns = _columns
+            .Select((column, index) => (column, index))
+            .Where(item => item.column.CanSort && !item.column.IsFixedWidth)
+            .ToList();
+
+        if (sortableColumns.Count > 0)
+        {
+            menu.Items.Add(new Separator());
+            var advancedSortItem = new MenuItem { Header = "Advanced Sorting..." };
+            advancedSortItem.Click += async (_, _) =>
+                await ShowAdvancedSortDialogAsync(sortableColumns);
+            menu.Items.Add(advancedSortItem);
+        }
+
+        if (_sortDescriptors.Count > 0)
+        {
+            var clearSortItem = new MenuItem { Header = "Clear Sorting" };
+            clearSortItem.Click += (_, _) => ClearSortDescriptors();
+            menu.Items.Add(clearSortItem);
+        }
+
+        var configurableColumns = _columns
+            .Select((column, index) => (column, index))
+            .Where(item => item.column.CanUserHide && !string.IsNullOrWhiteSpace(item.column.Header))
+            .ToList();
+
+        if (configurableColumns.Count > 0)
+        {
+            menu.Items.Add(new Separator());
+            var columnsMenu = new MenuItem { Header = "Columns" };
+            foreach (var (column, index) in configurableColumns)
+            {
+                var columnItem = new MenuItem
+                {
+                    Header = column.Header,
+                    Icon = IsColumnVisible(index) ? new TextBlock { Text = "\u2713" } : null
+                };
+                columnItem.Click += (_, _) => SetColumnVisible(index, !IsColumnVisible(index));
+                columnsMenu.Items.Add(columnItem);
+            }
+            menu.Items.Add(columnsMenu);
+        }
+
+        if (sortableColumns.Count > 0)
+        {
+            var sortHelp = new MenuItem { Header = "Shortcut Info..." };
+            sortHelp.Click += async (_, _) =>
+                await ShowSortingShortcutInfoAsync();
+            menu.Items.Add(new Separator());
+            menu.Items.Add(sortHelp);
+        }
+    }
+
+    private async Task ShowSortingShortcutInfoAsync()
+    {
+        if (TopLevel.GetTopLevel(this) is not Window owner)
+            return;
+
+        var dialog = new Window
+        {
+            Title = "Sorting Shortcuts",
+            Width = 470,
+            Height = 300,
+            MinWidth = 420,
+            CanResize = false,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+
+        var content = new StackPanel { Spacing = 5 };
+        content.Children.Add(new TextBlock
+        {
+            Text = "Header sorting shortcuts",
+            FontSize = 16,
+            FontWeight = FontWeight.Bold,
+            Margin = new Thickness(0, 0, 0, 8)
+        });
+        content.Children.Add(CreateSortingShortcutRow(
+            "Click",
+            "Make the column the primary sort. Click it again to reverse the direction."));
+        content.Children.Add(CreateSortingShortcutRow(
+            "Shift + Click",
+            "Add a tie-breaker, or reverse that sort level."));
+        content.Children.Add(CreateSortingShortcutRow(
+            "Ctrl + Click",
+            "Remove that column from the current sort chain."));
+        content.Children.Add(CreateSortingShortcutRow(
+            "Advanced Sorting",
+            "Add, remove, reorder, and edit every sort level in one place."));
+
+        var okButton = new Button
+        {
+            Content = "OK",
+            Width = 90,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        okButton.Classes.Add("accent");
+        okButton.Click += (_, _) => dialog.Close();
+        content.Children.Add(okButton);
+
+        dialog.Content = new Border
+        {
+            Padding = new Thickness(16),
+            Child = content
+        };
+        dialog.KeyDown += (_, e) =>
+        {
+            if (e.Key is not (Key.Escape or Key.Enter))
+                return;
+
+            dialog.Close();
+            e.Handled = true;
+        };
+        dialog.Opened += (_, _) => okButton.Focus();
+
+        await dialog.ShowDialog(owner);
+    }
+
+    private static Control CreateSortingShortcutRow(
+        string shortcut,
+        string explanation)
+    {
+        var row = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("125,*"),
+            Margin = new Thickness(0, 3)
+        };
+        row.Children.Add(new TextBlock
+        {
+            Text = shortcut,
+            FontWeight = FontWeight.SemiBold,
+            VerticalAlignment = VerticalAlignment.Top
+        });
+
+        var explanationText = new TextBlock
+        {
+            Text = explanation,
+            TextWrapping = TextWrapping.Wrap
+        };
+        Grid.SetColumn(explanationText, 1);
+        row.Children.Add(explanationText);
+        return row;
+    }
+
+    private async Task ShowAdvancedSortDialogAsync(
+        IReadOnlyList<(ListViewColumn column, int index)> sortableColumns)
+    {
+        if (TopLevel.GetTopLevel(this) is not Window owner)
+            return;
+
+        var columnOptions = sortableColumns
+            .Select(item => new AdvancedSortColumnOption(
+                item.index,
+                item.column.Key,
+                item.column.Header,
+                item.column.DefaultSortDescending,
+                IsColumnVisible(item.index)))
+            .ToArray();
+
+        var dialog = new AdvancedSortDialog(
+            columnOptions,
+            _sortDescriptors.ToArray());
+        await dialog.ShowDialog(owner);
+        if (dialog.Confirmed)
+            SetSortDescriptors(dialog.Result, raiseEvent: true);
+    }
+
+    private void BuildScrollLayout()
+    {
+        // A dedicated vertical bar sits beside both header and rows. This keeps
+        // the header and row viewport exactly the same width when the bar appears.
+        _scrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        _scrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
+        _scrollViewer.AllowAutoHide = false;
+
+        Content = null;
+
+        Control contentHost = _root;
         if (_overflowMode != ListViewOverflowMode.Fill)
         {
-            // Inner: vertical scrolling (hidden bar), no horizontal
-            _scrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            _scrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
-
-            // Detach _root from UserControl before re-parenting
-            Content = null;
-
-            // Outer horizontal ScrollViewer wraps _root (header + rows scroll together).
-            // Auto: appears only when content exceeds viewport, classic (non-overlay) style.
             var outerScroll = new ScrollViewer
             {
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = _overflowMode == ListViewOverflowMode.Scroll
+                    ? ScrollBarVisibility.Visible
+                    : ScrollBarVisibility.Auto,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                AllowAutoHide = false, // WinForms-style: always expanded when visible
+                AllowAutoHide = false,
                 Content = _root
             };
 
-            // Keep _root at least as wide as the viewport so star columns fill
-            // the visible area instead of collapsing to MinWidth.
             outerScroll.PropertyChanged += (_, e) =>
             {
-                if (e.Property == ScrollViewer.ViewportProperty
-                    || e.Property == ScrollViewer.BoundsProperty)
+                if (e.Property != ScrollViewer.ViewportProperty
+                    && e.Property != ScrollViewer.BoundsProperty)
                 {
-                    double vw = outerScroll.Viewport.Width;
-                    if (vw > 0)
-                        _root.MinWidth = vw;
+                    return;
                 }
+
+                var viewportWidth = outerScroll.Viewport.Width;
+                if (viewportWidth > 0)
+                    _root.MinWidth = viewportWidth;
             };
-
-            // External vertical ScrollBar, docked outside the horizontal scroll
-            // so it never scrolls off-screen. Hidden when not needed, classic style.
-            var vScrollBar = new ScrollBar
-            {
-                Orientation = Orientation.Vertical,
-                IsVisible = false,
-                AllowAutoHide = false // WinForms-style: always expanded when visible
-            };
-
-            // Two-way sync between _scrollViewer vertical offset and external bar
-            bool syncing = false;
-            _scrollViewer.PropertyChanged += (_, e) =>
-            {
-                if (syncing) return;
-                if (e.Property == ScrollViewer.ExtentProperty
-                    || e.Property == ScrollViewer.ViewportProperty
-                    || e.Property == ScrollViewer.OffsetProperty)
-                {
-                    syncing = true;
-                    double max = Math.Max(0, _scrollViewer.Extent.Height - _scrollViewer.Viewport.Height);
-                    vScrollBar.Maximum = max;
-                    vScrollBar.ViewportSize = _scrollViewer.Viewport.Height;
-                    vScrollBar.Value = _scrollViewer.Offset.Y;
-                    vScrollBar.IsVisible = max > 0;
-                    syncing = false;
-
-                    // Clear hover on scroll to prevent stale highlights.
-                    // During scroll, PointerExited does not fire for containers
-                    // that move out from under the pointer.
-                    if (e.Property == ScrollViewer.OffsetProperty && _hoveredRow != null)
-                    {
-                        var oldHover = _hoveredRow;
-                        _hoveredRow = null;
-                        // Only undo the hover if the row is actually showing hover colour
-                        if (oldHover.Background == HoverRowBrush)
-                            oldHover.Background = GetBaseRowBrush(oldHover);
-                        RowPointerExited?.Invoke(this, new ListViewRowEventArgs(oldHover.DataContext, oldHover));
-                    }
-                }
-            };
-            vScrollBar.PropertyChanged += (_, e) =>
-            {
-                if (syncing) return;
-                if (e.Property == RangeBase.ValueProperty)
-                {
-                    syncing = true;
-                    _scrollViewer.Offset = _scrollViewer.Offset.WithY(vScrollBar.Value);
-                    syncing = false;
-                }
-            };
-
-            // Layout grid: [ outerScroll(*) | vScrollBar(auto) ]
-            var layoutGrid = new Grid();
-            layoutGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
-            layoutGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            Grid.SetColumn(outerScroll, 0);
-            Grid.SetColumn(vScrollBar, 1);
-            layoutGrid.Children.Add(outerScroll);
-            layoutGrid.Children.Add(vScrollBar);
-
-            Content = layoutGrid;
+            contentHost = outerScroll;
         }
+
+        var verticalScrollBar = new ScrollBar
+        {
+            Orientation = Orientation.Vertical,
+            IsVisible = false,
+            AllowAutoHide = false
+        };
+
+        var syncing = false;
+        _scrollViewer.PropertyChanged += (_, e) =>
+        {
+            if (syncing)
+                return;
+
+            if (e.Property == ScrollViewer.ExtentProperty
+                || e.Property == ScrollViewer.ViewportProperty
+                || e.Property == ScrollViewer.OffsetProperty)
+            {
+                syncing = true;
+                var maximum = Math.Max(
+                    0,
+                    _scrollViewer.Extent.Height - _scrollViewer.Viewport.Height);
+                verticalScrollBar.Maximum = maximum;
+                verticalScrollBar.ViewportSize = _scrollViewer.Viewport.Height;
+                verticalScrollBar.Value = _scrollViewer.Offset.Y;
+                verticalScrollBar.IsVisible = maximum > 0;
+                syncing = false;
+            }
+
+            if (e.Property == ScrollViewer.OffsetProperty)
+                ClearStaleHoverAfterScroll();
+        };
+
+        verticalScrollBar.PropertyChanged += (_, e) =>
+        {
+            if (syncing || e.Property != RangeBase.ValueProperty)
+                return;
+
+            syncing = true;
+            _scrollViewer.Offset = _scrollViewer.Offset.WithY(verticalScrollBar.Value);
+            syncing = false;
+        };
+
+        var layoutGrid = new Grid();
+        layoutGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+        layoutGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+        Grid.SetColumn(contentHost, 0);
+        Grid.SetColumn(verticalScrollBar, 1);
+        layoutGrid.Children.Add(contentHost);
+        layoutGrid.Children.Add(verticalScrollBar);
+        Content = layoutGrid;
+    }
+
+    private void ClearStaleHoverAfterScroll()
+    {
+        if (_hoveredRow == null)
+            return;
+
+        var oldHover = _hoveredRow;
+        _hoveredRow = null;
+        if (oldHover.Background == HoverRowBrush)
+            oldHover.Background = GetBaseRowBrush(oldHover);
+        RowPointerExited?.Invoke(
+            this,
+            new ListViewRowEventArgs(oldHover.DataContext, oldHover));
     }
 
     private void BuildHeaderGrid()
@@ -473,55 +767,27 @@ public class ResizableListView : UserControl
         _headerGrid.ColumnDefinitions.Clear();
         _headerGrid.Children.Clear();
         _columnGridIndices.Clear();
+        _headerCells.Clear();
+        _sortIndicators.Clear();
+        _columnWidthStates.Clear();
 
-        int gridCol = 0;
         for (int i = 0; i < _columns.Count; i++)
         {
             var col = _columns[i];
-
-            // Add splitter column before this column (except the first)
-            if (i > 0 && !col.IsFixedWidth && !_columns[i - 1].IsFixedWidth)
-            {
-                _headerGrid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(5)));
-                var splitter = new GridSplitter
-                {
-                    Width = 5,
-                    Background = Brushes.Transparent,
-                    ResizeDirection = GridResizeDirection.Columns,
-                    ResizeBehavior = GridResizeBehavior.PreviousAndNext
-                };
-
-                // Double-click the splitter to auto-fit the column to its left
-                var leftLogical = i - 1;
-                splitter.DoubleTapped += (_, e) =>
-                {
-                    AutoResizeColumn(leftLogical);
-                    e.Handled = true;
-                };
-
-                Grid.SetColumn(splitter, gridCol);
-                _headerGrid.Children.Add(splitter);
-                gridCol++;
-            }
-            else if (i > 0)
-            {
-                // Fixed-width columns still need a spacer column definition
-                // but no splitter
-                _headerGrid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(0)));
-                gridCol++;
-            }
-
-            // Record the grid column index for this logical column
-            _columnGridIndices.Add(gridCol);
-
-            // Data column
+            _columnGridIndices.Add(i);
             var colDef = col.IsStar
                 ? new ColumnDefinition(new GridLength(1, GridUnitType.Star)) { MinWidth = col.MinWidth }
                 : new ColumnDefinition(new GridLength(col.Width)) { MinWidth = col.MinWidth };
             _headerGrid.ColumnDefinitions.Add(colDef);
+            _columnWidthStates.Add(new ColumnWidthState());
 
-            // Header content
-            if (col.SortClick != null && !col.IsFixedWidth)
+            var headerHost = new Grid
+            {
+                ClipToBounds = true
+            };
+
+            var sortable = col.CanSort && !col.IsFixedWidth;
+            if (sortable)
             {
                 var headerPanel = new StackPanel
                 {
@@ -540,7 +806,7 @@ public class ResizableListView : UserControl
                 headerPanel.Children.Add(sortIndicator);
                 _sortIndicators.Add(sortIndicator);
 
-                var logicalIndex = i; // capture for the closure
+                var logicalIndex = i;
                 var btn = new Button
                 {
                     Content = headerPanel,
@@ -548,15 +814,17 @@ public class ResizableListView : UserControl
                     HorizontalContentAlignment = HorizontalAlignment.Left,
                     Classes = { "headerButton" }
                 };
-                btn.Click += (s, e) =>
+                ToolTip.SetTip(
+                    btn,
+                    "Click to sort. Shift+click adds a tie-breaker; Ctrl+click removes it.");
+                btn.PointerPressed += (_, e) => _pendingHeaderModifiers = e.KeyModifiers;
+                btn.Click += (_, _) =>
                 {
-                    // Internal sort state toggle
-                    HandleSortClick(logicalIndex);
-                    // Also fire the original per-column handler if set
-                    col.SortClick?.Invoke(s, e);
+                    var modifiers = _pendingHeaderModifiers;
+                    _pendingHeaderModifiers = KeyModifiers.None;
+                    HandleSortClick(logicalIndex, modifiers);
                 };
-                Grid.SetColumn(btn, gridCol);
-                _headerGrid.Children.Add(btn);
+                headerHost.Children.Add(btn);
             }
             else
             {
@@ -568,73 +836,78 @@ public class ResizableListView : UserControl
                     Margin = new Thickness(col.CellPadding.Left, 0, 0, 0),
                     Padding = new Thickness(4)
                 };
-                Grid.SetColumn(txt, gridCol);
-                _headerGrid.Children.Add(txt);
-                _sortIndicators.Add(null!); // placeholder to keep indices aligned
+                headerHost.Children.Add(txt);
+                _sortIndicators.Add(null!);
             }
 
-            gridCol++;
-        }
+            if (!col.IsFixedWidth)
+            {
+                headerHost.Children.Add(CreateResizeHandle(i));
+            }
 
-        // Trailing resize handle column for the last column's right edge.
-        // GridSplitters only resize between two columns, so the last column
-        // would otherwise have no right-edge drag handle.
-        _headerGrid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(5)));
-        var trailingHandle = new Border
+            Grid.SetColumn(headerHost, i);
+            _headerGrid.Children.Add(headerHost);
+            _headerCells.Add(headerHost);
+        }
+    }
+
+    private Control CreateResizeHandle(int logicalColumnIndex)
+    {
+        var handle = new Border
         {
             Width = 5,
             Background = Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.SizeWestEast),
-        };
-        Grid.SetColumn(trailingHandle, gridCol);
-        _headerGrid.Children.Add(trailingHandle);
-
-        // The trailing handle resizes the last logical column
-        int trailingTargetLogical = _columns.Count - 1;
-        int trailingTargetGridCol = _columnGridIndices[trailingTargetLogical];
-
-        bool trailingDrag = false;
-        double trailingDragStartX = 0;
-        double trailingDragStartWidth = 0;
-
-        trailingHandle.PointerPressed += (s, e) =>
-        {
-            if (e.GetCurrentPoint(trailingHandle).Properties.IsLeftButtonPressed)
-            {
-                trailingDrag = true;
-                trailingDragStartX = e.GetPosition(_headerGrid).X;
-                trailingDragStartWidth = _headerGrid.ColumnDefinitions[trailingTargetGridCol].ActualWidth;
-                e.Pointer.Capture(trailingHandle);
-                e.Handled = true;
-            }
+            HorizontalAlignment = HorizontalAlignment.Right
         };
 
-        trailingHandle.PointerMoved += (s, e) =>
+        var dragging = false;
+        var dragStartX = 0d;
+        var dragStartWidth = 0d;
+
+        handle.PointerPressed += (_, e) =>
         {
-            if (!trailingDrag) return;
-            double delta = e.GetPosition(_headerGrid).X - trailingDragStartX;
-            double newWidth = Math.Max(_columns[trailingTargetLogical].MinWidth,
-                trailingDragStartWidth + delta);
-            _headerGrid.ColumnDefinitions[trailingTargetGridCol].Width = new GridLength(newWidth);
+            if (!e.GetCurrentPoint(handle).Properties.IsLeftButtonPressed)
+                return;
+
+            dragging = true;
+            dragStartX = e.GetPosition(_headerGrid).X;
+            dragStartWidth = _headerGrid.ColumnDefinitions[logicalColumnIndex].ActualWidth;
+            e.Pointer.Capture(handle);
             e.Handled = true;
         };
 
-        trailingHandle.PointerReleased += (s, e) =>
+        handle.PointerMoved += (_, e) =>
         {
-            if (trailingDrag)
-            {
-                trailingDrag = false;
-                e.Pointer.Capture(null);
-                e.Handled = true;
-            }
-        };
+            if (!dragging)
+                return;
 
-        // Double-click the trailing handle to auto-fit the last column
-        trailingHandle.DoubleTapped += (_, e) =>
-        {
-            AutoResizeColumn(trailingTargetLogical);
+            var delta = e.GetPosition(_headerGrid).X - dragStartX;
+            var newWidth = Math.Max(
+                _columns[logicalColumnIndex].MinWidth,
+                dragStartWidth + delta);
+            _headerGrid.ColumnDefinitions[logicalColumnIndex].Width =
+                new GridLength(newWidth);
             e.Handled = true;
         };
+
+        handle.PointerReleased += (_, e) =>
+        {
+            if (!dragging)
+                return;
+
+            dragging = false;
+            e.Pointer.Capture(null);
+            e.Handled = true;
+        };
+
+        handle.DoubleTapped += (_, e) =>
+        {
+            AutoResizeColumn(logicalColumnIndex);
+            e.Handled = true;
+        };
+
+        return handle;
     }
 
     private void BuildItemTemplate()
@@ -643,21 +916,11 @@ public class ResizableListView : UserControl
         var colDefs = new List<(GridLength width, double minWidth)>();
         for (int i = 0; i < _columns.Count; i++)
         {
-            if (i > 0)
-            {
-                // Splitter/spacer column
-                bool hasSplitter = !_columns[i].IsFixedWidth && !_columns[i - 1].IsFixedWidth;
-                colDefs.Add((new GridLength(hasSplitter ? 5 : 0), 0));
-            }
-
             var col = _columns[i];
             colDefs.Add(col.IsStar
                 ? (new GridLength(1, GridUnitType.Star), col.MinWidth)
                 : (new GridLength(col.Width), col.MinWidth));
         }
-
-        // Trailing spacer to match the header's trailing resize handle column
-        colDefs.Add((new GridLength(5), 0));
 
         // Capture references for the closure
         var columns = _columns;
@@ -796,29 +1059,38 @@ public class ResizableListView : UserControl
                 }
             };
 
-            // Row grid - use pixel widths from the header so Star columns are
-            // already resolved. This prevents erratic resizing of newly realized
-            // containers during scroll (they would briefly use Star sizing).
-            // An explicit Width is set to cap DesiredSize at the header width,
-            // preventing a feedback loop where row desired sizes grow _root wider,
-            // causing star columns to expand and feeding back into even wider rows.
-            double headerW = this._headerGrid.Bounds.Width;
+            // The header ColumnDefinitions are the single source of truth. Each
+            // realized row binds directly to their arranged pixel widths, so a
+            // resize, visibility change, or star-column reflow updates header and
+            // cells in the same layout pass.
             var grid = new Grid
             {
                 Name = "RowGrid",
-                VerticalAlignment = VerticalAlignment.Center,
-                Width = headerW > 0 ? headerW : double.NaN
+                VerticalAlignment = VerticalAlignment.Center
             };
+            grid.Bind(
+                WidthProperty,
+                new Binding("Bounds.Width")
+                {
+                    Source = _headerGrid,
+                    Mode = BindingMode.OneWay
+                });
 
-            var headerCols = this._headerGrid.ColumnDefinitions;
+            var headerCols = _headerGrid.ColumnDefinitions;
             if (headerCols.Count > 0 && headerCols.Count == colDefs.Count)
             {
-                // Prefer current header actual widths (already layout-resolved)
                 for (int ci = 0; ci < headerCols.Count; ci++)
                 {
-                    double actualW = headerCols[ci].ActualWidth;
-                    grid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(actualW > 0 ? actualW : colDefs[ci].width.Value))
-                        { MinWidth = headerCols[ci].MinWidth });
+                    var rowColumn = new ColumnDefinition();
+                    rowColumn.Bind(
+                        ColumnDefinition.WidthProperty,
+                        new Binding(nameof(ColumnWidthState.Width))
+                        {
+                            Source = _columnWidthStates[ci],
+                            Mode = BindingMode.OneWay,
+                            Converter = PixelGridLengthConverter.Instance
+                        });
+                    grid.ColumnDefinitions.Add(rowColumn);
                 }
             }
             else
@@ -830,11 +1102,8 @@ public class ResizableListView : UserControl
             }
 
             // Cell content
-            int gridCol = 0;
             for (int i = 0; i < columns.Count; i++)
             {
-                if (i > 0) gridCol++; // Skip splitter/spacer column
-
                 var col = columns[i];
 
                 Control cellControl;
@@ -864,9 +1133,8 @@ public class ResizableListView : UserControl
                     cellControl = new TextBlock(); // Empty placeholder
                 }
 
-                Grid.SetColumn(cellControl, gridCol);
+                Grid.SetColumn(cellControl, i);
                 grid.Children.Add(cellControl);
-                gridCol++;
             }
 
             border.Child = grid;
@@ -875,44 +1143,30 @@ public class ResizableListView : UserControl
     }
 
     /// <summary>
-    /// Synchronizes header column widths to all realized row grids.
-    /// Called automatically on header LayoutUpdated.
+    /// Invalidates realized rows so their direct header-width bindings are
+    /// re-evaluated. Width copying is intentionally not used.
     /// </summary>
     public void SyncColumnWidths()
     {
-        var headerCols = _headerGrid.ColumnDefinitions;
-        if (headerCols.Count == 0) return;
-
-        double headerWidth = _headerGrid.Bounds.Width;
-
+        SyncColumnWidthStates();
         foreach (var container in _itemsControl.GetRealizedContainers())
         {
             var rowGrid = container.FindDescendantOfType<Grid>();
-            if (rowGrid?.Name == "RowGrid" && rowGrid.ColumnDefinitions.Count == headerCols.Count)
-            {
-                // Pin the row grid width to the header's actual width.
-                // This prevents the row-desired-size feedback loop:
-                // row pixel columns can sum to slightly more than the header
-                // (sub-pixel rounding), inflating _root, expanding star
-                // columns, and compounding on every layout pass.
-                if (headerWidth > 0 && (double.IsNaN(rowGrid.Width) || Math.Abs(rowGrid.Width - headerWidth) > 0.5))
-                    rowGrid.Width = headerWidth;
+            if (rowGrid?.Name == "RowGrid")
+                rowGrid.InvalidateMeasure();
+        }
+    }
 
-                for (int i = 0; i < headerCols.Count; i++)
-                {
-                    double hw = headerCols[i].ActualWidth;
-                    var rd = rowGrid.ColumnDefinitions[i];
-
-                    // Epsilon guard: skip no-op writes to avoid triggering
-                    // unnecessary layout passes (LayoutUpdated -> SyncColumnWidths).
-                    if (rd.Width.GridUnitType != GridUnitType.Pixel || Math.Abs(rd.Width.Value - hw) > 0.5)
-                        rd.Width = new GridLength(hw);
-
-                    double hMin = headerCols[i].MinWidth;
-                    if (Math.Abs(rd.MinWidth - hMin) > 0.1)
-                        rd.MinWidth = hMin;
-                }
-            }
+    private void SyncColumnWidthStates()
+    {
+        var count = Math.Min(
+            _headerGrid.ColumnDefinitions.Count,
+            _columnWidthStates.Count);
+        for (var i = 0; i < count; i++)
+        {
+            var actualWidth = _headerGrid.ColumnDefinitions[i].ActualWidth;
+            if (Math.Abs(_columnWidthStates[i].Width - actualWidth) > 0.1)
+                _columnWidthStates[i].Width = actualWidth;
         }
     }
 
@@ -935,69 +1189,142 @@ public class ResizableListView : UserControl
     {
         var gridCol = GetGridColumnIndex(logicalColumnIndex);
         if (gridCol < 0 || gridCol >= _headerGrid.ColumnDefinitions.Count) return;
+
+        if (!IsColumnVisible(logicalColumnIndex)
+            && logicalColumnIndex < _lastVisibleColumnDefs.Count)
+        {
+            _lastVisibleColumnDefs[logicalColumnIndex] =
+                (width, _lastVisibleColumnDefs[logicalColumnIndex].minWidth);
+            return;
+        }
+
         _headerGrid.ColumnDefinitions[gridCol].Width = width;
+        if (logicalColumnIndex < _lastVisibleColumnDefs.Count)
+        {
+            _lastVisibleColumnDefs[logicalColumnIndex] =
+                (width, _headerGrid.ColumnDefinitions[gridCol].MinWidth);
+        }
+    }
+
+    /// <summary>
+    /// Returns the current visible width, or the width retained while a column
+    /// is hidden.
+    /// </summary>
+    public double GetColumnWidth(int logicalColumnIndex)
+    {
+        var gridColumn = GetGridColumnIndex(logicalColumnIndex);
+        if (gridColumn < 0 || gridColumn >= _headerGrid.ColumnDefinitions.Count)
+            return 0;
+
+        if (IsColumnVisible(logicalColumnIndex))
+        {
+            var actualWidth = _headerGrid.ColumnDefinitions[gridColumn].ActualWidth;
+            if (actualWidth > 0)
+                return actualWidth;
+        }
+
+        if (logicalColumnIndex < _lastVisibleColumnDefs.Count)
+        {
+            var retained = _lastVisibleColumnDefs[logicalColumnIndex].width;
+            if (retained.GridUnitType == GridUnitType.Pixel)
+                return retained.Value;
+        }
+
+        return 0;
     }
 
     /// <summary>
     /// Shows or hides a logical column. When hidden, the column width and MinWidth
     /// are set to 0 so remaining columns (especially star-sized) fill the freed space.
-    /// When shown, the original width and MinWidth are restored.
+    /// When shown, its most recent visible width is restored.
     /// </summary>
     public void SetColumnVisible(int logicalColumnIndex, bool visible)
     {
-        var gridCol = GetGridColumnIndex(logicalColumnIndex);
-        if (gridCol < 0 || gridCol >= _headerGrid.ColumnDefinitions.Count) return;
-        if (logicalColumnIndex >= _originalColumnDefs.Count) return;
+        if (logicalColumnIndex < 0 || logicalColumnIndex >= _columns.Count)
+            return;
 
-        var colDef = _headerGrid.ColumnDefinitions[gridCol];
+        if (!_isBuilt)
+        {
+            _columnVisibility[logicalColumnIndex] = visible;
+            return;
+        }
+
+        ApplyColumnVisibility(logicalColumnIndex, visible, raiseEvent: true);
+    }
+
+    /// <summary>Shows or hides a column using its stable key.</summary>
+    public void SetColumnVisible(string columnKey, bool visible)
+    {
+        var index = FindColumnIndex(columnKey);
+        if (index >= 0)
+            SetColumnVisible(index, visible);
+    }
+
+    /// <summary>Returns whether a logical column is currently visible.</summary>
+    public bool IsColumnVisible(int logicalColumnIndex)
+    {
+        return logicalColumnIndex >= 0
+            && logicalColumnIndex < _columnVisibility.Count
+            && _columnVisibility[logicalColumnIndex];
+    }
+
+    /// <summary>Returns whether a keyed column is currently visible.</summary>
+    public bool IsColumnVisible(string columnKey)
+    {
+        var index = FindColumnIndex(columnKey);
+        return index >= 0 && IsColumnVisible(index);
+    }
+
+    private int FindColumnIndex(string columnKey)
+    {
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            if (_columns[i].Key.Equals(columnKey, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return -1;
+    }
+
+    private void ApplyColumnVisibility(int logicalColumnIndex, bool visible, bool raiseEvent)
+    {
+        var gridCol = GetGridColumnIndex(logicalColumnIndex);
+        if (gridCol < 0 || gridCol >= _headerGrid.ColumnDefinitions.Count)
+            return;
+        if (logicalColumnIndex >= _lastVisibleColumnDefs.Count)
+            return;
+
+        var changed = _columnVisibility[logicalColumnIndex] != visible;
+        var columnDefinition = _headerGrid.ColumnDefinitions[gridCol];
 
         if (visible)
         {
-            var original = _originalColumnDefs[logicalColumnIndex];
-            colDef.Width = original.width;
-            colDef.MinWidth = original.minWidth;
+            var previous = _lastVisibleColumnDefs[logicalColumnIndex];
+            columnDefinition.Width = previous.width;
+            columnDefinition.MinWidth = previous.minWidth;
         }
         else
         {
-            colDef.Width = new GridLength(0);
-            colDef.MinWidth = 0;
+            if (_columnVisibility[logicalColumnIndex])
+            {
+                _lastVisibleColumnDefs[logicalColumnIndex] =
+                    (columnDefinition.Width, columnDefinition.MinWidth);
+            }
+            columnDefinition.Width = new GridLength(0);
+            columnDefinition.MinWidth = 0;
         }
 
-        // Also collapse/restore the adjacent spacer column (before this column)
-        if (gridCol > 0)
-        {
-            var spacerDef = _headerGrid.ColumnDefinitions[gridCol - 1];
-            if (!visible)
-            {
-                spacerDef.Width = new GridLength(0);
-            }
-            else
-            {
-                // Restore spacer only if the previous logical column is also visible
-                var prevLogical = logicalColumnIndex - 1;
-                if (prevLogical >= 0)
-                {
-                    var prevGridCol = _columnGridIndices[prevLogical];
-                    var prevVisible = _headerGrid.ColumnDefinitions[prevGridCol].MinWidth > 0
-                        || _headerGrid.ColumnDefinitions[prevGridCol].Width.Value > 0;
-                    if (prevVisible)
-                    {
-                        // Determine original spacer width: 5 if both columns are non-fixed, 0 otherwise
-                        bool hasSplitter = !_columns[logicalColumnIndex].IsFixedWidth
-                            && !_columns[prevLogical].IsFixedWidth;
-                        spacerDef.Width = new GridLength(hasSplitter ? 5 : 0);
-                    }
-                }
-            }
-        }
+        _columnVisibility[logicalColumnIndex] = visible;
+        if (logicalColumnIndex < _headerCells.Count)
+            _headerCells[logicalColumnIndex].IsVisible = visible;
 
-        // Hide/show the header content element for this column
-        foreach (var child in _headerGrid.Children)
+        if (changed && raiseEvent)
         {
-            if (child is Control ctrl && Grid.GetColumn(ctrl) == gridCol && ctrl is not GridSplitter)
-            {
-                ctrl.IsVisible = visible;
-            }
+            ColumnVisibilityChanged?.Invoke(
+                this,
+                new ListViewColumnVisibilityChangedEventArgs(
+                    logicalColumnIndex,
+                    _columns[logicalColumnIndex].Key,
+                    visible));
         }
     }
 
@@ -1469,26 +1796,148 @@ public class ResizableListView : UserControl
     }
 
     /// <summary>
-    /// Handles a sort header click: toggles direction or sets new column,
-    /// updates visual indicators, and fires <see cref="SortRequested"/>.
+    /// Handles a sort header click. A plain click replaces the chain,
+    /// Shift+click adds or toggles a tie-breaker, and Ctrl+click removes one.
     /// </summary>
-    private void HandleSortClick(int logicalColumnIndex)
+    private void HandleSortClick(int logicalColumnIndex, KeyModifiers modifiers)
     {
-        if (logicalColumnIndex == _sortColumnIndex)
+        if (logicalColumnIndex < 0 || logicalColumnIndex >= _columns.Count)
+            return;
+
+        var existingIndex = _sortDescriptors.FindIndex(
+            descriptor => descriptor.ColumnIndex == logicalColumnIndex);
+
+        if (modifiers.HasFlag(KeyModifiers.Control))
         {
-            _sortAscending = !_sortAscending;
+            if (existingIndex >= 0)
+                _sortDescriptors.RemoveAt(existingIndex);
+        }
+        else if (modifiers.HasFlag(KeyModifiers.Shift))
+        {
+            if (existingIndex >= 0)
+            {
+                var existing = _sortDescriptors[existingIndex];
+                _sortDescriptors[existingIndex] = existing with
+                {
+                    Ascending = !existing.Ascending
+                };
+            }
+            else
+            {
+                _sortDescriptors.Add(CreateDefaultSortDescriptor(logicalColumnIndex));
+            }
         }
         else
         {
-            _sortColumnIndex = logicalColumnIndex;
-            // Check if this column defaults to descending
-            _sortAscending = logicalColumnIndex < _columns.Count
-                && _columns[logicalColumnIndex].DefaultSortDescending
-                ? false : true;
+            var toggleExisting = existingIndex == 0;
+            var ascending = toggleExisting
+                ? !_sortDescriptors[0].Ascending
+                : !_columns[logicalColumnIndex].DefaultSortDescending;
+
+            _sortDescriptors.Clear();
+            _sortDescriptors.Add(new ListViewSortDescriptor(
+                logicalColumnIndex,
+                _columns[logicalColumnIndex].Key,
+                ascending));
         }
 
+        SyncLegacySortProperties();
         UpdateSortIndicators();
-        SortRequested?.Invoke(this, new ListViewSortEventArgs(_sortColumnIndex, _sortAscending));
+        var clicked = _sortDescriptors.FirstOrDefault(
+            descriptor => descriptor.ColumnIndex == logicalColumnIndex);
+        SortRequested?.Invoke(
+            this,
+            new ListViewSortEventArgs(
+                logicalColumnIndex,
+                clicked?.Ascending ?? true,
+                _sortDescriptors.ToArray()));
+    }
+
+    private ListViewSortDescriptor CreateDefaultSortDescriptor(int logicalColumnIndex)
+    {
+        return new ListViewSortDescriptor(
+            logicalColumnIndex,
+            _columns[logicalColumnIndex].Key,
+            !_columns[logicalColumnIndex].DefaultSortDescending);
+    }
+
+    /// <summary>
+    /// Replaces the visual sort chain, usually when restoring persisted settings.
+    /// Invalid, duplicate, and non-sortable columns are ignored.
+    /// </summary>
+    public void SetSortDescriptors(
+        IEnumerable<ListViewSortDescriptor>? descriptors,
+        bool raiseEvent = false)
+    {
+        _sortDescriptors.Clear();
+        if (descriptors != null)
+        {
+            foreach (var descriptor in descriptors)
+            {
+                var columnIndex = FindColumnIndex(descriptor.ColumnKey);
+                if (columnIndex < 0
+                    && descriptor.ColumnIndex >= 0
+                    && descriptor.ColumnIndex < _columns.Count)
+                {
+                    columnIndex = descriptor.ColumnIndex;
+                }
+
+                if (columnIndex < 0)
+                    continue;
+
+                var column = _columns[columnIndex];
+                if (!column.CanSort
+                    || _sortDescriptors.Any(item => item.ColumnIndex == columnIndex))
+                {
+                    continue;
+                }
+
+                _sortDescriptors.Add(new ListViewSortDescriptor(
+                    columnIndex,
+                    column.Key,
+                    descriptor.Ascending));
+            }
+        }
+
+        SyncLegacySortProperties();
+        UpdateSortIndicators();
+        if (raiseEvent)
+            RaiseSortRequested();
+    }
+
+    /// <summary>Clears all sorting and notifies the consumer.</summary>
+    public void ClearSortDescriptors()
+    {
+        if (_sortDescriptors.Count == 0)
+            return;
+
+        _sortDescriptors.Clear();
+        SyncLegacySortProperties();
+        UpdateSortIndicators();
+        RaiseSortRequested();
+    }
+
+    private void RaiseSortRequested()
+    {
+        SortRequested?.Invoke(
+            this,
+            new ListViewSortEventArgs(
+                _sortColumnIndex,
+                _sortAscending,
+                _sortDescriptors.ToArray()));
+    }
+
+    private void SyncLegacySortProperties()
+    {
+        if (_sortDescriptors.Count == 0)
+        {
+            _sortColumnIndex = -1;
+            _sortAscending = true;
+            return;
+        }
+
+        _sortColumnIndex = _sortDescriptors[0].ColumnIndex;
+        _sortAscending = _sortDescriptors[0].Ascending;
     }
 
     /// <summary>
@@ -1502,9 +1951,15 @@ public class ResizableListView : UserControl
             var indicator = _sortIndicators[i];
             if (indicator == null) continue;
 
-            if (i == _sortColumnIndex)
+            var priority = _sortDescriptors.FindIndex(
+                descriptor => descriptor.ColumnIndex == i);
+            if (priority >= 0)
             {
-                indicator.Text = _sortAscending ? "\u25B2" : "\u25BC"; // up / down triangle
+                var descriptor = _sortDescriptors[priority];
+                var arrow = descriptor.Ascending ? "\u25B2" : "\u25BC";
+                indicator.Text = _sortDescriptors.Count > 1
+                    ? $"{priority + 1}{arrow}"
+                    : arrow;
             }
             else
             {
@@ -1525,8 +1980,12 @@ public class ResizableListView : UserControl
             if (gridCol >= _headerGrid.ColumnDefinitions.Count) continue;
 
             var original = _originalColumnDefs[i];
-            _headerGrid.ColumnDefinitions[gridCol].Width = original.width;
-            _headerGrid.ColumnDefinitions[gridCol].MinWidth = original.minWidth;
+            _lastVisibleColumnDefs[i] = original;
+            if (IsColumnVisible(i))
+            {
+                _headerGrid.ColumnDefinitions[gridCol].Width = original.width;
+                _headerGrid.ColumnDefinitions[gridCol].MinWidth = original.minWidth;
+            }
         }
     }
 
@@ -1543,6 +2002,7 @@ public class ResizableListView : UserControl
     public void AutoResizeColumn(int logicalColumnIndex)
     {
         if (logicalColumnIndex < 0 || logicalColumnIndex >= _columns.Count) return;
+        if (!IsColumnVisible(logicalColumnIndex)) return;
         var col = _columns[logicalColumnIndex];
         if (col.IsFixedWidth) return;
 
@@ -1584,6 +2044,8 @@ public class ResizableListView : UserControl
 
         var newWidth = Math.Max(maxWidth, col.MinWidth);
         _headerGrid.ColumnDefinitions[gridColIdx].Width = new GridLength(newWidth);
+        _lastVisibleColumnDefs[logicalColumnIndex] =
+            (new GridLength(newWidth), col.MinWidth);
     }
 
     /// <summary>
@@ -1598,7 +2060,7 @@ public class ResizableListView : UserControl
         // Measure header text widths for resizable pixel columns
         for (int i = 0; i < _columns.Count; i++)
         {
-            if (_columns[i].IsFixedWidth || _columns[i].IsStar) continue;
+            if (!IsColumnVisible(i) || _columns[i].IsFixedWidth || _columns[i].IsStar) continue;
             var headerText = _columns[i].Header;
             if (!string.IsNullOrEmpty(headerText))
                 maxWidths[i] = MeasureTextWidth(headerText) + 24; // +24 for button padding/chrome
@@ -1612,7 +2074,7 @@ public class ResizableListView : UserControl
 
             for (int i = 0; i < _columns.Count; i++)
             {
-                if (_columns[i].IsFixedWidth || _columns[i].IsStar) continue;
+                if (!IsColumnVisible(i) || _columns[i].IsFixedWidth || _columns[i].IsStar) continue;
                 var gridCol = _columnGridIndices[i];
 
                 foreach (var child in rowGrid.Children)
@@ -1641,12 +2103,14 @@ public class ResizableListView : UserControl
         // Apply calculated widths to resizable pixel columns
         for (int i = 0; i < _columns.Count; i++)
         {
-            if (_columns[i].IsFixedWidth || _columns[i].IsStar) continue;
+            if (!IsColumnVisible(i) || _columns[i].IsFixedWidth || _columns[i].IsStar) continue;
             var gridCol = _columnGridIndices[i];
             if (gridCol >= _headerGrid.ColumnDefinitions.Count) continue;
 
             var newWidth = Math.Max(maxWidths[i], _columns[i].MinWidth);
             _headerGrid.ColumnDefinitions[gridCol].Width = new GridLength(newWidth);
+            _lastVisibleColumnDefs[i] =
+                (new GridLength(newWidth), _columns[i].MinWidth);
         }
     }
 
@@ -1659,5 +2123,42 @@ public class ResizableListView : UserControl
         var measure = new TextBlock { Text = text, FontSize = fontSize };
         measure.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         return measure.DesiredSize.Width;
+    }
+
+    private sealed class ColumnWidthState : AvaloniaObject
+    {
+        public static readonly StyledProperty<double> WidthProperty =
+            AvaloniaProperty.Register<ColumnWidthState, double>(nameof(Width));
+
+        public double Width
+        {
+            get => GetValue(WidthProperty);
+            set => SetValue(WidthProperty, value);
+        }
+    }
+
+    private sealed class PixelGridLengthConverter : IValueConverter
+    {
+        public static PixelGridLengthConverter Instance { get; } = new();
+
+        public object Convert(
+            object? value,
+            Type targetType,
+            object? parameter,
+            CultureInfo culture)
+        {
+            return value is double width && width >= 0
+                ? new GridLength(width)
+                : new GridLength(0);
+        }
+
+        public object ConvertBack(
+            object? value,
+            Type targetType,
+            object? parameter,
+            CultureInfo culture)
+        {
+            return BindingOperations.DoNothing;
+        }
     }
 }

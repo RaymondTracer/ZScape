@@ -4,6 +4,9 @@
              RequestedThemeVariant="Dark">
     <Application.Styles>
         <FluentTheme />
+        <Style Selector="ScrollViewer">
+            <Setter Property="AllowAutoHide" Value="False" />
+        </Style>
         <!-- Themes are loaded at runtime by ThemeService -->
     </Application.Styles>
 </Application>

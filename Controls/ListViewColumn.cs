@@ -12,6 +12,12 @@ namespace ZScape.Controls;
 /// </summary>
 public class ListViewColumn
 {
+    /// <summary>
+    /// Stable identifier used for persisted visibility, widths, and sorting.
+    /// When omitted, the control derives a key from <see cref="Header"/>.
+    /// </summary>
+    public string Key { get; set; } = "";
+
     /// <summary>Column header text.</summary>
     public string Header { get; set; } = "";
 
@@ -49,6 +55,18 @@ public class ListViewColumn
     public bool IsFixedWidth { get; set; }
 
     /// <summary>
+    /// Whether the user can show or hide this column from the header context menu.
+    /// Essential identity columns should set this to false.
+    /// </summary>
+    public bool CanUserHide { get; set; } = true;
+
+    /// <summary>
+    /// Initial visibility before a persisted preference is applied.
+    /// Optional columns should set this to false.
+    /// </summary>
+    public bool IsVisibleByDefault { get; set; } = true;
+
+    /// <summary>
     /// Factory to create custom cell content for complex columns.
     /// Receives the data context and returns a Control to display.
     /// When set, <see cref="BindingPath"/> is ignored.
@@ -56,15 +74,16 @@ public class ListViewColumn
     public System.Func<Control>? CellContentFactory { get; set; }
 
     /// <summary>
-    /// Event handler for header sort button click. If null, no sort button is rendered
-    /// (a plain TextBlock header is used instead).
+    /// Enables the reusable multi-column sorting UI without requiring a legacy
+    /// per-column click handler. Shift+click appends a tie-breaker and
+    /// Ctrl+click removes one.
     /// </summary>
-    public System.EventHandler<Avalonia.Interactivity.RoutedEventArgs>? SortClick { get; set; }
+    public bool CanSort { get; set; }
 
     /// <summary>
     /// When true, clicking this column for the first time sorts descending
     /// instead of ascending (e.g. "Players" column where highest-first is expected).
-    /// Only relevant when <see cref="SortClick"/> is set.
+    /// Only relevant when <see cref="CanSort"/> is set.
     /// </summary>
     public bool DefaultSortDescending { get; set; }
 }

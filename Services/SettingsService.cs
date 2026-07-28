@@ -83,6 +83,13 @@ public class SettingsService
         ApplyLegacySettingsCompatibility(settings, settingsJson);
         settings.CurrentFilter ??= new ServerFilter();
         settings.FilterPresets ??= [];
+        settings.ColumnWidths ??= [];
+        settings.ServerListColumnVisibility = new Dictionary<string, bool>(
+            settings.ServerListColumnVisibility ?? [],
+            StringComparer.OrdinalIgnoreCase);
+        settings.ServerListSorts ??= [];
+        settings.ServerListSortsConfigured =
+            settingsJson.TryGetProperty("serverListSorts", out _);
         settings.FavoriteServers ??= [];
         settings.ManualServers ??= [];
         settings.WadSearchPaths ??= [];
@@ -417,9 +424,29 @@ public class AppSettings
     // Column widths
     public Dictionary<string, int> ColumnWidths { get; set; } = new();
 
+    /// <summary>
+    /// Per-column visibility keyed by the stable server-list column key.
+    /// Missing keys use the column's declared default.
+    /// </summary>
+    public Dictionary<string, bool> ServerListColumnVisibility { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
     // Sorting
     public int SortColumnIndex { get; set; } = 3; // Default: sort by Players (column 3)
     public bool SortAscending { get; set; } = false; // Default descending (most players first)
+
+    /// <summary>
+    /// Ordered server-list sort chain. Empty means migrate the legacy single
+    /// SortColumnIndex/SortAscending settings.
+    /// </summary>
+    public List<ListSortSetting> ServerListSorts { get; set; } = [];
+
+    /// <summary>
+    /// Runtime-only marker distinguishing an intentionally empty sort chain from
+    /// settings written before ordered server-list sorting was introduced.
+    /// </summary>
+    [JsonIgnore]
+    public bool ServerListSortsConfigured { get; set; }
 
     // Filters
     public bool HideEmpty { get; set; }
@@ -700,6 +727,13 @@ public class ConnectionHistoryData
 public class DomainSettingsData
 {
     public Dictionary<string, DomainSettings> Domains { get; set; } = new();
+}
+
+/// <summary>Persisted list-view sort descriptor.</summary>
+public sealed class ListSortSetting
+{
+    public string ColumnKey { get; set; } = string.Empty;
+    public bool Ascending { get; set; }
 }
 
 /// <summary>

@@ -4,58 +4,73 @@
         x:Class="ZScape.Views.ConnectionHistoryDialog"
         x:CompileBindings="False"
         Title="Connection History"
-        Width="750" Height="450"
+        Width="1050" Height="560"
         WindowStartupLocation="CenterOwner"
-        MinWidth="550" MinHeight="350"
+        MinWidth="760" MinHeight="420"
         ExtendClientAreaToDecorationsHint="False">
     
-    <Grid Margin="10" RowDefinitions="30,*,35,45">
-        <!-- Header -->
-        <TextBlock Grid.Row="0" Text="Recently Connected Servers" 
-                   FontWeight="Bold" FontSize="14"
-                   VerticalAlignment="Center"/>
-        
-        <!-- Main content area -->
-        <Grid Grid.Row="1" ColumnDefinitions="*,120">
-            <!-- Custom list with header -->
-            <controls:ResizableListView x:Name="HistoryListView" Grid.Column="0" Margin="0,5,10,5" />
-            
-            <!-- Button stack -->
-            <StackPanel Grid.Column="1" Spacing="5">
-                <Button x:Name="ReconnectButton" Content="Reconnect" Width="105" Height="28"
-                        Click="ReconnectButton_Click"/>
-                <Button x:Name="CopyAddressButton" Content="Copy Address" Width="105" Height="28"
-                        Click="CopyAddressButton_Click"/>
-                <Button x:Name="RemoveButton" Content="Remove" Width="105" Height="28"
-                        Click="RemoveButton_Click"/>
-                <Button x:Name="ClearButton" Content="Clear All" Width="105" Height="28"
-                        Click="ClearButton_Click"/>
+    <Grid Margin="12" RowDefinitions="Auto,*,Auto,Auto">
+        <!-- Compact browser toolbar -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,220" Margin="0,0,0,8">
+            <StackPanel>
+                <TextBlock Text="Recently Connected Servers"
+                           FontWeight="Bold" FontSize="16"/>
+                <TextBlock Text="Live server data is shown when a history entry matches the current browser."
+                           Foreground="Gray" FontSize="11"/>
             </StackPanel>
+            <TextBlock Grid.Column="1" Text="Search:"
+                       VerticalAlignment="Center" Margin="12,0,6,0"/>
+            <TextBox Grid.Column="2" x:Name="HistorySearchBox"
+                     Watermark="Name, map, WAD, address…"
+                     TextChanged="HistorySearchBox_TextChanged"/>
         </Grid>
-        
-        <!-- Settings row -->
-        <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,20,Auto,Auto">
-            <TextBlock Grid.Column="0" Text="Max entries:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-            <controls:NumericSpinner Grid.Column="1" x:Name="MaxEntriesNumeric" 
-                           Minimum="10" Maximum="500" Value="100"
-                           Width="70"/>
-            <TextBlock Grid.Column="3" Text="Track by:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-            <ComboBox Grid.Column="4" x:Name="TrackingModeComboBox" Width="130" Height="28"
-                      VerticalAlignment="Center" Margin="0,2,0,0"
+
+        <controls:ResizableListView x:Name="HistoryListView"
+                                    Grid.Row="1" Margin="0,0,0,8" />
+
+        <!-- History identity settings -->
+        <Border Grid.Row="2" Classes="panel" Padding="8" Margin="0,0,0,8">
+            <Grid RowDefinitions="Auto,Auto">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Keep up to:" VerticalAlignment="Center"/>
+                    <controls:NumericSpinner x:Name="MaxEntriesNumeric"
+                                             Minimum="10" Maximum="500" Value="100"
+                                             Width="70"/>
+                    <TextBlock Text="entries" VerticalAlignment="Center"/>
+                    <Border Width="16"/>
+                    <TextBlock Text="Identify history entries by:"
+                               VerticalAlignment="Center"/>
+                    <ComboBox x:Name="TrackingModeComboBox" Width="260"
                       SelectionChanged="TrackingModeComboBox_SelectionChanged">
-                <ComboBoxItem Content="Server Address"/>
-                <ComboBoxItem Content="Server Name"/>
-                <ComboBoxItem Content="Both"/>
-            </ComboBox>
-        </Grid>
-        
-        <!-- Bottom bar -->
-        <Grid Grid.Row="3" ColumnDefinitions="*,Auto">
-            <TextBlock Grid.Column="0" x:Name="InfoLabel" 
+                        <ComboBoxItem Content="Address — stable endpoint"/>
+                        <ComboBoxItem Content="Server name — follows moves"/>
+                        <ComboBoxItem Content="Address + name — exact pair"/>
+                    </ComboBox>
+                </StackPanel>
+                <TextBlock Grid.Row="1" x:Name="TrackingModeHelpText"
+                           Margin="0,6,0,0" Foreground="Gray" FontSize="11"
+                           TextWrapping="Wrap"/>
+            </Grid>
+        </Border>
+
+        <!-- Browser actions -->
+        <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto">
+            <Button Grid.Column="0" x:Name="ReconnectButton" Classes="accent"
+                    Content="Reconnect" Margin="0,0,8,0"
+                    Click="ReconnectButton_Click"/>
+            <Button Grid.Column="1" x:Name="CopyAddressButton"
+                    Content="Copy Address" Margin="0,0,8,0"
+                    Click="CopyAddressButton_Click"/>
+            <Button Grid.Column="2" x:Name="RemoveButton"
+                    Content="Remove" Margin="0,0,8,0"
+                    Click="RemoveButton_Click"/>
+            <Button Grid.Column="3" x:Name="ClearButton"
+                    Content="Clear All" Margin="0,0,8,0"
+                    Click="ClearButton_Click"/>
+            <TextBlock Grid.Column="4" x:Name="InfoLabel"
                        Text="Double-click an entry to reconnect"
                        VerticalAlignment="Center" Foreground="Gray"/>
-            <Button Grid.Column="1" x:Name="CloseButton" Content="Close" 
-                    Width="80" Height="28"
+            <Button Grid.Column="5" x:Name="CloseButton" Content="Close"
                     Click="CloseButton_Click"/>
         </Grid>
     </Grid>

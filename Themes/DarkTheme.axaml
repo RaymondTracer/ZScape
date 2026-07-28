@@ -48,6 +48,7 @@
             <Color x:Key="RowFullColor">#3C2D2D</Color>
             <Color x:Key="RowEmptyColor">#2D2D32</Color>
             <Color x:Key="RowPasswordedColor">#3C3728</Color>
+            <Color x:Key="HistoryOnlineRowColor">#183A2A</Color>
             <Color x:Key="LogVerboseColor">#FFA9A9A9</Color>
             <Color x:Key="LogInfoColor">#FFF1F1F1</Color>
             <Color x:Key="LogSuccessColor">#FF32CD32</Color>
@@ -64,6 +65,7 @@
             <SolidColorBrush x:Key="RowFullBrush" Color="{StaticResource RowFullColor}" />
             <SolidColorBrush x:Key="RowEmptyBrush" Color="{StaticResource RowEmptyColor}" />
             <SolidColorBrush x:Key="RowPasswordedBrush" Color="{StaticResource RowPasswordedColor}" />
+            <SolidColorBrush x:Key="HistoryOnlineRowBrush" Color="{StaticResource HistoryOnlineRowColor}" />
             <SolidColorBrush x:Key="LogVerboseBrush" Color="{StaticResource LogVerboseColor}" />
             <SolidColorBrush x:Key="LogInfoBrush" Color="{StaticResource LogInfoColor}" />
             <SolidColorBrush x:Key="LogSuccessBrush" Color="{StaticResource LogSuccessColor}" />
@@ -109,39 +111,6 @@
     
     <Style Selector="TextBlock.secondary">
         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
-    </Style>
-    
-    <!-- DataGrid Styles -->
-    <Style Selector="DataGrid">
-        <Setter Property="Background" Value="{StaticResource SecondaryBackgroundBrush}" />
-        <Setter Property="RowBackground" Value="{StaticResource SecondaryBackgroundBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="GridLinesVisibility" Value="None" />
-        <Setter Property="HeadersVisibility" Value="Column" />
-    </Style>
-    
-    <Style Selector="DataGridColumnHeader">
-        <Setter Property="Background" Value="{StaticResource TertiaryBackgroundBrush}" />
-        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
-        <Setter Property="Padding" Value="8,4" />
-        <Setter Property="MinHeight" Value="32" />
-    </Style>
-    
-    <Style Selector="DataGridRow">
-        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
-    </Style>
-    
-    <Style Selector="DataGridRow:pointerover">
-        <Setter Property="Background" Value="#FF3E3E42" />
-    </Style>
-    
-    <Style Selector="DataGridRow:selected">
-        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-    </Style>
-    
-    <Style Selector="DataGridCell">
-        <Setter Property="Padding" Value="8,4" />
     </Style>
     
     <!-- ListBox Styles -->

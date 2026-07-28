@@ -12,6 +12,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using ZScape.Controls;
 using ZScape.Services;
+using ZScape.Utilities;
 
 namespace ZScape.Views;
 
@@ -47,9 +48,10 @@ public partial class WadBrowserDialog : Window
     private ObservableCollection<WadFileEntry> _filteredWads = new();
     private bool _isScanning;
 
-    // Sorting state
-    private int _sortColumn = -1;
-    private bool _sortAscending = true;
+    private readonly List<ListViewSortDescriptor> _sortDescriptors =
+    [
+        new(0, "name", true)
+    ];
 
     // For shift-click range selection
     // (Handled by built-in multi-select in ResizableListView)
@@ -63,33 +65,36 @@ public partial class WadBrowserDialog : Window
         WadListView.SelectionMode = ListViewSelectionMode.Multi;
         WadListView.AddColumn(new ListViewColumn
         {
-            Header = "Name", Width = 250, MinWidth = 80,
+            Key = "name", Header = "Name", Width = 250, MinWidth = 80,
             BindingPath = "NameWithExtension",
             TextTrimming = TextTrimming.CharacterEllipsis,
             CellPadding = new Thickness(6, 0),
-            SortClick = SortByName_Click
+            CanSort = true,
+            CanUserHide = false
         });
         WadListView.AddColumn(new ListViewColumn
         {
-            Header = "Size", Width = 80, MinWidth = 50,
+            Key = "size", Header = "Size", Width = 80, MinWidth = 50,
             BindingPath = "SizeDisplay",
-            SortClick = SortBySize_Click
+            CanSort = true
         });
         WadListView.AddColumn(new ListViewColumn
         {
-            Header = "Modified", Width = 130, MinWidth = 80,
+            Key = "modified", Header = "Modified", Width = 130, MinWidth = 80,
             BindingPath = "ModifiedDisplay",
-            SortClick = SortByModified_Click
+            CanSort = true
         });
         WadListView.AddColumn(new ListViewColumn
         {
-            Header = "Path", IsStar = true, MinWidth = 80,
+            Key = "path", Header = "Path", IsStar = true, MinWidth = 80,
             BindingPath = "FullPath",
             Foreground = Brushes.Gray,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            SortClick = SortByPath_Click
+            CanSort = true
         });
         WadListView.Build(ListViewOverflowMode.AutoScroll);
+        WadListView.SetSortDescriptors(_sortDescriptors);
+        WadListView.SortRequested += WadListView_SortRequested;
         WadListView.ItemsSource = _filteredWads;
 
         // Wire up row events
@@ -169,7 +174,7 @@ public partial class WadBrowserDialog : Window
 
     private void ApplyFilterAndSort()
     {
-        var searchText = SearchTextBox?.Text?.ToLowerInvariant() ?? "";
+        var searchText = SearchTextBox?.Text?.Trim() ?? "";
 
         IEnumerable<WadFileEntry> results = _allWads;
 
@@ -177,26 +182,28 @@ public partial class WadBrowserDialog : Window
         if (!string.IsNullOrEmpty(searchText))
         {
             results = results.Where(w =>
-                w.Name.ToLowerInvariant().Contains(searchText) ||
-                w.FullPath.ToLowerInvariant().Contains(searchText));
+                TextMatchUtility.IsLooseSearchMatch(w.NameWithExtension, searchText) ||
+                TextMatchUtility.IsLooseSearchMatch(w.FullPath, searchText));
         }
 
-        // Sorting
-        if (_sortColumn >= 0)
+        IOrderedEnumerable<WadFileEntry>? ordered = null;
+        foreach (var descriptor in _sortDescriptors)
         {
-            results = (_sortColumn, _sortAscending) switch
+            ordered = descriptor.ColumnKey switch
             {
-                (0, true) => results.OrderBy(w => w.Name, StringComparer.OrdinalIgnoreCase),
-                (0, false) => results.OrderByDescending(w => w.Name, StringComparer.OrdinalIgnoreCase),
-                (1, true) => results.OrderBy(w => w.Size),
-                (1, false) => results.OrderByDescending(w => w.Size),
-                (2, true) => results.OrderBy(w => w.Modified),
-                (2, false) => results.OrderByDescending(w => w.Modified),
-                (3, true) => results.OrderBy(w => w.FullPath, StringComparer.OrdinalIgnoreCase),
-                (3, false) => results.OrderByDescending(w => w.FullPath, StringComparer.OrdinalIgnoreCase),
-                _ => results
+                "name" => ApplyWadSort(results, ordered, wad => wad.Name,
+                    descriptor.Ascending, StringComparer.OrdinalIgnoreCase),
+                "size" => ApplyWadSort(results, ordered, wad => wad.Size,
+                    descriptor.Ascending),
+                "modified" => ApplyWadSort(results, ordered, wad => wad.Modified,
+                    descriptor.Ascending),
+                "path" => ApplyWadSort(results, ordered, wad => wad.FullPath,
+                    descriptor.Ascending, StringComparer.OrdinalIgnoreCase),
+                _ => ordered
             };
         }
+        if (ordered != null)
+            results = ordered;
 
         _filteredWads.Clear();
         foreach (var wad in results)
@@ -205,29 +212,33 @@ public partial class WadBrowserDialog : Window
         }
     }
 
-    private void SortByColumn(int column)
+    private static IOrderedEnumerable<WadFileEntry> ApplyWadSort<TKey>(
+        IEnumerable<WadFileEntry> source,
+        IOrderedEnumerable<WadFileEntry>? ordered,
+        Func<WadFileEntry, TKey> selector,
+        bool ascending,
+        IComparer<TKey>? comparer = null)
     {
-        if (_sortColumn == column)
-            _sortAscending = !_sortAscending;
-        else
+        if (ordered == null)
         {
-            _sortColumn = column;
-            _sortAscending = true;
+            return ascending
+                ? source.OrderBy(selector, comparer)
+                : source.OrderByDescending(selector, comparer);
         }
 
-        ApplyFilterAndSort();
+        return ascending
+            ? ordered.ThenBy(selector, comparer)
+            : ordered.ThenByDescending(selector, comparer);
     }
 
     #endregion
 
-    #region Sort Click Handlers
-
-    private void SortByName_Click(object? sender, RoutedEventArgs e) => SortByColumn(0);
-    private void SortBySize_Click(object? sender, RoutedEventArgs e) => SortByColumn(1);
-    private void SortByModified_Click(object? sender, RoutedEventArgs e) => SortByColumn(2);
-    private void SortByPath_Click(object? sender, RoutedEventArgs e) => SortByColumn(3);
-
-    #endregion
+    private void WadListView_SortRequested(object? sender, ListViewSortEventArgs e)
+    {
+        _sortDescriptors.Clear();
+        _sortDescriptors.AddRange(e.SortDescriptors);
+        ApplyFilterAndSort();
+    }
 
     #region Row Interaction
 
