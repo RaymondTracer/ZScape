@@ -1,189 +1,148 @@
 # ZScape
 
-ZScape is an Avalonia desktop server browser for Zandronum. It queries the Zandronum master server, fetches detailed data from individual servers, helps locate missing WADs, and can launch either stable or testing Zandronum builds directly.
-
-The project targets .NET 10 and supports Windows, Linux, and macOS.
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
-- [Usage](#usage)
-- [Configuration](#configuration)
-- [Development Notes](#development-notes)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
-
----
+ZScape is a cross-platform server browser and launcher for
+[Zandronum](https://zandronum.com/). It queries the master server, shows live
+server details, finds missing WADs, and launches the correct stable or testing
+build. ZScape runs on Windows, Linux, and macOS and currently targets .NET 10.
 
 ## Features
 
-### Server Browser and Launching
-- Query the Zandronum master server and then fetch per-server details concurrently
-- Browse rich server metadata including players, map, game mode, IWAD, PWADs, and optional WADs
-- Launch directly into Zandronum from the server list
-- Track favorites by server address or exact server name, plus add manual servers not present in the master list
-- Keep connection history and copy connect commands from the UI
-- Receive server alerts through native Windows, Linux, or macOS notifications, or custom in-app popup notifications
+### Browse and find servers
 
-### Filtering and Discovery
-- Filter by game mode, player counts, ping, map, IWAD, PWADs, and country
-- Save and reuse filter presets
-- Use text-match rules for favorite and hidden server name behavior
-- Refresh only favorites when you want a watchlist-style workflow
-- Resolve unknown countries through cached IP geolocation using `ip-api.com`
+- Search server names, maps, addresses, versions, countries, game modes, IWADs,
+  and PWADs. Search ignores punctuation and highlights matching text.
+- Filter by player count, ping, map, IWAD, PWAD, country, and game mode, with
+  reusable filter presets.
+- Choose which columns are shown and save their widths. Header menus provide
+  multi-level sorting, automatic sizing, and layout reset.
+- Keep favorites by address or name rule, hide servers by name rule, and add
+  servers that are not listed by the master.
+- Auto-refresh the full list or favorites only, and receive native or in-app
+  alerts when watched servers become active.
+- Search and sort connection history, reconnect to a previous server, or copy
+  its address.
 
-### WAD Management
-- Detect missing WADs before launch and search configured WAD folders with cached results
-- Download WADs from configured mirrors, the `/idgames` archive, and DuckDuckGo fallback search
-- Verify PWAD hashes when the server provides them
-- Extract supported archives with SharpCompress
-- Adapt download concurrency per domain and persist the learned settings
+### Launch and manage Zandronum
 
-### Testing Builds, Updates, and Housekeeping
-- Download and install testing builds when required
-- Manage installed testing versions from the dedicated dialog
-- Copy base Zandronum `.ini` files into newly installed testing builds
-- Consolidate screenshots from stable and testing installs into one folder
-- Run GitHub release checks in disabled, notify-only, or auto-download modes
-- Use a first-time setup flow that can auto-detect Zandronum and common WAD locations
+- Join a server from the list, with password prompts, version checks, WAD
+  checks, and hash verification before launch.
+- Launch offline games or host a server from saved launch profiles.
+- Install required stable and testing builds and manage installed testing
+  versions.
+- Use the standard desktop layout or Big UI, an HTPC-style layout with keyboard
+  and SDL game-controller navigation.
+- Choose a dark or light theme during first-run setup.
 
----
+### Download and maintain files
 
-## Prerequisites
+- Search configured WAD mirrors, `/idgames`, and a DuckDuckGo fallback when a
+  required file is missing.
+- Download `.wad`, `.pk3`, `.pk7`, `.ipk3`, `.ipk7`, and `.pke` files, plus
+  `.zip`, `.7z`, and `.rar` archives. Per-domain concurrency settings and
+  resumable segmented transfers are used where the server supports byte ranges.
+- Consolidate screenshots from stable and testing installs into one directory.
+- Check GitHub releases in disabled, notify-only, or automatic-download mode.
 
-- .NET 10 SDK
-- A Zandronum installation if you want to launch or join servers from the app
-- Network access to the master server and WAD download sources
+Commercial IWADs are never downloaded automatically.
 
-Platform notes:
+## Requirements
 
-- Windows, Linux, and macOS are all supported runtime targets.
-- Native integrations are platform-specific: Windows uses toast notifications and dark title bars, Linux uses freedesktop desktop notifications, and macOS uses Notification Center notifications.
+- The .NET 10 SDK to build from source, or the .NET 10 runtime for the
+  framework-dependent release packages.
+- A Zandronum installation to play. On supported platforms, the first-run
+  wizard can install a stable build or use an existing one.
+- Network access to the Zandronum master server and any download sources you
+  enable.
 
----
+Native notifications use Windows toasts, the freedesktop notification service
+on Linux, and Notification Center on macOS.
 
-## Quick Start
+## Build and run
 
-1. Open a terminal in the repository root.
-2. Build the solution:
+From the repository root:
 
-```bash
+```sh
 dotnet build ZScape.sln -c Debug
-```
-
-3. Run the application:
-
-```bash
 dotnet run --project ZScape.csproj
 ```
 
-4. On first launch, complete the setup dialog:
+The first-run wizard configures Zandronum, WAD paths, theme, and update
+behavior.
 
-- Select your stable Zandronum executable.
-- Optionally select a testing versions folder.
-- Configure WAD search and download folders.
-- Choose your update behavior.
+CI builds `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and
+`osx-arm64`. Tags beginning with `v` create packages on
+[GitHub Releases](https://github.com/RaymondTracer/ZScape/releases).
 
-When running from source, ZScape stores its data beside the built executable in `AppContext.BaseDirectory`, not in the repository root.
+## Using ZScape
 
----
+- Press `F5` to refresh the server list.
+- Double-click a server to join it.
+- Right-click a server to refresh it, copy its connect command, or change its
+  favorite status.
+- Right-click the server-list header to choose columns, resize them, or set an
+  ordered sort.
+- Use **File > Launch Game** to play offline or host without joining a listed
+  server.
+- Use **View > Big UI Mode** for the controller-friendly interface.
+- Turn on verbose logging from **View > Log Panel** when diagnosing protocol or
+  download problems.
 
-## Usage
+## Files and settings
 
-- Press `F5` or use the refresh action to query the master server.
-- Double-click a server to launch Zandronum and connect.
-- Use the context menu to refresh a single server, copy a connect command, add address favorites, or add exact-name favorites.
-- Use the quick search box and filter dialog to narrow the server list.
-- If a server requires missing WADs, use the WAD download flow before joining.
-- If a server requires a testing build, ZScape can download and install it before launch.
-- Enable screenshot monitoring if you want screenshots from stable and testing installs collected into one destination.
-- Enable verbose logging when you need protocol-level diagnostics in the log panel and `runtime.log`.
+ZScape is portable: it writes data to `AppContext.BaseDirectory`, beside the
+running executable. The directory must therefore be writable.
 
----
+- `settings.json` contains application settings, filters, favorites, layout,
+  and saved launch profiles.
+- `history.json` contains connection history.
+- `domain-settings.json` contains learned and user-defined per-domain download
+  settings.
+- `runtime.log` contains runtime messages and unhandled exception details.
 
-## Configuration
+When paths are left blank, the WAD download folder defaults to `WADs` beside the
+application. `TestingVersions` and `Screenshots` default to directories beside
+the configured stable Zandronum install.
 
-ZScape uses portable-style files stored beside the executable:
+Country lookup for otherwise unknown servers uses the rate-limited
+`ip-api.com` batch API. Update checks use the `githubOwner` and `githubRepo`
+values in `settings.json`. WAD fallback searches send the requested WAD name to
+DuckDuckGo.
 
-- `settings.json` - main application settings
-- `history.json` - connection history
-- `domain-settings.json` - learned per-domain downloader settings
-- `runtime.log` - runtime logging and exception output
+## Development
 
-Notable configuration areas include:
+`Protocol/` contains the master-server and game-server clients, including the
+Huffman codec. `Services/` owns querying, persistence, downloads, launching,
+updates, notifications, and screenshot monitoring. Avalonia controls and
+windows live in `Controls/` and `Views/`; models and shared helpers live in
+`Models/` and `Utilities/`.
 
-- Window layout, splitter positions, column widths, and sorting
-- Current filter state and saved filter presets
-- Favorite servers, favorite server-name rules, hidden server-name rules, and manual servers
-- Auto-refresh behavior, retry counts, timeouts, and concurrency
-- WAD search paths, download sites, and download concurrency settings
-- Stable and testing Zandronum paths
-- Alert display mode and alert behavior
-- Screenshot consolidation settings
-- Update behavior, interval, and GitHub release source
+`Program.cs` configures Avalonia and process-level exception logging.
+`Views/MainWindow.axaml.cs` is the main UI coordinator. There is currently no
+separate test project, so the baseline repository check is:
 
-Implementation details:
-
-- Master server host, port, and query flags live in `Protocol/ProtocolConstants.cs`.
-- Huffman encode/decode support lives in `Protocol/HuffmanCodec.cs`.
-- Default `TestingVersions` and `Screenshots` locations are resolved relative to the configured stable Zandronum directory when explicit paths are not set.
-
----
-
-## Development Notes
-
-Main areas of the codebase:
-
-- `Controls/` - reusable Avalonia controls
-- `Models/` - server, player, WAD, and filter models
-- `Protocol/` - master-server and game-server query logic
-- `Services/` - settings, logging, updates, downloads, launching, notifications, and screenshot monitoring
-- `Themes/` - shared theme resources
-- `Utilities/` - helpers for paths, formatting, color codes, matching, and constants
-- `Views/` - Avalonia windows and dialogs, including the main window and settings flows
-
-Useful entry points:
-
-- `Program.cs` sets up Avalonia and top-level exception logging.
-- `App.axaml` and `App.axaml.cs` initialize the application.
-- `Views/MainWindow.axaml` and `Views/MainWindow.axaml.cs` contain the main browser UI and interaction logic.
-
-Debugging notes:
-
-- `LoggingService` writes `runtime.log` to the application base directory on every run.
-- Unhandled startup, UI-thread, and task exceptions are logged automatically.
-- The in-app log panel reflects the same logging pipeline used for file output.
-
----
+```sh
+dotnet build ZScape.csproj -c Release
+```
 
 ## Troubleshooting
 
-- If server refresh fails entirely, confirm DNS and network access to `master.zandronum.com:15300`.
-- If the app crashes, fails during startup, or silently aborts an operation, inspect `runtime.log` beside the built executable first.
-- If launching fails, verify that the stable Zandronum path is configured. Testing servers also need a valid testing root or the default `TestingVersions` path next to the stable install.
-- If WADs are not found, verify your configured WAD search paths and download folder in settings.
-- If screenshot consolidation is not working, make sure screenshot monitoring is enabled and that the stable/testing paths are configured correctly.
-- If update checks do not run, verify the configured GitHub owner and repository in settings.
-- Commercial IWADs such as DOOM, DOOM II, Heretic, Hexen, and similar titles are intentionally excluded from automated download.
-- Country lookups for unknown servers are rate-limited and cached. Failures are recorded as Unknown to avoid repeated lookups.
+- If refresh fails, check DNS and UDP access to
+  `master.zandronum.com:15300`.
+- If startup or an operation fails, inspect `runtime.log` beside the executable.
+- If settings do not persist, make sure the application directory is writable.
+- If launch fails, check the configured stable and testing paths in
+  Preferences.
+- If a WAD is not found, check the search paths, download directory, and mirror
+  list. Required commercial IWADs must be supplied manually.
+- If screenshot consolidation fails, confirm that monitoring is enabled and
+  the stable/testing paths are valid.
+- If update checks fail, verify `githubOwner` and `githubRepo` in
+  `settings.json`.
 
----
-
-## Contributing
-
-- Open an issue for significant bugs or feature changes.
-- Keep changes focused and consistent with the existing codebase structure.
-- Open a pull request with a clear summary of user-visible behavior changes.
-
----
+Bug reports and focused pull requests are welcome.
 
 ## License
 
-ZScape - Copyright (C) 2026 Charlie Gadd
+Copyright (C) 2026 Charlie Gadd.
 
-Licensed under the GNU General Public License v3.0. See `LICENSE` for details.
+ZScape is licensed under the [GNU General Public License v3.0](LICENSE).

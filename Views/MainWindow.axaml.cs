@@ -2152,7 +2152,7 @@ public partial class MainWindow : Window
                 {
                     new TextBlock { Text = "ZScape", FontSize = 24, FontWeight = Avalonia.Media.FontWeight.Bold, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center },
                     new TextBlock { Text = $"Version {version}", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center },
-                    new TextBlock { Text = "Zandronum Server Browser", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center },
+                    new TextBlock { Text = "Zandronum Server Browser and Launcher", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center },
                     new TextBlock { Text = "https://github.com/RaymondTracer/ZScape", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center, Foreground = Avalonia.Media.Brushes.CornflowerBlue },
                     new Button { Content = "OK", Width = 80, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center, Margin = new Thickness(0, 15, 0, 0) }
                 }

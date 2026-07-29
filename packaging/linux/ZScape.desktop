@@ -2,7 +2,7 @@
 Version=1.0
 Type=Application
 Name=ZScape
-Comment=Zandronum server browser
+Comment=Zandronum server browser and launcher
 Exec=ZScape
 Icon=ZScape
 Terminal=false

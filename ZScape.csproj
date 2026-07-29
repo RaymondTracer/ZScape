@@ -10,7 +10,7 @@
     <VersionPrefix>2.0.0</VersionPrefix>
     <VersionSuffix>indev</VersionSuffix>
     <Authors>Charlie Gadd</Authors>
-    <Description>A modern Zandronum server browser with dark theme</Description>
+    <Description>Cross-platform Zandronum server browser and launcher</Description>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>packaging\assets\ZScape.ico</ApplicationIcon>
