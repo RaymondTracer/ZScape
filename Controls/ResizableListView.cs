@@ -4,7 +4,6 @@ using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
-using Avalonia.Data.Converters;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
@@ -190,7 +189,6 @@ public class ResizableListView : UserControl
     private readonly List<(GridLength width, double minWidth)> _lastVisibleColumnDefs = [];
     private readonly List<Control> _headerCells = [];
     private readonly List<bool> _columnVisibility = [];
-    private readonly List<ColumnWidthState> _columnWidthStates = [];
     private ListViewOverflowMode _overflowMode;
     private bool _isBuilt;
 
@@ -363,10 +361,6 @@ public class ResizableListView : UserControl
 
         _scrollViewer.Content = _itemsControl;
         _root.Children.Add(_scrollViewer);
-
-        // Publish arranged header widths into one observable layout model.
-        // Rows bind to this model directly; no per-row width copying is needed.
-        _headerGrid.LayoutUpdated += (_, _) => SyncColumnWidthStates();
 
         // Layout is finalized in Build() to apply OverflowMode
         Content = _root;
@@ -769,7 +763,6 @@ public class ResizableListView : UserControl
         _columnGridIndices.Clear();
         _headerCells.Clear();
         _sortIndicators.Clear();
-        _columnWidthStates.Clear();
 
         for (int i = 0; i < _columns.Count; i++)
         {
@@ -779,7 +772,6 @@ public class ResizableListView : UserControl
                 ? new ColumnDefinition(new GridLength(1, GridUnitType.Star)) { MinWidth = col.MinWidth }
                 : new ColumnDefinition(new GridLength(col.Width)) { MinWidth = col.MinWidth };
             _headerGrid.ColumnDefinitions.Add(colDef);
-            _columnWidthStates.Add(new ColumnWidthState());
 
             var headerHost = new Grid
             {
@@ -817,7 +809,14 @@ public class ResizableListView : UserControl
                 ToolTip.SetTip(
                     btn,
                     "Click to sort. Shift+click adds a tie-breaker; Ctrl+click removes it.");
-                btn.PointerPressed += (_, e) => _pendingHeaderModifiers = e.KeyModifiers;
+                // Button handles PointerPressed internally, so a normal event
+                // subscription can miss the modifiers. Listen on the tunnel and
+                // include already-handled events so Shift/Ctrl clicks are reliable.
+                btn.AddHandler(
+                    PointerPressedEvent,
+                    (_, e) => _pendingHeaderModifiers = e.KeyModifiers,
+                    RoutingStrategies.Tunnel,
+                    handledEventsToo: true);
                 btn.Click += (_, _) =>
                 {
                     var modifiers = _pendingHeaderModifiers;
@@ -1059,13 +1058,16 @@ public class ResizableListView : UserControl
                 }
             };
 
-            // The header ColumnDefinitions are the single source of truth. Each
-            // realized row binds directly to their arranged pixel widths, so a
-            // resize, visibility change, or star-column reflow updates header and
-            // cells in the same layout pass.
+            // The header ColumnDefinitions are the single source of truth. Rows
+            // bind to the same logical GridLengths and constraints (including
+            // star sizing), avoiding a second independent pixel-rounding pass.
             var grid = new Grid
             {
                 Name = "RowGrid",
+                // Width is bound to the header grid below. Explicitly anchor the
+                // fixed-width row grid so any spare viewport space is kept on the
+                // right instead of being split across both sides by layout.
+                HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Center
             };
             grid.Bind(
@@ -1084,11 +1086,17 @@ public class ResizableListView : UserControl
                     var rowColumn = new ColumnDefinition();
                     rowColumn.Bind(
                         ColumnDefinition.WidthProperty,
-                        new Binding(nameof(ColumnWidthState.Width))
+                        new Binding(nameof(ColumnDefinition.Width))
                         {
-                            Source = _columnWidthStates[ci],
-                            Mode = BindingMode.OneWay,
-                            Converter = PixelGridLengthConverter.Instance
+                            Source = headerCols[ci],
+                            Mode = BindingMode.OneWay
+                        });
+                    rowColumn.Bind(
+                        ColumnDefinition.MinWidthProperty,
+                        new Binding(nameof(ColumnDefinition.MinWidth))
+                        {
+                            Source = headerCols[ci],
+                            Mode = BindingMode.OneWay
                         });
                     grid.ColumnDefinitions.Add(rowColumn);
                 }
@@ -1148,25 +1156,11 @@ public class ResizableListView : UserControl
     /// </summary>
     public void SyncColumnWidths()
     {
-        SyncColumnWidthStates();
         foreach (var container in _itemsControl.GetRealizedContainers())
         {
             var rowGrid = container.FindDescendantOfType<Grid>();
             if (rowGrid?.Name == "RowGrid")
                 rowGrid.InvalidateMeasure();
-        }
-    }
-
-    private void SyncColumnWidthStates()
-    {
-        var count = Math.Min(
-            _headerGrid.ColumnDefinitions.Count,
-            _columnWidthStates.Count);
-        for (var i = 0; i < count; i++)
-        {
-            var actualWidth = _headerGrid.ColumnDefinitions[i].ActualWidth;
-            if (Math.Abs(_columnWidthStates[i].Width - actualWidth) > 0.1)
-                _columnWidthStates[i].Width = actualWidth;
         }
     }
 
@@ -2125,40 +2119,4 @@ public class ResizableListView : UserControl
         return measure.DesiredSize.Width;
     }
 
-    private sealed class ColumnWidthState : AvaloniaObject
-    {
-        public static readonly StyledProperty<double> WidthProperty =
-            AvaloniaProperty.Register<ColumnWidthState, double>(nameof(Width));
-
-        public double Width
-        {
-            get => GetValue(WidthProperty);
-            set => SetValue(WidthProperty, value);
-        }
-    }
-
-    private sealed class PixelGridLengthConverter : IValueConverter
-    {
-        public static PixelGridLengthConverter Instance { get; } = new();
-
-        public object Convert(
-            object? value,
-            Type targetType,
-            object? parameter,
-            CultureInfo culture)
-        {
-            return value is double width && width >= 0
-                ? new GridLength(width)
-                : new GridLength(0);
-        }
-
-        public object ConvertBack(
-            object? value,
-            Type targetType,
-            object? parameter,
-            CultureInfo culture)
-        {
-            return BindingOperations.DoNothing;
-        }
-    }
 }
