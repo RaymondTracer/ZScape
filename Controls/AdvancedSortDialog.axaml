@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
         x:Class="ZScape.Controls.AdvancedSortDialog"
         x:CompileBindings="False"
         Title="Advanced Sorting"
@@ -10,7 +11,7 @@
         WindowStartupLocation="CenterOwner"
         ExtendClientAreaToDecorationsHint="False">
 
-    <Grid Margin="14" RowDefinitions="Auto,Auto,*,Auto,Auto">
+    <Grid Margin="14" RowDefinitions="Auto,*,Auto,Auto">
         <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
             <TextBlock Text="Sort Levels" FontSize="17" FontWeight="Bold"/>
             <TextBlock Text="Level 1 is compared first. Equal rows continue to level 2, then level 3, and so on."
@@ -18,58 +19,14 @@
                        TextWrapping="Wrap"/>
         </StackPanel>
 
-        <Grid Grid.Row="1"
-              ColumnDefinitions="58,*,190"
-              Margin="8,0,8,4">
-            <TextBlock Text="Level" FontWeight="SemiBold"/>
-            <TextBlock Grid.Column="1" Text="Column" FontWeight="SemiBold"/>
-            <TextBlock Grid.Column="2" Text="Direction" FontWeight="SemiBold"/>
-        </Grid>
-
-        <Border Grid.Row="2"
+        <Border Grid.Row="1"
                 BorderBrush="{DynamicResource BorderBrush}"
                 BorderThickness="1"
                 CornerRadius="3">
-            <ListBox x:Name="SortLevelsListBox"
-                     ItemsSource="{Binding SortLevels}"
-                     SelectedItem="{Binding SelectedSortLevel, Mode=TwoWay}"
-                     SelectionChanged="SortLevelsListBox_SelectionChanged">
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <Grid ColumnDefinitions="50,*,190"
-                              Margin="4,3">
-                            <TextBlock Text="{Binding Priority}"
-                                       VerticalAlignment="Center"
-                                       HorizontalAlignment="Center"
-                                       FontWeight="SemiBold"/>
-                            <ComboBox Grid.Column="1"
-                                      Margin="4,0,8,0"
-                                      ItemsSource="{Binding ColumnOptions}"
-                                      SelectedItem="{Binding SelectedColumn, Mode=TwoWay}"
-                                      SelectionChanged="LevelEditor_SelectionChanged">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding DisplayName}"/>
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                            <ComboBox Grid.Column="2"
-                                      ItemsSource="{Binding DirectionOptions}"
-                                      SelectedItem="{Binding SelectedDirection, Mode=TwoWay}"
-                                      SelectionChanged="LevelEditor_SelectionChanged">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Label}"/>
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </Grid>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <controls:ResizableListView x:Name="SortLevelsListView" />
         </Border>
 
-        <Grid Grid.Row="3"
+        <Grid Grid.Row="2"
               ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*"
               Margin="0,10,0,8">
             <Button x:Name="AddLevelButton"
@@ -108,7 +65,7 @@
             </StackPanel>
         </Grid>
 
-        <Grid Grid.Row="4" ColumnDefinitions="*,Auto,Auto">
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto">
             <TextBlock Text="Hidden columns can still be used as sort levels."
                        Foreground="Gray"
                        FontSize="11"

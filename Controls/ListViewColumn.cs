@@ -21,14 +21,27 @@ public class ListViewColumn
     /// <summary>Column header text.</summary>
     public string Header { get; set; } = "";
 
+    /// <summary>
+    /// Optional explanatory text appended to the standard sorting tooltip.
+    /// Use this for compact columns whose cell values need a little context.
+    /// </summary>
+    public string? HeaderToolTip { get; set; }
+
     /// <summary>Initial column width in pixels. Use 0 for star-sized.</summary>
     public double Width { get; set; }
 
-    /// <summary>If true, this column gets remaining space (star-sized).</summary>
+    /// <summary>
+    /// Legacy star preference used when the containing list does not use its
+    /// dynamic rightmost fill column. The control's fill policy takes priority.
+    /// </summary>
     public bool IsStar { get; set; }
 
-    /// <summary>Minimum column width in pixels.</summary>
-    public double MinWidth { get; set; } = 30;
+    /// <summary>
+    /// Minimum column width in pixels. Normal resizable columns default to a
+    /// narrow 10-pixel floor so users can temporarily collapse them while
+    /// arranging a layout. Fixed/action columns may opt into a larger floor.
+    /// </summary>
+    public double MinWidth { get; set; } = 10;
 
     /// <summary>
     /// Property path for simple text binding (e.g. "Name", "SizeDisplay").
@@ -72,6 +85,19 @@ public class ListViewColumn
     /// When set, <see cref="BindingPath"/> is ignored.
     /// </summary>
     public System.Func<Control>? CellContentFactory { get; set; }
+
+    /// <summary>
+    /// Optional property path used to measure every item when auto-sizing a
+    /// custom cell. Simple text columns automatically use
+    /// <see cref="BindingPath"/>.
+    /// </summary>
+    public string? AutoSizeTextPath { get; set; }
+
+    /// <summary>
+    /// Additional width reserved for custom cell chrome such as icons and
+    /// internal margins when auto-sizing from <see cref="AutoSizeTextPath"/>.
+    /// </summary>
+    public double AutoSizeExtraWidth { get; set; }
 
     /// <summary>
     /// Enables the reusable multi-column sorting UI without requiring a legacy

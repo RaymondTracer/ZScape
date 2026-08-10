@@ -86,6 +86,7 @@ public class SettingsService
         settings.CurrentFilter ??= new ServerFilter();
         settings.FilterPresets ??= [];
         settings.ColumnWidths ??= [];
+        settings.ServerListColumnOrder ??= [];
         settings.ServerListColumnVisibility = new Dictionary<string, bool>(
             settings.ServerListColumnVisibility ?? [],
             StringComparer.OrdinalIgnoreCase);
@@ -473,6 +474,12 @@ public class AppSettings
     public Dictionary<string, bool> ServerListColumnVisibility { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Ordered server-list column keys. Empty means use the declared default
+    /// order, which keeps older settings files compatible.
+    /// </summary>
+    public List<string> ServerListColumnOrder { get; set; } = [];
+
     // Sorting
     public int SortColumnIndex { get; set; } = 3; // Default: sort by Players (column 3)
     public bool SortAscending { get; set; } = false; // Default descending (most players first)
@@ -513,8 +520,12 @@ public class AppSettings
 
     // Panel sizes (splitter positions)
     public int MainSplitterDistance { get; set; } = 400;
-    public int DetailsSplitterDistance { get; set; } = 400;
-    public int LogSplitterDistance { get; set; } = 150;
+    public int DetailsSplitterDistance { get; set; } = 200;
+    public int LogSplitterDistance { get; set; } = 120;
+    public int PanelLayoutVersion { get; set; }
+    public int ServerDetailsColumnWidth { get; set; }
+    public int WadsColumnWidth { get; set; }
+    public int PlayersColumnWidth { get; set; }
 
     // Advanced filter
     public ServerFilter CurrentFilter { get; set; } = new();

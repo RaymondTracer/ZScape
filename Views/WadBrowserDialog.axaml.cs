@@ -65,7 +65,7 @@ public partial class WadBrowserDialog : Window
         WadListView.SelectionMode = ListViewSelectionMode.Multi;
         WadListView.AddColumn(new ListViewColumn
         {
-            Key = "name", Header = "Name", Width = 250, MinWidth = 80,
+            Key = "name", Header = "Name", Width = 250, MinWidth = 10,
             BindingPath = "NameWithExtension",
             TextTrimming = TextTrimming.CharacterEllipsis,
             CellPadding = new Thickness(6, 0),
@@ -74,19 +74,19 @@ public partial class WadBrowserDialog : Window
         });
         WadListView.AddColumn(new ListViewColumn
         {
-            Key = "size", Header = "Size", Width = 80, MinWidth = 50,
+            Key = "size", Header = "Size", Width = 80, MinWidth = 10,
             BindingPath = "SizeDisplay",
             CanSort = true
         });
         WadListView.AddColumn(new ListViewColumn
         {
-            Key = "modified", Header = "Modified", Width = 130, MinWidth = 80,
+            Key = "modified", Header = "Modified", Width = 130, MinWidth = 10,
             BindingPath = "ModifiedDisplay",
             CanSort = true
         });
         WadListView.AddColumn(new ListViewColumn
         {
-            Key = "path", Header = "Path", IsStar = true, MinWidth = 80,
+            Key = "path", Header = "Path", Width = 240, IsStar = true, MinWidth = 10,
             BindingPath = "FullPath",
             Foreground = Brushes.Gray,
             TextTrimming = TextTrimming.CharacterEllipsis,

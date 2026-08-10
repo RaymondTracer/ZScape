@@ -1,8 +1,11 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -27,6 +30,10 @@ namespace ZScape.Views;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private const int CurrentPanelLayoutVersion = 1;
+    private const int DefaultDetailsPanelHeight = 200;
+    private const int DefaultLogPanelHeight = 120;
+
     private const string FavoriteColumnKey = "favorite";
     private const string NameColumnKey = "name";
     private const string PlayersColumnKey = "players";
@@ -185,14 +192,14 @@ public partial class MainWindow : Window
     {
         // Initialize the server list view with columns
         SetupServerListView();
+        SetupPlayerListView();
+        SetupWadListView();
 
         _logControl = this.FindControl<LogPanelControl>("LogControl");
-        var playersGrid = this.FindControl<ItemsControl>("PlayersGrid");
-        var wadsList = this.FindControl<ItemsControl>("WadsList");
         var gameModeCombo = this.FindControl<PersistentComboBox>("GameModeComboBox");
 
-        if (playersGrid != null) playersGrid.ItemsSource = Players;
-        if (wadsList != null) wadsList.ItemsSource = Wads;
+        PlayersListControl.ItemsSource = Players;
+        WadsListControl.ItemsSource = Wads;
 
         if (_logControl != null)
         {
@@ -208,6 +215,51 @@ public partial class MainWindow : Window
             gameModeCombo.ItemsSource = GameModes;
             gameModeCombo.SelectedIndex = 0;
         }
+    }
+
+    private void SetupWadListView()
+    {
+        WadsListControl.SelectionMode = ListViewSelectionMode.None;
+        WadsListControl.RowHeight = 22;
+        WadsListControl.SuppressHandCursor = true;
+        WadsListControl.FillLastVisibleColumn = true;
+
+        WadsListControl.AddColumn(new ListViewColumn
+        {
+            Key = "status",
+            Header = "Status",
+            HeaderToolTip = "Whether the IWAD or PWAD is available locally",
+            Width = 76,
+            MinWidth = 60,
+            IsFixedWidth = true,
+            CanUserHide = false,
+            CellContentFactory = CreateWadStatusCell
+        });
+        WadsListControl.AddColumn(new ListViewColumn
+        {
+            Key = "name",
+            Header = "File",
+            Width = 180,
+            MinWidth = 10,
+            CanUserHide = false,
+            BindingPath = nameof(WadViewModel.Name),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            AutoSizeTextPath = nameof(WadViewModel.Name)
+        });
+
+        WadsListControl.Build(ListViewOverflowMode.Fill);
+    }
+
+    private static Control CreateWadStatusCell()
+    {
+        var text = new TextBlock
+        {
+            Padding = new Thickness(6, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(WadViewModel.Status)));
+        text.Bind(TextBlock.ForegroundProperty, new Binding(nameof(WadViewModel.StatusColor)));
+        return text;
     }
 
     private void SetupServerListView()
@@ -268,6 +320,100 @@ public partial class MainWindow : Window
         ServerListView.ScrollViewer.PointerPressed += ServerScrollViewer_PointerPressed;
     }
 
+    private void SetupPlayerListView()
+    {
+        PlayersListControl.SelectionMode = ListViewSelectionMode.None;
+        PlayersListControl.RowHeight = 22;
+        PlayersListControl.SuppressHandCursor = true;
+
+        PlayersListControl.AddColumn(new ListViewColumn
+        {
+            Key = "name",
+            Header = "Name",
+            Width = 220,
+            IsStar = true,
+            MinWidth = 10,
+            CanUserHide = false,
+            AutoSizeTextPath = nameof(PlayerViewModel.DisplayName),
+            CellContentFactory = CreatePlayerNameCell
+        });
+        PlayersListControl.AddColumn(new ListViewColumn
+        {
+            Key = "score",
+            Header = "Score",
+            Width = 55,
+            MinWidth = 10,
+            CanUserHide = false,
+            BindingPath = nameof(PlayerViewModel.Score)
+        });
+        PlayersListControl.AddColumn(new ListViewColumn
+        {
+            Key = "ping",
+            Header = "Ping",
+            Width = 50,
+            MinWidth = 10,
+            CanUserHide = false,
+            BindingPath = nameof(PlayerViewModel.Ping)
+        });
+        PlayersListControl.AddColumn(new ListViewColumn
+        {
+            Key = "team",
+            Header = "Team",
+            Width = 85,
+            MinWidth = 10,
+            CanUserHide = false,
+            AutoSizeTextPath = nameof(PlayerViewModel.Team),
+            CellContentFactory = CreatePlayerTeamCell
+        });
+
+        PlayersListControl.Build(ListViewOverflowMode.AutoScroll);
+    }
+
+    private static Control CreatePlayerNameCell()
+    {
+        var parts = new ItemsControl
+        {
+            ItemsPanel = new FuncTemplate<Panel?>(() =>
+                new StackPanel { Orientation = Orientation.Horizontal }),
+            ItemTemplate = new FuncDataTemplate<ColoredSegmentViewModel>(
+                (_, _) =>
+                {
+                    var text = new TextBlock
+                    {
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    text.Bind(
+                        TextBlock.TextProperty,
+                        new Binding(nameof(ColoredSegmentViewModel.Text)));
+                    text.Bind(
+                        TextBlock.ForegroundProperty,
+                        new Binding(nameof(ColoredSegmentViewModel.Color)));
+                    return text;
+                })
+        };
+        parts.Bind(
+            ItemsControl.ItemsSourceProperty,
+            new Binding(nameof(PlayerViewModel.ColoredNameParts)));
+        return parts;
+    }
+
+    private static Control CreatePlayerTeamCell()
+    {
+        var text = new TextBlock
+        {
+            Padding = new Thickness(4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        text.Bind(
+            TextBlock.TextProperty,
+            new Binding(nameof(PlayerViewModel.Team)));
+        text.Bind(
+            TextBlock.ForegroundProperty,
+            new Binding(nameof(PlayerViewModel.TeamColor)));
+        return text;
+    }
+
     private void ConfigureServerListColumns(ResizableListView list, bool bigUi)
     {
         list.RowBaseBackgroundPath = "RowBackground";
@@ -290,10 +436,13 @@ public partial class MainWindow : Window
         {
             Key = NameColumnKey,
             Header = "Server Name",
+            Width = bigUi ? 420 : 300,
             IsStar = true,
-            MinWidth = bigUi ? 200 : 120,
+            MinWidth = 10,
             CanSort = true,
             CanUserHide = false,
+            AutoSizeTextPath = nameof(ServerViewModel.Name),
+            AutoSizeExtraWidth = 26,
             CellContentFactory = CreateServerNameCell
         });
 
@@ -301,8 +450,9 @@ public partial class MainWindow : Window
         {
             Key = PlayersColumnKey,
             Header = "Players",
-            Width = bigUi ? 100 : 80,
-            MinWidth = 60,
+            HeaderToolTip = "p = playing count/limit; c = connected-client capacity. A current/max c appears when spectators affect the count.",
+            Width = bigUi ? 140 : 115,
+            MinWidth = 10,
             BindingPath = "PlayersDisplay",
             CanSort = true,
             DefaultSortDescending = true
@@ -313,7 +463,7 @@ public partial class MainWindow : Window
             Key = PingColumnKey,
             Header = "Ping",
             Width = bigUi ? 80 : 60,
-            MinWidth = 45,
+            MinWidth = 10,
             BindingPath = "Ping",
             CanSort = true
         });
@@ -323,8 +473,9 @@ public partial class MainWindow : Window
             Key = MapColumnKey,
             Header = "Map",
             Width = bigUi ? 120 : 100,
-            MinWidth = 70,
+            MinWidth = 10,
             CanSort = true,
+            AutoSizeTextPath = nameof(ServerViewModel.Map),
             CellContentFactory = () => CreateSearchCell("Map")
         });
 
@@ -333,8 +484,9 @@ public partial class MainWindow : Window
             Key = ModeColumnKey,
             Header = "Mode",
             Width = bigUi ? 100 : 80,
-            MinWidth = 60,
+            MinWidth = 10,
             CanSort = true,
+            AutoSizeTextPath = nameof(ServerViewModel.GameModeDisplay),
             CellContentFactory = () => CreateSearchCell("GameModeDisplay")
         });
 
@@ -343,8 +495,9 @@ public partial class MainWindow : Window
             Key = IwadColumnKey,
             Header = "IWAD",
             Width = bigUi ? 120 : 100,
-            MinWidth = 70,
+            MinWidth = 10,
             CanSort = true,
+            AutoSizeTextPath = nameof(ServerViewModel.IWAD),
             CellContentFactory = () => CreateSearchCell("IWAD")
         });
 
@@ -353,8 +506,9 @@ public partial class MainWindow : Window
             Key = AddressColumnKey,
             Header = "Address",
             Width = bigUi ? 180 : 140,
-            MinWidth = 110,
+            MinWidth = 10,
             CanSort = true,
+            AutoSizeTextPath = nameof(ServerViewModel.AddressDisplay),
             CellContentFactory = () => CreateSearchCell("AddressDisplay")
         });
 
@@ -363,9 +517,10 @@ public partial class MainWindow : Window
             Key = CountryColumnKey,
             Header = "Country",
             Width = 100,
-            MinWidth = 70,
+            MinWidth = 10,
             IsVisibleByDefault = false,
             CanSort = true,
+            AutoSizeTextPath = nameof(ServerViewModel.Country),
             CellContentFactory = () => CreateSearchCell("Country")
         });
 
@@ -374,9 +529,10 @@ public partial class MainWindow : Window
             Key = WadsColumnKey,
             Header = "WADs",
             Width = 260,
-            MinWidth = 120,
+            MinWidth = 10,
             IsVisibleByDefault = false,
             CanSort = true,
+            AutoSizeTextPath = nameof(ServerViewModel.WadsDisplay),
             CellContentFactory = () => CreateSearchCell("WadsDisplay")
         });
 
@@ -385,9 +541,10 @@ public partial class MainWindow : Window
             Key = VersionColumnKey,
             Header = "Version",
             Width = 220,
-            MinWidth = 120,
+            MinWidth = 10,
             IsVisibleByDefault = false,
             CanSort = true,
+            AutoSizeTextPath = nameof(ServerViewModel.GameVersion),
             CellContentFactory = () => CreateSearchCell("GameVersion")
         });
 
@@ -396,7 +553,7 @@ public partial class MainWindow : Window
             Key = BotsColumnKey,
             Header = "Bots",
             Width = 60,
-            MinWidth = 45,
+            MinWidth = 10,
             IsVisibleByDefault = false,
             BindingPath = "BotCount",
             CanSort = true,
@@ -408,17 +565,37 @@ public partial class MainWindow : Window
             Key = SpectatorsColumnKey,
             Header = "Spectators",
             Width = 85,
-            MinWidth = 60,
+            MinWidth = 10,
             IsVisibleByDefault = false,
             BindingPath = "SpectatorCount",
             CanSort = true,
             DefaultSortDescending = true
         });
 
+        // Keep the reset order explicit and keyed. Changing this one list
+        // changes the default for both the standard and Big UI server lists;
+        // a user's dragged order is persisted separately.
+        list.SetDefaultColumnOrder([
+            FavoriteColumnKey,
+            NameColumnKey,
+            PlayersColumnKey,
+            PingColumnKey,
+            MapColumnKey,
+            ModeColumnKey,
+            IwadColumnKey,
+            AddressColumnKey,
+            CountryColumnKey,
+            WadsColumnKey,
+            VersionColumnKey,
+            BotsColumnKey,
+            SpectatorsColumnKey
+        ]);
+
         list.Build(ListViewOverflowMode.AutoScroll);
         list.SetSortDescriptors(_sortDescriptors);
         list.SortRequested += ServerListView_SortRequested;
         list.ColumnVisibilityChanged += ServerListView_ColumnVisibilityChanged;
+        list.ColumnOrderChanged += ServerListView_ColumnOrderChanged;
         if (ReferenceEquals(list, ServerListView))
             PopulateServerListColumnsMenu();
     }
@@ -576,6 +753,11 @@ public partial class MainWindow : Window
         updateService.IsApplicationBusy = () => _browserService.IsRefreshing;
         updateService.GetServerState = _browserService.GetServerState;
         updateService.SaveStateWithProgress = updateService.SaveServerStateAsync;
+
+        MainSplitter.DragCompleted += (_, _) => PersistPanelLayoutAfterDrag();
+        LogSplitter.DragCompleted += (_, _) => PersistPanelLayoutAfterDrag();
+        DetailsSplitter1.DragCompleted += (_, _) => PersistPanelLayoutAfterDrag();
+        DetailsSplitter2.DragCompleted += (_, _) => PersistPanelLayoutAfterDrag();
     }
 
     private void AutoRefreshTimer_Tick(object? sender, EventArgs e)
@@ -787,13 +969,25 @@ public partial class MainWindow : Window
             // Sorting - restore the ordered chain, migrating older single-sort settings.
             RestoreServerListSorts(settings);
 
-            // Column widths - restore saved widths for non-fixed columns
+            // Restore the keyed column order before widths and visibility. This
+            // keeps every preference attached to the column itself, not an old
+            // numeric index.
+            if (settings.ServerListColumnOrder.Count > 0)
+                ServerListView.SetColumnOrder(settings.ServerListColumnOrder);
+
+            // Restore user-sized pixel columns. The Server Name column remains
+            // a dynamic rightmost fill column so it consumes unused viewport space.
             if (settings.ColumnWidths.Count > 0)
             {
                 for (int i = 0; i < ServerListView.Columns.Count; i++)
                 {
                     var col = ServerListView.Columns[i];
-                    if (col.IsFixedWidth || string.IsNullOrEmpty(col.Header)) continue;
+                    if (col.IsFixedWidth
+                        || ServerListView.IsColumnFillColumn(i)
+                        || string.IsNullOrEmpty(col.Header))
+                    {
+                        continue;
+                    }
                     if ((settings.ColumnWidths.TryGetValue(col.Key, out int savedWidth)
                          || settings.ColumnWidths.TryGetValue(col.Header, out savedWidth))
                         && savedWidth > 0)
@@ -817,28 +1011,7 @@ public partial class MainWindow : Window
             }
             if (SearchBox != null) SearchBox.Text = settings.SearchText ?? "";
 
-            // Splitter positions - restore as proportional star heights
-            var mainGrid = MainContentGrid;
-            if (mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
-            {
-                if (settings.MainSplitterDistance > 0 && settings.DetailsSplitterDistance > 0)
-                {
-                    var totalHeight = settings.MainSplitterDistance + settings.DetailsSplitterDistance + (settings.LogSplitterDistance > 0 ? settings.LogSplitterDistance : 100);
-                    if (totalHeight > 0)
-                    {
-                        var serverRatio = (double)settings.MainSplitterDistance / totalHeight;
-                        var detailsRatio = (double)settings.DetailsSplitterDistance / totalHeight;
-                        var logRatio = settings.LogSplitterDistance > 0 ? (double)settings.LogSplitterDistance / totalHeight : 1.0 - serverRatio - detailsRatio;
-                        if (logRatio < 0.05) logRatio = 0.05;
-                        mainGrid.RowDefinitions[0].Height = new GridLength(Math.Max(1, serverRatio * 5), GridUnitType.Star);
-                        mainGrid.RowDefinitions[2].Height = new GridLength(Math.Max(1, detailsRatio * 5), GridUnitType.Star);
-                        mainGrid.RowDefinitions[4].Height = new GridLength(Math.Max(1, logRatio * 5), GridUnitType.Star);
-                    }
-                }
-            }
-
-            // Log panel visibility - do this AFTER splitter restore so it can override row 0 sizing
-            SetLogPanelVisible(settings.ShowLogPanel);
+            RestorePanelLayout(settings);
         }
 
         // View menu check states - always refresh these
@@ -988,23 +1161,134 @@ public partial class MainWindow : Window
         if (LogPanel != null) LogPanel.IsVisible = visible;
         if (LogSplitter != null) LogSplitter.IsVisible = visible;
 
-        // Update the row definitions including MinHeight to fully collapse
         var grid = MainContentGrid;
         if (grid != null && grid.RowDefinitions.Count >= 5)
         {
-            // Row 3 is the log splitter, Row 4 is the log panel
+            // The server list is the only flexible row. Details and log retain
+            // their saved pixel heights, so toggling the log cannot redistribute
+            // space into the details/WADs/players panel.
+            grid.RowDefinitions[0].Height = GridLength.Star;
+            grid.RowDefinitions[2].Height = new GridLength(
+                GetSavedPanelHeight(
+                    _settings.Settings.DetailsSplitterDistance,
+                    DefaultDetailsPanelHeight,
+                    grid.RowDefinitions[2].MinHeight));
             grid.RowDefinitions[3].Height = visible ? new GridLength(5) : new GridLength(0);
             grid.RowDefinitions[3].MinHeight = 0;
-            grid.RowDefinitions[4].Height = visible ? new GridLength(120, GridUnitType.Pixel) : new GridLength(0);
+            grid.RowDefinitions[4].Height = visible
+                ? new GridLength(
+                    GetSavedPanelHeight(
+                        _settings.Settings.LogSplitterDistance,
+                        DefaultLogPanelHeight,
+                        50))
+                : new GridLength(0);
             grid.RowDefinitions[4].MinHeight = visible ? 50 : 0;
+        }
+    }
 
-            // Ensure row 0 (server list) uses Star sizing so it can expand to fill space
-            if (!visible)
+    private void RestorePanelLayout(AppSettings settings)
+    {
+        // Older builds saved whichever star redistribution happened to be on
+        // screen, including a zero log height when the log was hidden. Reset
+        // that unreliable state once, then persist the user's adjustments.
+        if (settings.PanelLayoutVersion < CurrentPanelLayoutVersion)
+        {
+            settings.DetailsSplitterDistance = DefaultDetailsPanelHeight;
+            settings.LogSplitterDistance = DefaultLogPanelHeight;
+            settings.PanelLayoutVersion = CurrentPanelLayoutVersion;
+        }
+
+        RestoreDetailsPanelColumns(settings);
+        SetLogPanelVisible(settings.ShowLogPanel);
+    }
+
+    private static double GetSavedPanelHeight(
+        int savedHeight,
+        int fallbackHeight,
+        double minimumHeight) =>
+        Math.Max(
+            minimumHeight,
+            savedHeight > 0 ? savedHeight : fallbackHeight);
+
+    private void RestoreDetailsPanelColumns(AppSettings settings)
+    {
+        var columns = DetailsPanelGrid?.ColumnDefinitions;
+        if (columns == null
+            || columns.Count < 5
+            || settings.ServerDetailsColumnWidth <= 0
+            || settings.WadsColumnWidth <= 0
+            || settings.PlayersColumnWidth <= 0)
+        {
+            return;
+        }
+
+        // Saved pixel widths are used as star weights. This recreates the same
+        // proportions at the saved window size and scales cleanly if the window
+        // or monitor size changes.
+        columns[0].Width = new GridLength(
+            settings.ServerDetailsColumnWidth,
+            GridUnitType.Star);
+        columns[2].Width = new GridLength(
+            settings.WadsColumnWidth,
+            GridUnitType.Star);
+        columns[4].Width = new GridLength(
+            settings.PlayersColumnWidth,
+            GridUnitType.Star);
+    }
+
+    private void CapturePanelLayout()
+    {
+        var settings = _settings.Settings;
+        var mainGrid = MainContentGrid;
+        if (mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
+        {
+            var serverHeight = mainGrid.RowDefinitions[0].ActualHeight;
+            var detailsHeight = mainGrid.RowDefinitions[2].ActualHeight;
+            var logHeight = mainGrid.RowDefinitions[4].ActualHeight;
+
+            if (serverHeight > 0)
+                settings.MainSplitterDistance = (int)Math.Round(serverHeight);
+            if (detailsHeight > 0)
+                settings.DetailsSplitterDistance = (int)Math.Round(detailsHeight);
+            if (LogPanel?.IsVisible == true && logHeight > 0)
+                settings.LogSplitterDistance = (int)Math.Round(logHeight);
+        }
+
+        var columns = DetailsPanelGrid?.ColumnDefinitions;
+        if (columns != null && columns.Count >= 5)
+        {
+            var serverDetailsWidth = columns[0].ActualWidth;
+            var wadsWidth = columns[2].ActualWidth;
+            var playersWidth = columns[4].ActualWidth;
+            if (serverDetailsWidth > 0
+                && wadsWidth > 0
+                && playersWidth > 0)
             {
-                // When log is hidden, make server list expand with star sizing
-                grid.RowDefinitions[0].Height = new GridLength(1, GridUnitType.Star);
+                settings.ServerDetailsColumnWidth =
+                    (int)Math.Round(serverDetailsWidth);
+                settings.WadsColumnWidth = (int)Math.Round(wadsWidth);
+                settings.PlayersColumnWidth =
+                    (int)Math.Round(playersWidth);
             }
         }
+
+        settings.PanelLayoutVersion = CurrentPanelLayoutVersion;
+    }
+
+    private void PersistPanelLayoutAfterDrag()
+    {
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (_isInitializing)
+                    return;
+
+                CapturePanelLayout();
+                RestoreDetailsPanelColumns(_settings.Settings);
+                SetLogPanelVisible(_settings.Settings.ShowLogPanel);
+                _settings.Save();
+            },
+            DispatcherPriority.Background);
     }
 
     private void SaveSettings()
@@ -1043,11 +1327,18 @@ public partial class MainWindow : Window
         for (int i = 0; i < ServerListView.Columns.Count; i++)
         {
             var col = ServerListView.Columns[i];
-            if (col.IsFixedWidth || string.IsNullOrEmpty(col.Header)) continue;
+            if (col.IsFixedWidth
+                || ServerListView.IsColumnFillColumn(i)
+                || string.IsNullOrEmpty(col.Header))
+            {
+                continue;
+            }
             var actualWidth = (int)ServerListView.GetColumnWidth(i);
             if (actualWidth > 0)
                 settings.ColumnWidths[col.Key] = actualWidth;
         }
+
+        settings.ServerListColumnOrder = ServerListView.ColumnOrder.ToList();
 
         settings.ServerListColumnVisibility.Clear();
         for (var i = 0; i < ServerListView.Columns.Count; i++)
@@ -1070,14 +1361,7 @@ public partial class MainWindow : Window
         settings.WadSearchPaths = _wadManager.SearchPaths.ToList();
         settings.WadDownloadPath = _wadManager.DownloadPath;
 
-        // Splitter positions - save row heights
-        var mainGrid = MainContentGrid;
-        if (mainGrid != null && mainGrid.RowDefinitions.Count >= 5)
-        {
-            settings.MainSplitterDistance = (int)mainGrid.RowDefinitions[0].ActualHeight;
-            settings.DetailsSplitterDistance = (int)mainGrid.RowDefinitions[2].ActualHeight;
-            settings.LogSplitterDistance = (int)mainGrid.RowDefinitions[4].ActualHeight;
-        }
+        CapturePanelLayout();
 
         _settings.Save();
     }
@@ -1220,7 +1504,7 @@ public partial class MainWindow : Window
             if (hideBotOnly && s.CurrentPlayers > 0 && s.CurrentPlayers == s.BotCount) return false;
 
             // Hide full
-            if (hideFull && s.CurrentPlayers >= s.MaxPlayers) return false;
+            if (hideFull && s.IsFull) return false;
 
             // Hide passworded
             if (hidePassworded && s.IsPassworded) return false;
@@ -1628,7 +1912,15 @@ public partial class MainWindow : Window
         sb.AppendLine($"Address: {server.Address}:{server.Port}");
         sb.AppendLine($"Map: {server.Map}");
         sb.AppendLine($"Mode: {server.GameMode.Name}");
-        sb.AppendLine($"Players: {server.CurrentPlayers}/{server.MaxPlayers}");
+        if (server.HasSeparateClientLimit)
+        {
+            sb.AppendLine($"Playing: {server.PlayingCount}/{server.MaxPlayers}");
+            sb.AppendLine($"Connected: {server.CurrentPlayers}/{server.MaxClients} (includes spectators)");
+        }
+        else
+        {
+            sb.AppendLine($"Players: {server.PlayerCountDisplay}");
+        }
         sb.AppendLine($"Ping: {server.Ping}ms");
         sb.AppendLine($"Version: {version}");
         sb.AppendLine($"IWAD: {server.IWAD}");
@@ -1672,9 +1964,9 @@ public partial class MainWindow : Window
         bool isTeamGame = server.GameMode.IsTeamGame;
         bool colorizeNames = _settings.Settings.ColorizePlayerNames;
 
-        // Update header text based on game mode
-        if (TeamHeader != null)
-            TeamHeader.Text = isTeamGame ? "Team" : "Status";
+        PlayersListControl.SetColumnHeader(
+            "team",
+            isTeamGame ? "Team" : "Status");
 
         // Group by team and spectators
         var spectators = server.Players.Where(p => p.IsSpectator).ToList();
@@ -1841,6 +2133,7 @@ public partial class MainWindow : Window
 
     private void ShowLogPanelMenuItem_Click(object? sender, RoutedEventArgs e)
     {
+        CapturePanelLayout();
         _settings.Settings.ShowLogPanel = !_settings.Settings.ShowLogPanel;
         UpdateMenuCheckMark(ShowLogPanelMenuItem, _settings.Settings.ShowLogPanel);
         SetLogPanelVisible(_settings.Settings.ShowLogPanel);
@@ -1866,6 +2159,7 @@ public partial class MainWindow : Window
     private void TouchModeMenuItem_Click(object? sender, RoutedEventArgs e)
     {
         var settings = _settings.Settings;
+        CapturePanelLayout();
         settings.UIMode = settings.UIMode == UIMode.BigUI ? UIMode.Standard : UIMode.BigUI;
         _settings.Save();
         ApplyUIMode();
@@ -1967,6 +2261,8 @@ public partial class MainWindow : Window
         var list = _bigUIShell.ServerListView;
 
         ConfigureServerListColumns(list, bigUi: true);
+        if (_settings.Settings.ServerListColumnOrder.Count > 0)
+            list.SetColumnOrder(_settings.Settings.ServerListColumnOrder);
         foreach (var column in list.Columns)
         {
             var visible = column.Key == FavoriteColumnKey
@@ -2629,6 +2925,63 @@ public partial class MainWindow : Window
             }
 
             PopulateServerListColumnsMenu();
+        }
+        finally
+        {
+            _synchronizingListPreferences = false;
+        }
+
+        SaveSettings();
+    }
+
+    private void ServerListView_ColumnOrderChanged(
+        object? sender,
+        ListViewColumnOrderChangedEventArgs e)
+    {
+        if (_synchronizingListPreferences)
+            return;
+
+        _synchronizingListPreferences = true;
+        try
+        {
+            // Sort descriptors carry both a display index and a stable key.
+            // Re-key the window-level descriptors before the next refresh so a
+            // dragged column never makes the data sort by the wrong field.
+            var reorderedSorts = new List<ListViewSortDescriptor>();
+            foreach (var descriptor in _sortDescriptors)
+            {
+                var newIndex = -1;
+                for (var i = 0; i < e.ColumnKeys.Count; i++)
+                {
+                    if (e.ColumnKeys[i].Equals(
+                            descriptor.ColumnKey,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        newIndex = i;
+                        break;
+                    }
+                }
+
+                if (newIndex >= 0)
+                {
+                    reorderedSorts.Add(new ListViewSortDescriptor(
+                        newIndex,
+                        descriptor.ColumnKey,
+                        descriptor.Ascending));
+                }
+            }
+            _sortDescriptors.Clear();
+            _sortDescriptors.AddRange(reorderedSorts);
+
+            _settings.Settings.ServerListColumnOrder = e.ColumnKeys.ToList();
+
+            if (!ReferenceEquals(sender, ServerListView))
+                ServerListView.SetColumnOrder(e.ColumnKeys);
+            if (_bigUIShell != null
+                && !ReferenceEquals(sender, _bigUIShell.ServerListView))
+            {
+                _bigUIShell.ServerListView.SetColumnOrder(e.ColumnKeys);
+            }
         }
         finally
         {
@@ -4569,23 +4922,7 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(RowHeight)));
     }
     public string Name => DoomColorCodes.StripColorCodes(_server.Name);
-    public string PlayersDisplay
-    {
-        get
-        {
-            var active = _server.HumanPlayerCount;
-            var bots = _server.BotCount;
-            var specs = _server.SpectatorCount;
-
-            if (bots > 0 && specs > 0)
-                return $"{active}+{bots}b+{specs}s/{_server.MaxPlayers}";
-            if (bots > 0)
-                return $"{active}+{bots}b/{_server.MaxPlayers}";
-            if (specs > 0)
-                return $"{active}+{specs}s/{_server.MaxPlayers}";
-            return $"{active}/{_server.MaxPlayers}";
-        }
-    }
+    public string PlayersDisplay => _server.PlayerCountDisplay;
     public int Ping => _server.Ping;
     public string Map => _server.Map;
     public string GameModeDisplay => _server.GameMode.ShortName;
@@ -4625,6 +4962,8 @@ public class PlayerViewModel
 {
     public string Name { get; set; } = "";
     public List<ColoredTextSegment> NameSegments { get; set; } = [];
+    public string DisplayName =>
+        string.Concat(NameSegments.Select(segment => segment.Text));
     public string Score { get; set; } = "";
     public string Ping { get; set; } = "";
     public string Team { get; set; } = "";

@@ -106,11 +106,11 @@
         <!-- Main Content -->
         <Grid x:Name="MainContentGrid">
             <Grid.RowDefinitions>
-                <RowDefinition Height="3*" MinHeight="150" />
+                <RowDefinition Height="*" MinHeight="150" />
                 <RowDefinition Height="5" />
-                <RowDefinition Height="2*" MinHeight="80" />
+                <RowDefinition Height="200" MinHeight="80" />
                 <RowDefinition Height="5" />
-                <RowDefinition Height="1*" MinHeight="50" />
+                <RowDefinition Height="120" MinHeight="50" />
             </Grid.RowDefinitions>
             
             <!-- Server List -->
@@ -121,13 +121,13 @@
                           Background="{DynamicResource BorderBrush}" />
             
             <!-- Details Panel -->
-            <Grid Grid.Row="2">
+            <Grid x:Name="DetailsPanelGrid" Grid.Row="2">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" MinWidth="200" />
+                    <ColumnDefinition Width="4*" MinWidth="200" />
                     <ColumnDefinition Width="5" />
-                    <ColumnDefinition Width="200" MinWidth="100" />
+                    <ColumnDefinition Width="1*" MinWidth="100" />
                     <ColumnDefinition Width="5" />
-                    <ColumnDefinition Width="400" MinWidth="200" />
+                    <ColumnDefinition Width="2*" MinWidth="200" />
                 </Grid.ColumnDefinitions>
                 
                 <!-- Server Details -->
@@ -147,17 +147,7 @@
                 <Border Classes="panel" Grid.Column="2" Margin="4">
                     <DockPanel>
                         <TextBlock x:Name="WadsLabel" DockPanel.Dock="Top" Classes="header" Text="WADs" />
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl x:Name="WadsList">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{ReflectionBinding DisplayText}" 
-                                                   Foreground="{ReflectionBinding StatusColor}" 
-                                                   Margin="2,1" />
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <controls:ResizableListView x:Name="WadsListControl" />
                     </DockPanel>
                 </Border>
                 
@@ -168,41 +158,7 @@
                 <Border Classes="panel" Grid.Column="4" Margin="4">
                     <DockPanel>
                         <TextBlock x:Name="PlayersLabel" DockPanel.Dock="Top" Classes="header" Text="Players" />
-                        <!-- Column Headers -->
-                        <Grid x:Name="PlayersHeaderGrid" DockPanel.Dock="Top" ColumnDefinitions="*,50,50,80" Margin="2,4,2,2">
-                            <TextBlock Grid.Column="0" Text="Name" FontWeight="SemiBold" Foreground="Gray" />
-                            <TextBlock Grid.Column="1" Text="Score" FontWeight="SemiBold" Foreground="Gray" />
-                            <TextBlock Grid.Column="2" Text="Ping" FontWeight="SemiBold" Foreground="Gray" />
-                            <TextBlock x:Name="TeamHeader" Grid.Column="3" Text="Team" FontWeight="SemiBold" Foreground="Gray" />
-                        </Grid>
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl x:Name="PlayersGrid">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid ColumnDefinitions="*,50,50,80" Margin="2,1">
-                                            <!-- Colorized player name -->
-                                            <ItemsControl Grid.Column="0" ItemsSource="{ReflectionBinding ColoredNameParts}">
-                                                <ItemsControl.ItemsPanel>
-                                                    <ItemsPanelTemplate>
-                                                        <StackPanel Orientation="Horizontal"/>
-                                                    </ItemsPanelTemplate>
-                                                </ItemsControl.ItemsPanel>
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock Text="{ReflectionBinding Text}" 
-                                                                   Foreground="{ReflectionBinding Color}"/>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                            <TextBlock Grid.Column="1" Text="{ReflectionBinding Score}" />
-                                            <TextBlock Grid.Column="2" Text="{ReflectionBinding Ping}" />
-                                            <TextBlock Grid.Column="3" Text="{ReflectionBinding Team}" 
-                                                       Foreground="{ReflectionBinding TeamColor}" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <controls:ResizableListView x:Name="PlayersListControl" />
                     </DockPanel>
                 </Border>
             </Grid>

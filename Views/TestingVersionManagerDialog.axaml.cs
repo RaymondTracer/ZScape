@@ -53,7 +53,7 @@ public partial class TestingVersionManagerDialog : Window
             Header = "Version",
             BindingPath = "VersionName",
             Width = 200,
-            MinWidth = 80,
+            MinWidth = 10,
             TextTrimming = TextTrimming.CharacterEllipsis,
             CellContentFactory = () =>
             {
@@ -74,7 +74,7 @@ public partial class TestingVersionManagerDialog : Window
             Header = "Size",
             BindingPath = "SizeDisplay",
             Width = 100,
-            MinWidth = 50,
+            MinWidth = 10,
             CellContentFactory = () =>
             {
                 var tb = new TextBlock
@@ -93,7 +93,7 @@ public partial class TestingVersionManagerDialog : Window
             Header = "Files",
             BindingPath = "FileCount",
             Width = 80,
-            MinWidth = 40,
+            MinWidth = 10,
             CellContentFactory = () =>
             {
                 var tb = new TextBlock
@@ -112,7 +112,7 @@ public partial class TestingVersionManagerDialog : Window
             Header = "Screenshots",
             BindingPath = "ScreenshotDisplay",
             Width = 80,
-            MinWidth = 40,
+            MinWidth = 10,
             CellContentFactory = () =>
             {
                 var tb = new TextBlock
@@ -131,8 +131,9 @@ public partial class TestingVersionManagerDialog : Window
             Header = "Path",
             Width = 200,
             IsStar = true,
-            MinWidth = 80,
+            MinWidth = 10,
             TextTrimming = TextTrimming.CharacterEllipsis,
+            AutoSizeTextPath = "Path",
             CellContentFactory = () =>
             {
                 var tb = new TextBlock

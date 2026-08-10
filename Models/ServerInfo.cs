@@ -52,13 +52,27 @@ public class ServerInfo : INotifyPropertyChanged
     public int CurrentPlayers 
     { 
         get => _currentPlayers; 
-        set => SetField(ref _currentPlayers, value); 
+        set
+        {
+            if (SetField(ref _currentPlayers, value))
+            {
+                OnPropertyChanged(nameof(PlayerCountDisplay));
+                OnPropertyChanged(nameof(IsFull));
+            }
+        }
     }
     
     public int MaxPlayers 
     { 
         get => _maxPlayers; 
-        set => SetField(ref _maxPlayers, value); 
+        set
+        {
+            if (SetField(ref _maxPlayers, value))
+            {
+                OnPropertyChanged(nameof(PlayerCountDisplay));
+                OnPropertyChanged(nameof(HasSeparateClientLimit));
+            }
+        }
     }
     
     public int Ping 
@@ -84,7 +98,16 @@ public class ServerInfo : INotifyPropertyChanged
     public int MaxClients
     {
         get => _maxClients;
-        set { if (_maxClients != value) { _maxClients = value; OnPropertyChanged(nameof(IsFull)); } }
+        set
+        {
+            if (_maxClients != value)
+            {
+                _maxClients = value;
+                OnPropertyChanged(nameof(PlayerCountDisplay));
+                OnPropertyChanged(nameof(HasSeparateClientLimit));
+                OnPropertyChanged(nameof(IsFull));
+            }
+        }
     }
     public string IWAD { get; set; } = string.Empty;
     public List<PWadInfo> PWADs { get; set; } = [];
@@ -132,7 +155,44 @@ public class ServerInfo : INotifyPropertyChanged
     /// </summary>
     public int ConsecutiveFailures { get; set; }
 
-    public string PlayerCountDisplay => $"{CurrentPlayers}/{MaxClients}";
+    /// <summary>
+    /// True when the server has a different limit for actively playing and
+    /// merely being connected (for example, as a spectator).
+    /// </summary>
+    public bool HasSeparateClientLimit => MaxPlayers != MaxClients;
+
+    /// <summary>
+    /// Compact capacity display shared by every server list. When both limits
+    /// are equal, this preserves the familiar player/bot/spectator breakdown.
+    /// When they differ, the first fraction is the playing count/limit (p)
+    /// and the parenthetical is the connected-client capacity (c). The
+    /// connected count is included when it differs from the playing count.
+    /// </summary>
+    public string PlayerCountDisplay
+    {
+        get
+        {
+            var activeHumans = HumanPlayerCount;
+            var activeBots = Players.Count(player => player.IsBot && !player.IsSpectator);
+            var spectators = Players.Count(player => player.IsSpectator);
+            var playingBreakdown = activeBots > 0
+                ? $"{activeHumans}+{activeBots}b"
+                : activeHumans.ToString();
+
+            if (HasSeparateClientLimit)
+            {
+                var connectedDisplay = CurrentPlayers == PlayingCount
+                    ? $"{MaxClients}c"
+                    : $"{CurrentPlayers}/{MaxClients}c";
+                return $"{playingBreakdown}/{MaxPlayers}p ({connectedDisplay})";
+            }
+
+            if (spectators > 0)
+                return $"{playingBreakdown}+{spectators}s/{MaxPlayers}";
+
+            return $"{playingBreakdown}/{MaxPlayers}";
+        }
+    }
     
     public string PingDisplay => Ping >= 0 ? $"{Ping} ms" : "N/A";
 
@@ -155,6 +215,7 @@ public class ServerInfo : INotifyPropertyChanged
     public bool IsEmpty => CurrentPlayers == 0;
     public bool HasBots => Players.Any(p => p.IsBot);
     public bool IsTesting => IsTestingServer;
+    public int PlayingCount => Players.Count(p => !p.IsSpectator);
     public int HumanPlayerCount => Players.Count(p => !p.IsBot && !p.IsSpectator);
     public int SpectatorCount => Players.Count(p => p.IsSpectator && !p.IsBot);
     public int BotCount => Players.Count(p => p.IsBot);

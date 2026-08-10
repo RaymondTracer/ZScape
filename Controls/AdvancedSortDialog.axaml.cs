@@ -1,6 +1,11 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Controls.Primitives;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -57,6 +62,9 @@ public partial class AdvancedSortDialog : Window, INotifyPropertyChanged
 
         InitializeComponent();
         DataContext = this;
+        SetupSortLevelsList();
+        SortLevelsListView.ItemsSource = SortLevels;
+        SortLevelsListView.SelectionChanged += SortLevelsListView_SelectionChanged;
 
         foreach (var descriptor in currentSorts)
         {
@@ -72,9 +80,106 @@ public partial class AdvancedSortDialog : Window, INotifyPropertyChanged
 
         RefreshPriorities();
         SelectedSortLevel = SortLevels.FirstOrDefault();
+        if (SelectedSortLevel != null)
+            SortLevelsListView.SelectItem(SelectedSortLevel);
         UpdateControlState();
 
         KeyDown += OnDialogKeyDown;
+    }
+
+    private void SetupSortLevelsList()
+    {
+        SortLevelsListView.SelectionMode = ListViewSelectionMode.Single;
+        SortLevelsListView.RowHeight = 34;
+        SortLevelsListView.SuppressHandCursor = true;
+        SortLevelsListView.FillLastVisibleColumn = true;
+
+        SortLevelsListView.AddColumn(new ListViewColumn
+        {
+            Key = "priority",
+            Header = "Level",
+            Width = 58,
+            MinWidth = 58,
+            IsFixedWidth = true,
+            CanUserHide = false,
+            BindingPath = nameof(AdvancedSortLevelItem.Priority),
+            ContentAlignment = HorizontalAlignment.Center,
+            CellPadding = new Thickness(4, 0)
+        });
+        SortLevelsListView.AddColumn(new ListViewColumn
+        {
+            Key = "column",
+            Header = "Column",
+            Width = 280,
+            MinWidth = 150,
+            CanUserHide = false,
+            CellContentFactory = CreateColumnEditorCell
+        });
+        SortLevelsListView.AddColumn(new ListViewColumn
+        {
+            Key = "direction",
+            Header = "Direction",
+            Width = 220,
+            MinWidth = 150,
+            CanUserHide = false,
+            CellContentFactory = CreateDirectionEditorCell
+        });
+
+        SortLevelsListView.Build(ListViewOverflowMode.AutoScroll);
+    }
+
+    private Control CreateColumnEditorCell()
+    {
+        var combo = new ComboBox
+        {
+            Margin = new Thickness(4, 2, 8, 2),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        combo.Bind(
+            ItemsControl.ItemsSourceProperty,
+            new Binding(nameof(AdvancedSortLevelItem.ColumnOptions)));
+        combo.Bind(
+            SelectingItemsControl.SelectedItemProperty,
+            new Binding(nameof(AdvancedSortLevelItem.SelectedColumn))
+            {
+                Mode = BindingMode.TwoWay
+            });
+        combo.ItemTemplate = new FuncDataTemplate<AdvancedSortColumnOption>(
+            (_, _) =>
+            {
+                var text = new TextBlock();
+                text.Bind(TextBlock.TextProperty, new Binding(nameof(AdvancedSortColumnOption.DisplayName)));
+                return text;
+            });
+        combo.SelectionChanged += LevelEditor_SelectionChanged;
+        return combo;
+    }
+
+    private Control CreateDirectionEditorCell()
+    {
+        var combo = new ComboBox
+        {
+            Margin = new Thickness(0, 2),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        combo.Bind(
+            ItemsControl.ItemsSourceProperty,
+            new Binding(nameof(AdvancedSortLevelItem.DirectionOptions)));
+        combo.Bind(
+            SelectingItemsControl.SelectedItemProperty,
+            new Binding(nameof(AdvancedSortLevelItem.SelectedDirection))
+            {
+                Mode = BindingMode.TwoWay
+            });
+        combo.ItemTemplate = new FuncDataTemplate<AdvancedSortDirectionOption>(
+            (_, _) =>
+            {
+                var text = new TextBlock();
+                text.Bind(TextBlock.TextProperty, new Binding(nameof(AdvancedSortDirectionOption.Label)));
+                return text;
+            });
+        combo.SelectionChanged += LevelEditor_SelectionChanged;
+        return combo;
     }
 
     private void AddLevel(
@@ -107,7 +212,7 @@ public partial class AdvancedSortDialog : Window, INotifyPropertyChanged
         AddLevel(nextColumn, !nextColumn.DefaultSortDescending);
         RefreshPriorities();
         SelectedSortLevel = SortLevels[^1];
-        SortLevelsListBox.ScrollIntoView(SelectedSortLevel);
+        SortLevelsListView.SelectItem(SelectedSortLevel);
         ValidationText.Text = string.Empty;
     }
 
@@ -149,8 +254,7 @@ public partial class AdvancedSortDialog : Window, INotifyPropertyChanged
 
         SortLevels.Move(currentIndex, targetIndex);
         RefreshPriorities();
-        SortLevelsListBox.SelectedItem = SelectedSortLevel;
-        SortLevelsListBox.ScrollIntoView(SelectedSortLevel);
+        SortLevelsListView.SelectItem(SelectedSortLevel);
         ValidationText.Text = string.Empty;
     }
 
@@ -191,10 +295,9 @@ public partial class AdvancedSortDialog : Window, INotifyPropertyChanged
         Close();
     }
 
-    private void SortLevelsListBox_SelectionChanged(
-        object? sender,
-        SelectionChangedEventArgs e)
+    private void SortLevelsListView_SelectionChanged(object? sender, EventArgs e)
     {
+        SelectedSortLevel = SortLevelsListView.SelectedItem as AdvancedSortLevelItem;
         UpdateControlState();
     }
 

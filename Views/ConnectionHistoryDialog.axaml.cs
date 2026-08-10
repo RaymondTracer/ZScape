@@ -46,14 +46,14 @@ public partial class ConnectionHistoryDialog : Window
         HistoryListView.RowBaseBackgroundPath = "RowBackground";
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "status", Header = "Status", Width = 80, MinWidth = 65,
+            Key = "status", Header = "Status", Width = 80, MinWidth = 10,
             BindingPath = "StatusDisplay",
             Foreground = Brushes.Gray,
             CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "name", Header = "Server Name", IsStar = true, MinWidth = 180,
+            Key = "name", Header = "Server Name", Width = 250, IsStar = true, MinWidth = 10,
             BindingPath = "DisplayServerName",
             TextTrimming = TextTrimming.CharacterEllipsis,
             CellPadding = new Thickness(8, 0),
@@ -62,55 +62,56 @@ public partial class ConnectionHistoryDialog : Window
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "players", Header = "Players", Width = 75, MinWidth = 60,
+            Key = "players", Header = "Players", Width = 75, MinWidth = 10,
+            HeaderToolTip = "p = playing count/limit; c = connected-client capacity. A current/max c appears when spectators affect the count.",
             BindingPath = "PlayersDisplay",
             CanSort = true,
             DefaultSortDescending = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "ping", Header = "Ping", Width = 60, MinWidth = 45,
+            Key = "ping", Header = "Ping", Width = 60, MinWidth = 10,
             BindingPath = "PingDisplay",
             CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "map", Header = "Map", Width = 95, MinWidth = 65,
+            Key = "map", Header = "Map", Width = 95, MinWidth = 10,
             BindingPath = "Map",
             TextTrimming = TextTrimming.CharacterEllipsis,
             CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "mode", Header = "Mode", Width = 90, MinWidth = 65,
+            Key = "mode", Header = "Mode", Width = 90, MinWidth = 10,
             BindingPath = "DisplayGameMode",
             TextTrimming = TextTrimming.CharacterEllipsis,
             CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "iwad", Header = "IWAD", Width = 100, MinWidth = 70,
+            Key = "iwad", Header = "IWAD", Width = 100, MinWidth = 10,
             BindingPath = "IWAD",
             TextTrimming = TextTrimming.CharacterEllipsis,
             CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "address", Header = "Address", Width = 150, MinWidth = 110,
+            Key = "address", Header = "Address", Width = 150, MinWidth = 10,
             BindingPath = "DisplayAddress",
             TextTrimming = TextTrimming.CharacterEllipsis,
             CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "last-played", Header = "Last Played", Width = 105, MinWidth = 80,
+            Key = "last-played", Header = "Last Played", Width = 105, MinWidth = 10,
             BindingPath = "LastPlayedDisplay",
             CanSort = true,
             DefaultSortDescending = true
         });
         HistoryListView.AddColumn(new ListViewColumn
         {
-            Key = "count", Header = "Visits", Width = 60, MinWidth = 50,
+            Key = "count", Header = "Visits", Width = 60, MinWidth = 10,
             BindingPath = "ConnectionCount",
             CanSort = true,
             DefaultSortDescending = true
@@ -657,16 +658,7 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
             if (_liveServer == null || !IsOnline)
                 return "—";
 
-            var active = _liveServer.HumanPlayerCount;
-            var bots = _liveServer.BotCount;
-            var spectators = _liveServer.SpectatorCount;
-            if (bots > 0 && spectators > 0)
-                return $"{active}+{bots}b+{spectators}s/{_liveServer.MaxPlayers}";
-            if (bots > 0)
-                return $"{active}+{bots}b/{_liveServer.MaxPlayers}";
-            if (spectators > 0)
-                return $"{active}+{spectators}s/{_liveServer.MaxPlayers}";
-            return $"{active}/{_liveServer.MaxPlayers}";
+            return _liveServer.PlayerCountDisplay;
         }
     }
     public string PingDisplay => _liveServer != null && IsOnline && _liveServer.Ping >= 0
