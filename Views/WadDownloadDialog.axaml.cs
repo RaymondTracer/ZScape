@@ -99,13 +99,22 @@ public partial class WadDownloadDialog : Window
         WadListControl.SelectionMode = ListViewSelectionMode.None;
         WadListControl.RowBaseBackgroundPath = "RowBackground";
         WadListControl.RowHeight = 26;
+        WadListControl.FillLastVisibleColumn = true;
 
         WadListControl.AddColumn(new ListViewColumn
         {
             Key = "file",
             Header = "File",
-            IsStar = true,
-            MinWidth = 180,
+            // A star column inside a horizontal ScrollViewer is measured against
+            // the viewport and then followed by every fixed column. That makes
+            // File consume the whole dialog (and retain the enlarged width after
+            // a resize) instead of behaving like a normal scrollable column.
+            // Keep the filename readable without allowing it to push the
+            // status/progress columns off-screen. The final Source column is
+            // the shared control's flexible right-hand column.
+            Width = 200,
+            MinWidth = 10,
+            AutoSizeTextPath = "FileName",
             CellContentFactory = () => CreateStatusCell(
                 "FileName",
                 TextTrimming.CharacterEllipsis,
@@ -116,7 +125,8 @@ public partial class WadDownloadDialog : Window
             Key = "status",
             Header = "Status",
             Width = 105,
-            MinWidth = 80,
+            MinWidth = 10,
+            AutoSizeTextPath = "StatusDisplay",
             CellContentFactory = () => CreateStatusCell("StatusDisplay")
         });
         WadListControl.AddColumn(new ListViewColumn
@@ -124,7 +134,8 @@ public partial class WadDownloadDialog : Window
             Key = "progress",
             Header = "Progress",
             Width = 210,
-            MinWidth = 140,
+            MinWidth = 10,
+            AutoSizeTextPath = "ProgressText",
             CellContentFactory = CreateProgressCell
         });
         WadListControl.AddColumn(new ListViewColumn
@@ -132,7 +143,8 @@ public partial class WadDownloadDialog : Window
             Key = "speed",
             Header = "Speed",
             Width = 100,
-            MinWidth = 80,
+            MinWidth = 10,
+            AutoSizeTextPath = "SpeedText",
             CellContentFactory = () => CreateStatusCell("SpeedText")
         });
         WadListControl.AddColumn(new ListViewColumn
@@ -140,7 +152,8 @@ public partial class WadDownloadDialog : Window
             Key = "threads",
             Header = "Threads",
             Width = 70,
-            MinWidth = 60,
+            MinWidth = 10,
+            AutoSizeTextPath = "ThreadsDisplay",
             CellContentFactory = () => CreateStatusCell(
                 "ThreadsDisplay",
                 horizontalAlignment:
@@ -151,7 +164,8 @@ public partial class WadDownloadDialog : Window
             Key = "source",
             Header = "Source",
             Width = 180,
-            MinWidth = 120,
+            MinWidth = 10,
+            AutoSizeTextPath = "SourceHost",
             CellContentFactory = () => CreateStatusCell(
                 "SourceHost",
                 TextTrimming.CharacterEllipsis)
@@ -208,9 +222,8 @@ public partial class WadDownloadDialog : Window
         text.Bind(
             TextBlock.TextProperty,
             new Avalonia.Data.Binding("ProgressText"));
-        text.Bind(
-            TextBlock.ForegroundProperty,
-            new Avalonia.Data.Binding("StatusColor"));
+        // Keep progress text on the theme's high-contrast foreground. Status
+        // colors (especially the downloading blue) blend into the filled bar.
 
         grid.Children.Add(progressBar);
         grid.Children.Add(text);

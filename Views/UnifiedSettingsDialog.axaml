@@ -390,7 +390,8 @@
                     <Grid RowDefinitions="Auto,Auto,*,40" Margin="5">
                         <TextBlock Grid.Row="0" Text="Domain Thread Settings" FontWeight="Bold" FontSize="14"/>
                         <TextBlock Grid.Row="1"
-                                   Text="Per-domain overrides. Threads = 0 uses automatic/global behavior; Seg KB = 0 uses Downloads → Min Segment KB. Positive Seg KB values override the global value for that domain. Click cells to edit."
+                                   Text="Thread Budget is shared by simultaneous downloads from a domain (0 = auto). Seg KB uses the global minimum at 0; a positive value overrides it. Adaptive reduces the budget after connection-limit failures. Click cells to edit."
+                                   TextWrapping="Wrap"
                                    Foreground="Gray" Margin="0,5,0,10"/>
                         
                         <controls:ResizableListView Grid.Row="2" x:Name="DomainListView" />

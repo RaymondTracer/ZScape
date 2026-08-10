@@ -115,12 +115,12 @@ public partial class UnifiedSettingsDialog : Window
             }
         });
 
-        // Threads (editable number)
+        // Shared per-domain thread budget (editable number)
         DomainListView.AddColumn(new ListViewColumn
         {
-            Header = "Threads",
-            Width = 55,
-            MinWidth = 40,
+            Header = "Thread Budget",
+            Width = 95,
+            MinWidth = 80,
             IsFixedWidth = true,
             CellContentFactory = () =>
             {
@@ -1208,7 +1208,7 @@ public partial class UnifiedSettingsDialog : Window
         var display = new DomainThreadDisplay();
         display.InitializeFromSettings(
             "example.com",
-            0,       // MaxThreads: 0 = use global default
+            0,       // MaxThreads: 0 = automatic domain budget
             0,       // MinSegmentSizeKb: 0 = use global default
             true,    // AdaptiveLearning
             _domainConfigs.Count  // Index
@@ -1350,7 +1350,7 @@ public partial class UnifiedSettingsDialog : Window
             set { _domain = value; OnPropertyChanged(nameof(Domain)); }
         }
         
-        /// <summary>Max threads per file. 0 = use global default.</summary>
+        /// <summary>Shared per-domain connection budget. 0 = automatic.</summary>
         public int MaxThreads
         {
             get => _maxThreads;

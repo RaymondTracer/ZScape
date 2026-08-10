@@ -307,7 +307,8 @@ public static class SettingsRegistry
         var domains = new SettingCategoryDef("Domain Threads");
         var domainSection = new SettingSectionDef("Per-Domain Settings");
         domainSection.Fields.Add(new(SettingFieldType.Spacer, "DomainThreadsTable",
-            "Domain Thread Settings", "Per-domain download thread limits. Managed via the table editor."));
+            "Domain Thread Settings",
+            "Each domain has a shared connection budget across simultaneous downloads. Seg KB 0 uses the global minimum segment size."));
         domains.Sections.Add(domainSection);
         cats.Add(domains);
 

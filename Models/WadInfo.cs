@@ -140,7 +140,11 @@ public class WadDownloadTask
         }
     }
     
-    public string SpeedText => BytesPerSecond > 0 ? $"{FormatUtils.FormatBytes((long)BytesPerSecond)}/s" : "";
+    public string SpeedText => BytesPerSecond > 0
+        ? $"{FormatUtils.FormatBytes((long)BytesPerSecond)}/s"
+        : Status == WadDownloadStatus.Downloading
+            ? "0 B/s"
+            : "";
     
     private static string FormatBytes(long bytes) => FormatUtils.FormatBytes(bytes);
 }

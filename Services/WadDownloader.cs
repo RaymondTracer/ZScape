@@ -4,7 +4,6 @@ using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
-using System.Threading.Channels;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 using ZScape.Models;
@@ -14,25 +13,40 @@ using static ZScape.Utilities.FormatUtils;
 namespace ZScape.Services;
 
 /// <summary>
-/// Downloads WAD files from various sources using multi-threaded downloading.
-/// Supports parallel URL searching with streaming downloads that start immediately.
+/// Downloads WAD files from multiple sources using range requests and a
+/// source-aware scheduler with global, per-domain, and per-file limits.
 /// </summary>
 public partial class WadDownloader : IDisposable
 {
     /// <summary>
-    /// /idgames Archive fullsort.gz index URL (used for file lookups since API is blocked).
+    /// /idgames Archive fullsort.gz mirrors, in preferred order.
+    /// The formerly used Quaddicted URL now returns 404.
     /// </summary>
-    private const string IdgamesIndexUrl = "https://www.quaddicted.com/files/idgames/fullsort.gz";
+    private static readonly string[] IdgamesIndexUrls =
+    [
+        "https://ftp.fu-berlin.de/pc/games/idgames/fullsort.gz",
+        "https://youfailit.net/pub/idgames/fullsort.gz",
+        "https://lethe.chinstrap.org/idgames/fullsort.gz",
+        "https://mirrors.lug.mtu.edu/idgames/fullsort.gz",
+        "https://ftpmirror.infania.net/pub/idgames/fullsort.gz",
+        "https://mirror.braindrainlan.nu/pub/idgames/fullsort.gz",
+        "https://files.xvertigox.com/idgames/fullsort.gz",
+        "https://www.gamers.org/pub/idgames/fullsort.gz",
+    ];
     
     /// <summary>
     /// /idgames Archive mirror base URLs for constructing download links.
     /// </summary>
     private static readonly string[] IdgamesMirrors =
     [
+        "https://ftp.fu-berlin.de/pc/games/idgames/",
         "https://youfailit.net/pub/idgames/",
-        "https://www.quaddicted.com/files/idgames/",
-        "https://ftpmirror1.infania.net/pub/idgames/",
-        "https://www.gamers.org/pub/idgames/",
+        "https://lethe.chinstrap.org/idgames/",
+        "https://mirrors.lug.mtu.edu/idgames/",
+        "https://planetzdoom.com/idgames/",
+        "https://ftpmirror.infania.net/pub/idgames/",
+        "https://mirror.braindrainlan.nu/pub/idgames/",
+        "https://files.xvertigox.com/idgames/",
     ];
     
     /// <summary>
@@ -50,6 +64,18 @@ public partial class WadDownloader : IDisposable
         "linkedin.com", "discord.com",
         "twitch.tv", "steam.com",
     ];
+
+    // DuckDuckGo Lite currently returns HTTP 403 for direct application
+    // requests. Use the HTML form endpoint instead of repeatedly querying two
+    // surfaces backed by the same provider.
+    private static readonly (string Name, string Url)[] WebSearchEndpoints =
+    [
+        ("DuckDuckGo HTML", "https://html.duckduckgo.com/html/"),
+    ];
+
+    private const int TargetWebSourceDomains = 2;
+    private const int MaxWebResultPagesPerWad = 8;
+    private const int WebSearchRequestIntervalMs = 750;
     
     /// <summary>
     /// Cached idgames index (filename -> (path, size) mapping).
@@ -67,15 +93,19 @@ public partial class WadDownloader : IDisposable
     // HttpClient is thread-safe and designed to be reused
     private static readonly Lazy<HttpClient> _sharedHttpClient = new(CreateHttpClient);
     private static readonly Lazy<HttpClient> _sharedWebClient = new(CreateWebClient);
+    private static readonly Lazy<HttpClient> _fallbackWebClient =
+        new(CreateIpv4FirstWebClient);
+    private static readonly SemaphoreSlim _webSearchRequestLock = new(1, 1);
+    private static long _lastWebSearchRequestTimestamp;
     
     private readonly DomainThreadConfig _domainConfig = DomainThreadConfig.Instance;
     private readonly List<string> _downloadSites;
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _domainSemaphores = new();
     private bool _disposed;
     
     // Property accessors for the shared HttpClient instances
     private static HttpClient HttpClient => _sharedHttpClient.Value;
     private static HttpClient WebClient => _sharedWebClient.Value;
+    private static HttpClient FallbackWebClient => _fallbackWebClient.Value;
     
     /// <summary>
     /// Whether to search the /idgames Archive. Default is true.
@@ -83,7 +113,7 @@ public partial class WadDownloader : IDisposable
     public bool IdgamesEnabled { get; set; } = true;
     
     /// <summary>
-    /// Whether to use web search (DuckDuckGo) as a last resort fallback. Default is true.
+    /// Whether to use web search as a last-resort fallback. Default is true.
     /// </summary>
     public bool WebSearchEnabled { get; set; } = true;
     
@@ -165,6 +195,74 @@ public partial class WadDownloader : IDisposable
             Timeout = TimeSpan.FromSeconds(AppConstants.Timeouts.WebRequestTimeoutSeconds)
         };
     }
+
+    /// <summary>
+    /// Some fallback web hosts advertise IPv6 even on networks where IPv6
+    /// routing is unavailable. Prefer IPv4 so a dead route does not consume the
+    /// entire request timeout, while retaining IPv6 fallback.
+    /// </summary>
+    private static HttpClient CreateIpv4FirstWebClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            MaxConnectionsPerServer = 4,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(
+                AppConstants.HttpPooling.WebPooledConnectionLifetimeMinutes),
+            ConnectTimeout = TimeSpan.FromSeconds(
+                AppConstants.Timeouts.HttpConnectTimeoutSeconds),
+            ConnectCallback = async (context, ct) =>
+            {
+                var addresses = await Dns.GetHostAddressesAsync(
+                    context.DnsEndPoint.Host,
+                    ct);
+                Exception? lastError = null;
+                foreach (var address in addresses.OrderBy(address =>
+                             address.AddressFamily
+                             == System.Net.Sockets.AddressFamily.InterNetwork
+                                 ? 0
+                                 : 1))
+                {
+                    var socket = new System.Net.Sockets.Socket(
+                        address.AddressFamily,
+                        System.Net.Sockets.SocketType.Stream,
+                        System.Net.Sockets.ProtocolType.Tcp);
+                    try
+                    {
+                        await socket.ConnectAsync(
+                            new IPEndPoint(
+                                address,
+                                context.DnsEndPoint.Port),
+                            ct);
+                        return new System.Net.Sockets.NetworkStream(
+                            socket,
+                            ownsSocket: true);
+                    }
+                    catch (OperationCanceledException)
+                        when (ct.IsCancellationRequested)
+                    {
+                        socket.Dispose();
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastError = ex;
+                        socket.Dispose();
+                    }
+                }
+
+                throw lastError
+                      ?? new HttpRequestException(
+                          $"No address resolved for "
+                          + context.DnsEndPoint.Host);
+            }
+        };
+
+        return new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(
+                AppConstants.Timeouts.WebRequestTimeoutSeconds)
+        };
+    }
     
     /// <summary>
     /// Gets the list of download sites.
@@ -178,12 +276,19 @@ public partial class WadDownloader : IDisposable
     private void LogError(string message) => Log(LogLevel.Error, message);
     private void LogSuccess(string message) => Log(LogLevel.Success, message);
 
+    // Failed is intentionally not terminal here. ExecuteDownloadAsync uses it
+    // transiently while the scheduler decides whether to retry or change
+    // source; discovery must remain able to add an alternate during that gap.
+    // Once a source is actively downloading, stop probing that file. The
+    // scheduler already owns the transfer and any later source would only be
+    // useful after this attempt fails and the task returns to a retry/search
+    // state.
     private static bool IsEligibleForSourceDiscovery(WadDownloadTask task) =>
-        task.Status is WadDownloadStatus.Pending
-            or WadDownloadStatus.Searching;
-
-    private static bool HasTasksNeedingSourceDiscovery(IEnumerable<WadDownloadTask> tasks) =>
-        tasks.Any(IsEligibleForSourceDiscovery);
+        task.Status is not (
+            WadDownloadStatus.Completed
+            or WadDownloadStatus.AlreadyExists
+            or WadDownloadStatus.Downloading
+            or WadDownloadStatus.Cancelled);
 
     private static int GetTotalSourcePhases(bool idgamesEnabled, bool webSearchEnabled, bool hasServerUrl, int siteCount)
     {
@@ -224,9 +329,10 @@ public partial class WadDownloader : IDisposable
         long size,
         string? downloadedFileName,
         string logMessage,
-        object urlLock)
+        SourceDiscoveryState discoveryState)
     {
-        lock (urlLock)
+        var sourceAdded = false;
+        lock (discoveryState.SyncRoot)
         {
             if (task.ExhaustedUrls.Contains(url) || string.Equals(task.SourceUrl, url, StringComparison.OrdinalIgnoreCase))
             {
@@ -239,13 +345,42 @@ public partial class WadDownloader : IDisposable
             }
 
             task.AlternateUrls.Add((url, size, downloadedFileName));
+            sourceAdded = true;
         }
 
+        if (sourceAdded)
+        {
+            discoveryState.NotifySourceChanged();
+        }
         LogVerbose(logMessage);
     }
 
-    private async Task QueueOrAddDiscoveredSourceAsync(
-        string taskKey,
+    private static int GetDiscoveredDomainCount(
+        WadDownloadTask task,
+        SourceDiscoveryState discoveryState)
+    {
+        lock (discoveryState.SyncRoot)
+        {
+            return task.AlternateUrls
+                .Select(alternate => alternate.Url)
+                .Prepend(task.SourceUrl)
+                .Where(url => Uri.TryCreate(
+                    url,
+                    UriKind.Absolute,
+                    out _))
+                .Select(url => new Uri(url!).Host)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+        }
+    }
+
+    private static bool NeedsWebSourceDiscovery(
+        WadDownloadTask task,
+        SourceDiscoveryState discoveryState) =>
+        IsEligibleForSourceDiscovery(task)
+        && GetDiscoveredDomainCount(task, discoveryState) < TargetWebSourceDomains;
+
+    private void RecordDiscoveredSource(
         WadDownloadTask task,
         string url,
         long size,
@@ -253,41 +388,56 @@ public partial class WadDownloader : IDisposable
         string successMessage,
         string alternateMessage,
         string? downloadedFileName,
-        ConcurrentDictionary<string, bool> queuedTasks,
-        object urlLock,
-        Func<WadDownloadTask, string, long, string, CancellationToken, Task> queueDownloadAsync,
-        CancellationToken ct)
+        SourceDiscoveryState discoveryState)
     {
         if (!IsEligibleForSourceDiscovery(task))
         {
             return;
         }
 
-        lock (urlLock)
+        var isFirstSource = false;
+        lock (discoveryState.SyncRoot)
         {
-            if (task.ExhaustedUrls.Contains(url))
+            if (task.ExhaustedUrls.Contains(url)
+                || string.Equals(
+                    task.SourceUrl,
+                    url,
+                    StringComparison.OrdinalIgnoreCase)
+                || task.AlternateUrls.Any(alternate =>
+                    alternate.Url.Equals(
+                        url,
+                        StringComparison.OrdinalIgnoreCase)))
             {
                 return;
             }
+
+            if (task.SourceUrl == null)
+            {
+                task.SourceUrl = url;
+                task.TotalBytes = size;
+                task.DownloadedFileName = downloadedFileName;
+                isFirstSource = true;
+            }
+            else
+            {
+                task.AlternateUrls.Add((url, size, downloadedFileName));
+            }
         }
 
-        var domain = new Uri(url).Host;
-        if (queuedTasks.TryAdd(taskKey, true))
+        discoveryState.NotifySourceChanged();
+
+        if (isFirstSource)
         {
-            task.SourceUrl = url;
-            task.TotalBytes = size;
             task.Status = WadDownloadStatus.Queued;
             task.StatusMessage = $"Queued ({queuedStatus})";
-            task.DownloadedFileName = downloadedFileName;
             task.SkipSourceRetry = false;
             ProgressUpdated?.Invoke(this, task);
-
             LogSuccess(successMessage);
-            await queueDownloadAsync(task, url, size, domain, ct);
-            return;
         }
-
-        AddAlternateSource(task, url, size, downloadedFileName, alternateMessage, urlLock);
+        else
+        {
+            LogVerbose(alternateMessage);
+        }
     }
 
     private static string? ExtractDownloadFileName(string urlOrPath)
@@ -375,7 +525,13 @@ public partial class WadDownloader : IDisposable
                 absoluteUrl = new Uri(baseUri, href).ToString();
             }
 
-            return Uri.TryCreate(absoluteUrl, UriKind.Absolute, out _);
+            if (!Uri.TryCreate(absoluteUrl, UriKind.Absolute, out _))
+            {
+                return false;
+            }
+
+            absoluteUrl = NormalizeKnownDownloadUrl(absoluteUrl);
+            return true;
         }
         catch
         {
@@ -383,16 +539,17 @@ public partial class WadDownloader : IDisposable
         }
     }
 
-    private static Dictionary<string, (WadDownloadTask Task, string TaskKey)> BuildPageSourceLookup(IEnumerable<WadDownloadTask> tasks)
+    private static Dictionary<string, WadDownloadTask> BuildPageSourceLookup(
+        IEnumerable<WadDownloadTask> tasks)
     {
-        var lookup = new Dictionary<string, (WadDownloadTask Task, string TaskKey)>(StringComparer.OrdinalIgnoreCase);
+        var lookup = new Dictionary<string, WadDownloadTask>(
+            StringComparer.OrdinalIgnoreCase);
 
         foreach (var task in tasks.Where(IsEligibleForSourceDiscovery))
         {
-            var taskKey = task.Wad.FileName.ToLowerInvariant();
             foreach (var variant in GetFilenameVariants(task.Wad.FileName))
             {
-                lookup.TryAdd(variant, (task, taskKey));
+                lookup.TryAdd(variant, task);
             }
         }
 
@@ -402,9 +559,7 @@ public partial class WadDownloader : IDisposable
     private async Task SearchPageForWadsAsync(
         string pageUrl,
         IEnumerable<WadDownloadTask> tasks,
-        ConcurrentDictionary<string, bool> queuedTasks,
-        object urlLock,
-        Func<WadDownloadTask, string, long, string, CancellationToken, Task> queueDownloadAsync,
+        SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
         var neededWads = BuildPageSourceLookup(tasks);
@@ -426,86 +581,23 @@ public partial class WadDownloader : IDisposable
         foreach (var (fileName, url) in allLinks)
         {
             if (!neededWads.TryGetValue(fileName, out var match)) continue;
-            if (!IsEligibleForSourceDiscovery(match.Task)) continue;
+            if (!IsEligibleForSourceDiscovery(match)) continue;
 
             var size = await GetFileSizeAsync(url, ct);
             if (size < 0) continue;
 
-            var foundAs = fileName.Equals(match.Task.Wad.FileName, StringComparison.OrdinalIgnoreCase)
+            var foundAs = fileName.Equals(match.Wad.FileName, StringComparison.OrdinalIgnoreCase)
                 ? string.Empty
                 : $" (as {fileName})";
-            await QueueOrAddDiscoveredSourceAsync(
-                match.TaskKey,
-                match.Task,
+            RecordDiscoveredSource(
+                match,
                 url,
                 size,
                 new Uri(url).Host,
-                $"Found {match.Task.Wad.FileName}{foundAs} at {url} ({FormatSizeOrUnknown(size)})",
-                $"Added alternate source for {match.Task.Wad.FileName}: {url}",
+                $"Found {match.Wad.FileName}{foundAs} at {url} ({FormatSizeOrUnknown(size)})",
+                $"Added alternate source for {match.Wad.FileName}: {url}",
                 fileName,
-                queuedTasks,
-                urlLock,
-                queueDownloadAsync,
-                ct);
-        }
-    }
-
-    private async Task ResumeSourceDiscoveryAsync(
-        WadDownloadTask task,
-        ConcurrentDictionary<string, bool> queuedTasks,
-        object urlLock,
-        Action<WadDownloadTask, string, long, string> enqueueDownload,
-        CancellationToken ct)
-    {
-        var taskKey = task.Wad.FileName.ToLowerInvariant();
-        queuedTasks.TryRemove(taskKey, out _);
-
-        lock (urlLock)
-        {
-            task.AlternateUrls.Clear();
-        }
-
-        task.TotalSitesToSearch = GetTotalSourcePhases(
-            IdgamesEnabled,
-            WebSearchEnabled,
-            !string.IsNullOrEmpty(task.Wad.ServerUrl),
-            _downloadSites.Count);
-        ResetTaskForSourceDiscovery(task);
-
-        Task QueueDownloadAsync(WadDownloadTask discoveredTask, string url, long size, string domain, CancellationToken _)
-        {
-            enqueueDownload(discoveredTask, url, size, domain);
-            return Task.CompletedTask;
-        }
-
-        if (!string.IsNullOrEmpty(task.Wad.ServerUrl) && IsEligibleForSourceDiscovery(task))
-        {
-            await SearchServerUrlAsync(task.Wad.ServerUrl!, [task], new ConcurrentDictionary<string, WadDownloadTask>(), queuedTasks, urlLock, QueueDownloadAsync, ct);
-        }
-
-        foreach (var site in _downloadSites)
-        {
-            if (ct.IsCancellationRequested || !IsEligibleForSourceDiscovery(task))
-            {
-                break;
-            }
-
-            await SearchSiteAsync(site, [task], new ConcurrentDictionary<string, WadDownloadTask>(), queuedTasks, urlLock, QueueDownloadAsync, ct);
-        }
-
-        if (IdgamesEnabled && !ct.IsCancellationRequested && IsEligibleForSourceDiscovery(task))
-        {
-            await SearchIdgamesAsync([task], new ConcurrentDictionary<string, WadDownloadTask>(), queuedTasks, urlLock, QueueDownloadAsync, ct);
-        }
-
-        if (WebSearchEnabled && !ct.IsCancellationRequested && IsEligibleForSourceDiscovery(task))
-        {
-            await SearchWebAsync([task], new ConcurrentDictionary<string, WadDownloadTask>(), queuedTasks, urlLock, QueueDownloadAsync, ct);
-        }
-
-        if (IsEligibleForSourceDiscovery(task) && !queuedTasks.ContainsKey(taskKey))
-        {
-            MarkTaskSourceDiscoveryFailed(task, "Not found", "WAD not found on any remaining download source");
+                discoveryState);
         }
     }
 
@@ -565,7 +657,9 @@ public partial class WadDownloader : IDisposable
     }
     
     /// <summary>
-    /// Downloads multiple WADs with streaming - starts downloads immediately as URLs are found.
+    /// Discovers sources and downloads concurrently. Each first usable source
+    /// wakes the scheduler immediately; discovery continues in the background
+    /// so later files and retry attempts can still use alternate domains.
     /// </summary>
     public async Task DownloadWadsAsync(
         IEnumerable<WadDownloadTask> tasks, 
@@ -575,232 +669,142 @@ public partial class WadDownloader : IDisposable
         var taskList = tasks.ToList();
         if (taskList.Count == 0) return;
 
-        var settings = SettingsService.Instance.Settings;
-        SemaphoreSlim? downloadLimitSemaphore = settings.MaxConcurrentDownloads > 0
-            ? new SemaphoreSlim(settings.MaxConcurrentDownloads, settings.MaxConcurrentDownloads)
-            : null;
-        SemaphoreSlim? domainLimitSemaphore = settings.MaxConcurrentDomains > 0
-            ? new SemaphoreSlim(settings.MaxConcurrentDomains, settings.MaxConcurrentDomains)
-            : null;
+        LogInfo($"Starting source discovery for {taskList.Count} WAD(s)");
+
+        var discoveryState = new SourceDiscoveryState();
+        var siteCount = _downloadSites.Count;
+
+        foreach (var task in taskList)
+        {
+            task.TotalSitesToSearch = GetTotalSourcePhases(
+                IdgamesEnabled,
+                WebSearchEnabled,
+                !string.IsNullOrEmpty(task.Wad.ServerUrl),
+                siteCount);
+            task.AlternateUrls.Clear();
+            task.ExhaustedUrls.Clear();
+            ResetTaskForSourceDiscovery(task);
+        }
+
+        using var discoveryCts =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var discoveryTask = DiscoverSourcesAsync(
+            taskList,
+            discoveryState,
+            discoveryCts.Token);
 
         try
         {
-            LogInfo($"Starting download of {taskList.Count} WAD(s)");
-
-            // Track tasks by filename (lowercase)
-            var tasksByName = new ConcurrentDictionary<string, WadDownloadTask>(
-                taskList.ToDictionary(t => t.Wad.FileName.ToLowerInvariant(), t => t));
-
-            // Track which tasks have been queued (first URL found and sent to channel)
-            var queuedTasks = new ConcurrentDictionary<string, bool>();
-
-            // Lock object for thread-safe alternate URL addition
-            var urlLock = new object();
-
-            // Channel for streaming ready-to-download tasks to domain workers
-            var downloadChannel = Channel.CreateUnbounded<(WadDownloadTask Task, string Url, long Size, string Domain)>();
-
-            // Calculate total sources to search per task
-            var siteCount = _downloadSites.Count;
-
-            // Set all tasks to searching
-            foreach (var task in taskList)
-            {
-                task.TotalSitesToSearch = GetTotalSourcePhases(
-                    IdgamesEnabled,
-                    WebSearchEnabled,
-                    !string.IsNullOrEmpty(task.Wad.ServerUrl),
-                    siteCount);
-                task.AlternateUrls.Clear();
-                task.ExhaustedUrls.Clear();
-                ResetTaskForSourceDiscovery(task);
-            }
-
-            // Track active domain workers
-            var domainWorkers = new ConcurrentDictionary<string, Task>();
-            var domainQueues = new ConcurrentDictionary<string, ConcurrentQueue<(WadDownloadTask Task, string Url, long Size)>>();
-            var searchComplete = false;
-
-            void EnqueueDownload(WadDownloadTask task, string url, long size, string domain)
-            {
-                var queue = domainQueues.GetOrAdd(domain, _ => new ConcurrentQueue<(WadDownloadTask, string, long)>());
-                queue.Enqueue((task, url, size));
-
-                _ = domainWorkers.GetOrAdd(domain, domainName =>
-                {
-                    LogVerbose($"Started worker for domain: {domainName}");
-                    return Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await DomainWorkerAsync(
-                                domainName,
-                                domainQueues[domainName],
-                                downloadPath,
-                                () => searchComplete,
-                                EnqueueDownload,
-                                queuedTasks,
-                                urlLock,
-                                downloadLimitSemaphore,
-                                domainLimitSemaphore,
-                                cancellationToken);
-                        }
-                        finally
-                        {
-                            domainWorkers.TryRemove(domainName, out _);
-                        }
-                    }, cancellationToken);
-                });
-            }
-
-            // Start domain worker manager (processes items from channel)
-            var workerManagerTask = Task.Run(async () =>
-            {
-                try
-                {
-                    await foreach (var (task, url, size, domain) in downloadChannel.Reader.ReadAllAsync(cancellationToken))
-                    {
-                        EnqueueDownload(task, url, size, domain);
-                    }
-                }
-                catch (OperationCanceledException) { }
-            }, cancellationToken);
-
-            // Group by server URL for efficient batch parsing
-            var serverGroups = taskList
-                .Where(t => !string.IsNullOrEmpty(t.Wad.ServerUrl))
-                .GroupBy(t => t.Wad.ServerUrl!)
-                .ToList();
-
-            // Start URL discovery in ordered sequence:
-            // 1. Server URLs (in parallel per server, but before download sites)
-            // 2. Download sites (sequentially, top to bottom)
-            // 3. idgames Archive
-            // 4. Web search (DuckDuckGo) fallback
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    // Phase 1: Search server URLs (in parallel per server)
-                    if (serverGroups.Count > 0)
-                    {
-                        var serverTasks = serverGroups.Select(serverGroup =>
-                            Task.Run(async () =>
-                            {
-                                var serverUrl = serverGroup.Key;
-                                var serverTasks = serverGroup.ToList();
-                                await SearchServerUrlAsync(
-                                    serverUrl,
-                                    serverTasks,
-                                    tasksByName,
-                                    queuedTasks,
-                                    urlLock,
-                                    async (task, url, size, domain, token) => await downloadChannel.Writer.WriteAsync((task, url, size, domain), token),
-                                    cancellationToken);
-                            }, cancellationToken));
-
-                        await Task.WhenAll(serverTasks);
-                    }
-
-                    // Phase 2: Search download sites (sequentially, in order)
-                    foreach (var site in _downloadSites)
-                    {
-                        if (cancellationToken.IsCancellationRequested || !HasTasksNeedingSourceDiscovery(taskList)) break;
-                        await SearchSiteAsync(
-                            site,
-                            taskList,
-                            tasksByName,
-                            queuedTasks,
-                            urlLock,
-                            async (task, url, size, domain, token) => await downloadChannel.Writer.WriteAsync((task, url, size, domain), token),
-                            cancellationToken);
-                    }
-
-                    // Phase 3: Search /idgames Archive
-                    if (IdgamesEnabled && !cancellationToken.IsCancellationRequested && HasTasksNeedingSourceDiscovery(taskList))
-                    {
-                        await SearchIdgamesAsync(
-                            taskList,
-                            tasksByName,
-                            queuedTasks,
-                            urlLock,
-                            async (task, url, size, domain, token) => await downloadChannel.Writer.WriteAsync((task, url, size, domain), token),
-                            cancellationToken);
-                    }
-
-                    // Phase 4: Web search fallback (DuckDuckGo)
-                    if (WebSearchEnabled && !cancellationToken.IsCancellationRequested && HasTasksNeedingSourceDiscovery(taskList))
-                    {
-                        await SearchWebAsync(
-                            taskList,
-                            tasksByName,
-                            queuedTasks,
-                            urlLock,
-                            async (task, url, size, domain, token) => await downloadChannel.Writer.WriteAsync((task, url, size, domain), token),
-                            cancellationToken);
-                    }
-                }
-                catch (OperationCanceledException) { }
-                finally
-                {
-                    // Mark search as complete and close channel
-                    searchComplete = true;
-                    downloadChannel.Writer.Complete();
-
-                    // Mark any unfound WADs as failed
-                    foreach (var (fileName, task) in tasksByName)
-                    {
-                        if (!queuedTasks.ContainsKey(fileName) && IsEligibleForSourceDiscovery(task))
-                        {
-                            MarkTaskSourceDiscoveryFailed(task, "Not found", "WAD not found on any download source");
-                        }
-                    }
-                }
-            }, cancellationToken);
-
-            // Wait for worker manager to finish processing channel
-            try
-            {
-                await workerManagerTask;
-            }
-            catch (OperationCanceledException) { }
-
-            // Wait for all domain workers to complete, including any started for alternate domains.
-            while (domainWorkers.Count > 0)
-            {
-                await Task.WhenAll(domainWorkers.Values.ToArray());
-            }
-
-            // Summary
-            var completed = taskList.Count(t => t.Status == WadDownloadStatus.Completed);
-            var failed = taskList.Count(t => t.Status == WadDownloadStatus.Failed);
-            LogInfo($"Download complete: {completed} succeeded, {failed} failed");
+            await RunSourceAwareDownloadsAsync(
+                taskList,
+                downloadPath,
+                discoveryState,
+                cancellationToken);
         }
         finally
         {
-            downloadLimitSemaphore?.Dispose();
-            domainLimitSemaphore?.Dispose();
+            // Once every file is resolved, further alternate-source searching
+            // has no value. Stop it and observe the task before returning.
+            discoveryCts.Cancel();
+            await discoveryTask;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            LogWarning("WAD download cancelled");
+            return;
+        }
+
+        var completed = taskList.Count(task =>
+            task.Status is WadDownloadStatus.Completed or WadDownloadStatus.AlreadyExists);
+        var failed = taskList.Count(task => task.Status == WadDownloadStatus.Failed);
+        LogInfo($"Download complete: {completed} succeeded, {failed} failed");
+    }
+
+    private async Task DiscoverSourcesAsync(
+        List<WadDownloadTask> tasks,
+        SourceDiscoveryState discoveryState,
+        CancellationToken ct)
+    {
+        try
+        {
+            var serverGroups = tasks
+                .Where(task => !string.IsNullOrEmpty(task.Wad.ServerUrl))
+                .GroupBy(task => task.Wad.ServerUrl!)
+                .ToList();
+
+            if (serverGroups.Count > 0)
+            {
+                await Task.WhenAll(serverGroups.Select(group =>
+                    SearchServerUrlAsync(
+                        group.Key,
+                        group.ToList(),
+                        discoveryState,
+                        ct)));
+            }
+
+            foreach (var site in _downloadSites)
+            {
+                ct.ThrowIfCancellationRequested();
+                await SearchSiteAsync(
+                    site,
+                    tasks,
+                    discoveryState,
+                    ct);
+            }
+
+            if (IdgamesEnabled)
+            {
+                ct.ThrowIfCancellationRequested();
+                await SearchIdgamesAsync(
+                    tasks,
+                    discoveryState,
+                    ct);
+            }
+
+            if (WebSearchEnabled)
+            {
+                ct.ThrowIfCancellationRequested();
+                await SearchWebAsync(
+                    tasks,
+                    discoveryState,
+                    ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Expected when the user cancels or all downloads finish before
+            // every optional alternate-source phase has completed.
+        }
+        catch (Exception ex)
+        {
+            LogError($"Source discovery stopped unexpectedly: {ex.Message}");
+        }
+        finally
+        {
+            discoveryState.MarkComplete();
         }
     }
     
     /// <summary>
-    /// Searches a server URL for all needed WADs and streams found URLs to channel.
-    /// First URL queues the task, subsequent URLs are stored as alternates for retry.
+    /// Searches a server URL for all needed WADs and records every matching
+    /// source in each task's candidate pool.
     /// </summary>
     private async Task SearchServerUrlAsync(
         string serverUrl,
         List<WadDownloadTask> tasks,
-        ConcurrentDictionary<string, WadDownloadTask> tasksByName,
-        ConcurrentDictionary<string, bool> queuedTasks,
-        object urlLock,
-        Func<WadDownloadTask, string, long, string, CancellationToken, Task> queueDownloadAsync,
+        SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
         try
         {
             LogInfo($"Checking server URL: {serverUrl}");
 
-            await SearchPageForWadsAsync(serverUrl, tasks, queuedTasks, urlLock, queueDownloadAsync, ct);
+            await SearchPageForWadsAsync(
+                serverUrl,
+                tasks,
+                discoveryState,
+                ct);
         }
         catch (Exception ex)
         {
@@ -822,16 +826,13 @@ public partial class WadDownloader : IDisposable
     }
     
     /// <summary>
-    /// Searches a download site for all needed WADs and streams found URLs to channel.
-    /// First URL queues the task, subsequent URLs are stored as alternates for retry.
+    /// Searches a download site for all needed WADs and records every matching
+    /// source in each task's candidate pool.
     /// </summary>
     private async Task SearchSiteAsync(
         string site,
         List<WadDownloadTask> tasks,
-        ConcurrentDictionary<string, WadDownloadTask> tasksByName,
-        ConcurrentDictionary<string, bool> queuedTasks,
-        object urlLock,
-        Func<WadDownloadTask, string, long, string, CancellationToken, Task> queueDownloadAsync,
+        SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
         try
@@ -848,21 +849,26 @@ public partial class WadDownloader : IDisposable
                 
                 var checkTasks = tasksToCheck.Select(async task =>
                 {
-                    var lowerName = task.Wad.FileName.ToLowerInvariant();
-                    
                     // Build list of filenames to try
                     var filenamesToTry = GetFilenameVariants(task.Wad.FileName);
                     
                     foreach (var filename in filenamesToTry)
                     {
+                        // A source may have been found while this site's
+                        // filename variants were being prepared. Avoid issuing
+                        // more HEAD/GET probes once the scheduler starts it.
+                        if (!IsEligibleForSourceDiscovery(task))
+                        {
+                            break;
+                        }
+
                         var url = site.Replace("%WadName%", Uri.EscapeDataString(filename), StringComparison.OrdinalIgnoreCase);
                         var size = await GetFileSizeAsync(url, ct);
                         
                         if (size < 0) continue;
 
                         var foundAs = filename != task.Wad.FileName ? $" (as {filename})" : string.Empty;
-                        await QueueOrAddDiscoveredSourceAsync(
-                            lowerName,
+                        RecordDiscoveredSource(
                             task,
                             url,
                             size,
@@ -870,10 +876,7 @@ public partial class WadDownloader : IDisposable
                             $"Found {task.Wad.FileName}{foundAs} at {url} ({FormatSizeOrUnknown(size)})",
                             $"Added alternate source for {task.Wad.FileName}: {url}",
                             filename,
-                            queuedTasks,
-                            urlLock,
-                            queueDownloadAsync,
-                            ct);
+                            discoveryState);
                         break;
                     }
                 });
@@ -884,7 +887,11 @@ public partial class WadDownloader : IDisposable
             {
                 // Parse page for all WAD links
                 LogVerbose($"Parsing site page: {site}");
-                await SearchPageForWadsAsync(site, tasks, queuedTasks, urlLock, queueDownloadAsync, ct);
+                await SearchPageForWadsAsync(
+                    site,
+                    tasks,
+                    discoveryState,
+                    ct);
             }
         }
         catch (OperationCanceledException) { }
@@ -913,10 +920,7 @@ public partial class WadDownloader : IDisposable
     /// </summary>
     private async Task SearchIdgamesAsync(
         List<WadDownloadTask> tasks,
-        ConcurrentDictionary<string, WadDownloadTask> tasksByName,
-        ConcurrentDictionary<string, bool> queuedTasks,
-        object urlLock,
-        Func<WadDownloadTask, string, long, string, CancellationToken, Task> queueDownloadAsync,
+        SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
         LogInfo("Searching /idgames Archive...");
@@ -937,8 +941,6 @@ public partial class WadDownloader : IDisposable
             {
                 if (ct.IsCancellationRequested) break;
                 if (!IsEligibleForSourceDiscovery(task)) continue;
-                
-                var lowerName = task.Wad.FileName.ToLowerInvariant();
                 
                 try
                 {
@@ -991,8 +993,7 @@ public partial class WadDownloader : IDisposable
                     var domain = new Uri(workingUrl).Host;
 
                     var downloadedFileName = Path.GetFileName(filePath);
-                    await QueueOrAddDiscoveredSourceAsync(
-                        lowerName,
+                    RecordDiscoveredSource(
                         task,
                         workingUrl,
                         actualSize,
@@ -1000,15 +1001,12 @@ public partial class WadDownloader : IDisposable
                         $"Found {task.Wad.FileName} on /idgames at {workingUrl} ({FormatBytes(actualSize)})",
                         $"Added /idgames alternate for {task.Wad.FileName}: {workingUrl}",
                         downloadedFileName,
-                        queuedTasks,
-                        urlLock,
-                        queueDownloadAsync,
-                        ct);
+                        discoveryState);
                     
                     // Add remaining mirrors as alternates
                     foreach (var altUrl in downloadUrls.Where(u => u != workingUrl))
                     {
-                        AddAlternateSource(task, altUrl, actualSize, downloadedFileName, $"Added /idgames alternate for {task.Wad.FileName}: {altUrl}", urlLock);
+                        AddAlternateSource(task, altUrl, actualSize, downloadedFileName, $"Added /idgames alternate for {task.Wad.FileName}: {altUrl}", discoveryState);
                     }
                 }
                 catch (Exception ex)
@@ -1053,64 +1051,126 @@ public partial class WadDownloader : IDisposable
                 return _idgamesIndex;
             }
             
-            LogVerbose("/idgames: downloading index...");
-            
-            using var request = new HttpRequestMessage(HttpMethod.Get, IdgamesIndexUrl);
-            request.Headers.TryAddWithoutValidation("User-Agent", AppConstants.AppInfo.WadDownloaderUserAgent);
-            LogUrlAttempt("/idgames index download", request.Method, IdgamesIndexUrl);
-            
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(AppConstants.Timeouts.WebRequestTimeoutSeconds));
-            
-            var response = await WebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-            if (!response.IsSuccessStatusCode)
+            LogVerbose("/idgames: downloading index from official mirrors...");
+
+            foreach (var indexUrl in IdgamesIndexUrls)
             {
-                LogUrlFailure("/idgames index download", request.Method, IdgamesIndexUrl, response.StatusCode);
-                return null;
+                ct.ThrowIfCancellationRequested();
+
+                try
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, indexUrl);
+                    request.Headers.TryAddWithoutValidation(
+                        "User-Agent",
+                        AppConstants.AppInfo.WadDownloaderUserAgent);
+                    LogUrlAttempt(
+                        "/idgames index download",
+                        request.Method,
+                        indexUrl);
+
+                    using var requestCts =
+                        CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    requestCts.CancelAfter(TimeSpan.FromSeconds(
+                        AppConstants.Timeouts.WebRequestTimeoutSeconds));
+
+                    using var response = await WebClient.SendAsync(
+                        request,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        requestCts.Token);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        LogUrlFailure(
+                            "/idgames index download",
+                            request.Method,
+                            indexUrl,
+                            response.StatusCode);
+                        continue;
+                    }
+
+                    await using var compressedStream =
+                        await response.Content.ReadAsStreamAsync(requestCts.Token);
+                    await using var gzipStream =
+                        new GZipStream(compressedStream, CompressionMode.Decompress);
+                    using var reader = new StreamReader(gzipStream);
+
+                    var index =
+                        new Dictionary<string, (string Path, long Size)>(
+                            StringComparer.OrdinalIgnoreCase);
+                    var linePattern = IdgamesIndexLineRegex();
+                    while (await reader.ReadLineAsync(requestCts.Token) is { } line)
+                    {
+                        if (string.IsNullOrWhiteSpace(line))
+                        {
+                            continue;
+                        }
+
+                        var match = linePattern.Match(line);
+                        if (!match.Success)
+                        {
+                            continue;
+                        }
+
+                        var size = long.TryParse(
+                            match.Groups[1].Value,
+                            out var parsedSize)
+                            ? parsedSize
+                            : 0;
+                        var filePath = match.Groups[2].Value.Trim();
+                        var fileName = Path.GetFileName(filePath);
+                        if (string.IsNullOrEmpty(fileName)
+                            || !fileName.EndsWith(
+                                ".zip",
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        // fullsort is newest-first and often repeats the same
+                        // upload under newstuff/incoming and its permanent
+                        // archive path. Keep the newest basename match, but
+                        // prefer the permanent path for an identical payload.
+                        if (!index.TryGetValue(fileName, out var existing))
+                        {
+                            index[fileName] = (filePath, size);
+                        }
+                        else if (existing.Size == size
+                                 && IsTransientIdgamesPath(existing.Path)
+                                 && !IsTransientIdgamesPath(filePath))
+                        {
+                            index[fileName] = (filePath, size);
+                        }
+                    }
+
+                    if (index.Count == 0)
+                    {
+                        LogWarning(
+                            $"/idgames index at {indexUrl} contained no usable entries");
+                        continue;
+                    }
+
+                    _idgamesIndex = index;
+                    _idgamesIndexExpiry = DateTime.UtcNow.AddHours(24);
+                    LogSuccess(
+                        $"/idgames: indexed {index.Count} files from "
+                        + new Uri(indexUrl).Host);
+                    return index;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    LogUrlFailure(
+                        "/idgames index download",
+                        HttpMethod.Get,
+                        indexUrl,
+                        ex,
+                        ct);
+                }
             }
-            
-            // Download and decompress
-            await using var compressedStream = await response.Content.ReadAsStreamAsync(cts.Token);
-            await using var gzipStream = new GZipStream(compressedStream, CompressionMode.Decompress);
-            using var reader = new StreamReader(gzipStream);
-            
-            var index = new Dictionary<string, (string Path, long Size)>(StringComparer.OrdinalIgnoreCase);
-            string? line;
-            
-            // fullsort.gz format: "YYYY/MM/DD  SIZE  path/to/file.zip"
-            // Example: "2025/07/13  652517  music/avmidi.zip"
-            var linePattern = IdgamesIndexLineRegex();
-            
-            while ((line = await reader.ReadLineAsync(cts.Token)) != null)
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                
-                var match = linePattern.Match(line);
-                if (!match.Success) continue;
-                
-                var size = long.TryParse(match.Groups[1].Value, out var s) ? s : 0;
-                var filePath = match.Groups[2].Value.Trim();
-                
-                // Extract filename from path
-                var fileName = Path.GetFileName(filePath);
-                if (string.IsNullOrEmpty(fileName)) continue;
-                
-                // Only index .zip files (WADs are stored as .zip in idgames)
-                if (!fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
-                
-                // Store: filename -> (full path, size) - may have duplicates, last wins
-                index[fileName] = (filePath, size);
-            }
-            
-            _idgamesIndex = index;
-            _idgamesIndexExpiry = DateTime.UtcNow.AddHours(24);
-            
-            LogVerbose($"/idgames: indexed {index.Count} files");
-            return index;
-        }
-        catch (Exception ex)
-        {
-            LogUrlFailure("/idgames index download", HttpMethod.Get, IdgamesIndexUrl, ex, ct);
+
+            LogWarning("/idgames: every index mirror failed");
             return null;
         }
         finally
@@ -1121,96 +1181,141 @@ public partial class WadDownloader : IDisposable
     
     [GeneratedRegex(@"^\d{4}/\d{2}/\d{2}\s+(\d+)\s+(.+)$")]
     private static partial Regex IdgamesIndexLineRegex();
+
+    private static bool IsTransientIdgamesPath(string path) =>
+        path.StartsWith("incoming/", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("newstuff/", StringComparison.OrdinalIgnoreCase);
     
     /// <summary>
-    /// Searches the web using DuckDuckGo as a last resort fallback.
-    /// Crawls result pages to find download links.
+    /// Searches the web as a last-resort fallback. Uses both maintained
+    /// DuckDuckGo HTML surfaces with several filename-aware query forms, then
+    /// crawls a bounded, de-duplicated set of result pages.
     /// </summary>
     private async Task SearchWebAsync(
         List<WadDownloadTask> tasks,
-        ConcurrentDictionary<string, WadDownloadTask> tasksByName,
-        ConcurrentDictionary<string, bool> queuedTasks,
-        object urlLock,
-        Func<WadDownloadTask, string, long, string, CancellationToken, Task> queueDownloadAsync,
+        SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
         try
         {
-            var sourceDiscoveryTasks = tasks.Where(IsEligibleForSourceDiscovery).ToList();
+            var sourceDiscoveryTasks = tasks
+                .Where(task => NeedsWebSourceDiscovery(task, discoveryState))
+                .ToList();
             if (sourceDiscoveryTasks.Count == 0)
             {
-                LogVerbose("Web search: no WADs need additional source discovery, skipping");
+                LogVerbose(
+                    "Web search: every WAD already has sources on at least "
+                    + $"{TargetWebSourceDomains} domains, skipping");
                 return;
             }
             
-            LogInfo($"Web search: looking for sources for {sourceDiscoveryTasks.Count} WAD(s)...");
+            LogInfo(
+                $"Web search: looking for extra sources for "
+                + $"{sourceDiscoveryTasks.Count} WAD(s)...");
+
+            var unavailableProviders = new HashSet<string>(
+                StringComparer.OrdinalIgnoreCase);
             
             foreach (var task in sourceDiscoveryTasks)
             {
                 if (ct.IsCancellationRequested) break;
-                if (!IsEligibleForSourceDiscovery(task)) continue;
-                
-                var lowerName = task.Wad.FileName.ToLowerInvariant();
+                if (!NeedsWebSourceDiscovery(task, discoveryState)) continue;
                 
                 try
                 {
-                    var baseName = Path.GetFileNameWithoutExtension(task.Wad.FileName).ToLowerInvariant();
-                    var searchQuery = $"\"{baseName}\" download doom";
-                    var encodedQuery = Uri.EscapeDataString(searchQuery);
-                    
-                    // Use DuckDuckGo HTML search
-                    var searchUrl = $"https://html.duckduckgo.com/html?q={encodedQuery}";
-                    LogVerbose($"Web search: {searchQuery}");
-                    
-                    using var request = new HttpRequestMessage(HttpMethod.Get, searchUrl);
-                    request.Headers.TryAddWithoutValidation("User-Agent", AppConstants.AppInfo.WadDownloaderUserAgent);
-                    request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-                    request.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.5");
-                    LogUrlAttempt("Web search request", request.Method, searchUrl);
-                    
-                    var response = await WebClient.SendAsync(request, ct);
-                    if (!response.IsSuccessStatusCode)
+                    await SearchWadArchiveAsync(task, discoveryState, ct);
+                    if (!NeedsWebSourceDiscovery(task, discoveryState))
                     {
-                        LogUrlFailure("Web search request", request.Method, searchUrl, response.StatusCode);
                         continue;
                     }
-                    
-                    var html = await response.Content.ReadAsStringAsync(ct);
-                    
-                    // Extract result page URLs from search results
-                    var resultPageUrls = ExtractSearchResultPageUrls(html);
-                    
+
+                    var resultPageUrls = new HashSet<string>(
+                        StringComparer.OrdinalIgnoreCase);
+                    foreach (var searchQuery in BuildWebSearchQueries(
+                                 task.Wad.FileName))
+                    {
+                        if (ct.IsCancellationRequested
+                            || unavailableProviders.Count
+                                == WebSearchEndpoints.Length
+                            || resultPageUrls.Count >= MaxWebResultPagesPerWad)
+                        {
+                            break;
+                        }
+
+                        LogVerbose($"Web search: {searchQuery}");
+                        foreach (var endpoint in WebSearchEndpoints)
+                        {
+                            if (unavailableProviders.Contains(endpoint.Name))
+                            {
+                                continue;
+                            }
+
+                            var result = await FetchSearchResultPagesAsync(
+                                endpoint.Name,
+                                endpoint.Url,
+                                searchQuery,
+                                ct);
+                            if (result.ProviderUnavailable)
+                            {
+                                unavailableProviders.Add(endpoint.Name);
+                                LogWarning(
+                                    $"{endpoint.Name} is unavailable; skipping "
+                                    + "it for the rest of this download");
+                                continue;
+                            }
+
+                            foreach (var page in result.Pages)
+                            {
+                                resultPageUrls.Add(page);
+                                if (resultPageUrls.Count
+                                    >= MaxWebResultPagesPerWad)
+                                {
+                                    break;
+                                }
+                            }
+
+                            if (result.Pages.Count > 0)
+                            {
+                                break;
+                            }
+                        }
+                    }
+
                     if (resultPageUrls.Count == 0)
                     {
                         LogVerbose($"Web search: no result pages found for {task.Wad.FileName}");
                         continue;
                     }
                     
-                    LogVerbose($"Web search: crawling {resultPageUrls.Count} result pages for {task.Wad.FileName}");
+                    LogVerbose(
+                        $"Web search: crawling {resultPageUrls.Count} result pages "
+                        + $"for {task.Wad.FileName}");
                     
-                    // Crawl each result page to find download links
-                    foreach (var pageUrl in resultPageUrls.Take(5)) // Limit to first 5 pages
+                    foreach (var pageUrl in resultPageUrls)
                     {
                         if (ct.IsCancellationRequested) break;
-                        if (!IsEligibleForSourceDiscovery(task)) break;
+                        if (!NeedsWebSourceDiscovery(task, discoveryState)) break;
                         
                         try
                         {
                             LogVerbose($"Web search crawl target: {pageUrl}");
-                            var downloadUrls = await CrawlPageForWadDownloads(pageUrl, task.Wad.FileName, ct);
+                            var downloadUrls =
+                                await CrawlPageForWadDownloads(
+                                    pageUrl,
+                                    task.Wad.FileName,
+                                    ct);
                             
                             foreach (var url in downloadUrls)
                             {
                                 if (ct.IsCancellationRequested) break;
-                                if (!IsEligibleForSourceDiscovery(task)) break;
+                                if (!NeedsWebSourceDiscovery(task, discoveryState)) break;
                                 
                                 try
                                 {
                                     var size = await GetFileSizeAsync(url, ct);
                                     if (size < 0) continue;
 
-                                    await QueueOrAddDiscoveredSourceAsync(
-                                        lowerName,
+                                    RecordDiscoveredSource(
                                         task,
                                         url,
                                         size,
@@ -1218,12 +1323,14 @@ public partial class WadDownloader : IDisposable
                                         $"Found {task.Wad.FileName} via web search at {url} ({FormatSizeOrUnknown(size)})",
                                         $"Added web search alternate for {task.Wad.FileName}: {url}",
                                         Path.GetFileName(new Uri(url).LocalPath),
-                                        queuedTasks,
-                                        urlLock,
-                                        queueDownloadAsync,
-                                        ct);
+                                        discoveryState);
                                 }
-                                catch { }
+                                catch (Exception ex)
+                                {
+                                    LogVerbose(
+                                        $"Web search candidate rejected ({url}): "
+                                        + ex.Message);
+                                }
                             }
                         }
                         catch (Exception ex)
@@ -1257,65 +1364,422 @@ public partial class WadDownloader : IDisposable
             }
         }
     }
-    
+
     /// <summary>
-    /// Extracts result page URLs from DuckDuckGo HTML search results.
+    /// Searches the server-rendered WAD Archive index, then resolves its result
+    /// page to the actual compressed file hosted by Internet Archive.
     /// </summary>
-    private List<string> ExtractSearchResultPageUrls(string html)
+    private async Task SearchWadArchiveAsync(
+        WadDownloadTask task,
+        SourceDiscoveryState discoveryState,
+        CancellationToken ct)
     {
-        var urls = new List<string>();
-        
-        try
+        var searchUrl = "https://www.wad-archive.com/search?q="
+                        + Uri.EscapeDataString(task.Wad.FileName);
+        var searchHtml = await FetchTextPageAsync(
+            "WAD Archive search",
+            searchUrl,
+            ct);
+        if (searchHtml == null)
         {
-            // DuckDuckGo HTML results encode actual URLs in the uddg parameter
-            // Format: /l/?uddg=https%3A%2F%2Fexample.com%2Fpage&...
-            var uddgPattern = UddgUrlRegex();
-            var uddgMatches = uddgPattern.Matches(html);
-            
-            foreach (Match match in uddgMatches)
+            return;
+        }
+
+        var resultPages = WadArchiveResultRegex()
+            .Matches(searchHtml)
+            .Select(match => match.Groups[1].Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(relative =>
+                new Uri(new Uri("https://www.wad-archive.com"), relative)
+                    .ToString())
+            .ToList();
+        LogVerbose(
+            $"WAD Archive: {resultPages.Count} candidate page(s) for "
+            + task.Wad.FileName);
+
+        foreach (var resultPageUrl in resultPages)
+        {
+            if (ct.IsCancellationRequested
+                || !NeedsWebSourceDiscovery(task, discoveryState))
             {
-                var encodedUrl = match.Groups[1].Value;
-                var decodedUrl = Uri.UnescapeDataString(encodedUrl);
-                
-                // Validate it's a proper URL
-                if (Uri.TryCreate(decodedUrl, UriKind.Absolute, out var uri))
-                {
-                    // Skip excluded hosts (search engines, social media, etc.)
-                    var host = uri.Host.ToLowerInvariant();
-                    if (ExcludedSearchHosts.Any(excluded => host.Contains(excluded))) continue;
-                    
-                    if (!urls.Contains(decodedUrl))
-                    {
-                        urls.Add(decodedUrl);
-                    }
-                }
+                break;
             }
-            
-            // Also try extracting from result__url class (backup method)
-            var resultUrlPattern = ResultUrlRegex();
-            var resultMatches = resultUrlPattern.Matches(html);
-            
-            foreach (Match match in resultMatches)
+
+            var resultHtml = await FetchTextPageAsync(
+                "WAD Archive result",
+                resultPageUrl,
+                ct);
+            if (resultHtml == null
+                || !resultHtml.Contains(
+                    task.Wad.FileName,
+                    StringComparison.OrdinalIgnoreCase))
             {
-                var href = WebUtility.HtmlDecode(match.Groups[1].Value);
-                if (href.StartsWith("//"))
-                    href = "https:" + href;
-                    
-                if (Uri.TryCreate(href, UriKind.Absolute, out var uri))
+                continue;
+            }
+
+            var resultBaseUri = new Uri(resultPageUrl);
+            var downloadPageUrls = WadArchiveDownloadPageRegex()
+                .Matches(resultHtml)
+                .Select(match =>
+                    WebUtility.HtmlDecode(match.Groups[1].Value))
+                .Where(url =>
+                    string.Equals(
+                        ExtractDownloadFileName(url),
+                        task.Wad.FileName,
+                        StringComparison.OrdinalIgnoreCase))
+                .Where(url =>
+                    TryBuildAbsoluteUrl(resultBaseUri, url, out _))
+                .Select(url =>
                 {
-                    var host = uri.Host.ToLowerInvariant();
-                    if (ExcludedSearchHosts.Any(excluded => host.Contains(excluded))) continue;
-                    
-                    if (!urls.Contains(href))
+                    TryBuildAbsoluteUrl(resultBaseUri, url, out var absolute);
+                    return absolute;
+                })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(3);
+
+            foreach (var downloadPageUrl in downloadPageUrls)
+            {
+                var downloadPageHtml = await FetchTextPageAsync(
+                    "WAD Archive download resolution",
+                    downloadPageUrl,
+                    ct);
+                if (downloadPageHtml == null)
+                {
+                    continue;
+                }
+
+                foreach (Match archiveMatch in
+                         WadArchiveFileUrlRegex().Matches(downloadPageHtml))
+                {
+                    var archiveUrl = WebUtility.HtmlDecode(
+                        archiveMatch.Value);
+                    var size = await GetFileSizeAsync(archiveUrl, ct);
+                    if (size < 0)
                     {
-                        urls.Add(href);
+                        continue;
                     }
+
+                    RecordDiscoveredSource(
+                        task,
+                        archiveUrl,
+                        size,
+                        "WAD Archive - archive.org",
+                        $"Found {task.Wad.FileName} in WAD Archive at "
+                        + $"{archiveUrl} ({FormatSizeOrUnknown(size)})",
+                        $"Added WAD Archive alternate for "
+                        + $"{task.Wad.FileName}: {archiveUrl}",
+                        task.Wad.FileName + ".gz",
+                        discoveryState);
+                    return;
                 }
             }
         }
-        catch { }
-        
-        return urls;
+    }
+
+    private async Task<string?> FetchTextPageAsync(
+        string operation,
+        string url,
+        CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation(
+                "User-Agent",
+                AppConstants.AppInfo.WadDownloaderUserAgent);
+            request.Headers.TryAddWithoutValidation(
+                "Accept",
+                "text/html,application/xhtml+xml");
+            LogUrlAttempt(operation, request.Method, url);
+
+            using var response = await FallbackWebClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                LogUrlFailure(
+                    operation,
+                    request.Method,
+                    url,
+                    response.StatusCode);
+                return null;
+            }
+
+            return await response.Content.ReadAsStringAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogUrlFailure(operation, HttpMethod.Get, url, ex, ct);
+            return null;
+        }
+    }
+
+    private async Task<SearchPageFetchResult> FetchSearchResultPagesAsync(
+        string providerName,
+        string searchEndpoint,
+        string searchQuery,
+        CancellationToken ct)
+    {
+        await _webSearchRequestLock.WaitAsync(ct);
+        try
+        {
+            var previousRequestTimestamp = Volatile.Read(
+                ref _lastWebSearchRequestTimestamp);
+            if (previousRequestTimestamp > 0)
+            {
+                var elapsed = Stopwatch.GetElapsedTime(
+                    previousRequestTimestamp);
+                var minimumInterval = TimeSpan.FromMilliseconds(
+                    WebSearchRequestIntervalMs);
+                if (elapsed < minimumInterval)
+                {
+                    await Task.Delay(minimumInterval - elapsed, ct);
+                }
+            }
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                searchEndpoint)
+            {
+                Content = new FormUrlEncodedContent(
+                    new Dictionary<string, string>
+                    {
+                        ["q"] = searchQuery,
+                    })
+            };
+            request.Headers.TryAddWithoutValidation(
+                "User-Agent",
+                AppConstants.AppInfo.WadDownloaderUserAgent);
+            request.Headers.TryAddWithoutValidation(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            request.Headers.TryAddWithoutValidation(
+                "Accept-Language",
+                "en-US,en;q=0.5");
+            LogUrlAttempt(
+                $"{providerName} search request",
+                request.Method,
+                searchEndpoint);
+
+            using var response = await FallbackWebClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                LogUrlFailure(
+                    $"{providerName} search request",
+                    request.Method,
+                    searchEndpoint,
+                    response.StatusCode);
+                return new SearchPageFetchResult([], true);
+            }
+
+            var html = await response.Content.ReadAsStringAsync(ct);
+            if (IsSearchProviderBlockPage(html))
+            {
+                LogWarning(
+                    $"{providerName} returned an automated-request challenge");
+                return new SearchPageFetchResult([], true);
+            }
+
+            var pages = ExtractSearchResultPageUrls(html);
+            LogVerbose(
+                $"{providerName}: extracted {pages.Count} result page(s)");
+            return new SearchPageFetchResult(pages, false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogUrlFailure(
+                $"{providerName} search request",
+                HttpMethod.Post,
+                searchEndpoint,
+                ex,
+                ct);
+            return new SearchPageFetchResult([], true);
+        }
+        finally
+        {
+            Volatile.Write(
+                ref _lastWebSearchRequestTimestamp,
+                Stopwatch.GetTimestamp());
+            _webSearchRequestLock.Release();
+        }
+    }
+
+    private static bool IsSearchProviderBlockPage(string html) =>
+        html.Contains(
+            "Unfortunately, bots use DuckDuckGo too",
+            StringComparison.OrdinalIgnoreCase)
+        || html.Contains(
+            "anomaly-modal",
+            StringComparison.OrdinalIgnoreCase)
+        || html.Contains(
+            "challenge-form",
+            StringComparison.OrdinalIgnoreCase);
+
+    private readonly record struct SearchPageFetchResult(
+        List<string> Pages,
+        bool ProviderUnavailable);
+
+    private static IReadOnlyList<string> BuildWebSearchQueries(string wadFileName)
+    {
+        var fileName = Path.GetFileName(wadFileName).ToLowerInvariant();
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        var words = Regex.Replace(baseName, @"[_\-.]+", " ")
+            .Trim();
+
+        var queries = new List<string>
+        {
+            $"\"{fileName}\"",
+            $"\"{baseName}\" doom wad download"
+        };
+        if (!words.Equals(baseName, StringComparison.OrdinalIgnoreCase))
+        {
+            queries.Add($"\"{words}\" doom wad download");
+        }
+
+        return queries.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>
+    /// Extracts result page URLs from DuckDuckGo HTML results.
+    /// </summary>
+    private List<string> ExtractSearchResultPageUrls(string html)
+    {
+        var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            foreach (Match match in UddgUrlRegex().Matches(html))
+            {
+                TryAddSearchResultUrl(
+                    urls,
+                    WebUtility.HtmlDecode(match.Groups[1].Value),
+                    isEncoded: true);
+            }
+
+            // This also covers direct result links if DuckDuckGo changes away
+            // from its current uddg redirect format.
+            foreach (Match match in HrefRegex().Matches(html))
+            {
+                var href = WebUtility.HtmlDecode(match.Groups[1].Value);
+                var redirectMatch = UddgUrlRegex().Match(href);
+                if (redirectMatch.Success)
+                {
+                    TryAddSearchResultUrl(
+                        urls,
+                        redirectMatch.Groups[1].Value,
+                        isEncoded: true);
+                    continue;
+                }
+
+                TryAddSearchResultUrl(urls, href, isEncoded: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogVerbose($"Web search result parsing failed: {ex.Message}");
+        }
+
+        return urls.ToList();
+    }
+
+    private static void TryAddSearchResultUrl(
+        ISet<string> urls,
+        string candidate,
+        bool isEncoded)
+    {
+        try
+        {
+            candidate = WebUtility.HtmlDecode(candidate);
+            if (isEncoded)
+            {
+                candidate = Uri.UnescapeDataString(candidate);
+            }
+            if (candidate.StartsWith("//", StringComparison.Ordinal))
+            {
+                candidate = "https:" + candidate;
+            }
+
+            candidate = NormalizeKnownDownloadUrl(candidate);
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri)
+                || (uri.Scheme != Uri.UriSchemeHttp
+                    && uri.Scheme != Uri.UriSchemeHttps)
+                || IsExcludedSearchHost(uri.Host))
+            {
+                return;
+            }
+
+            urls.Add(candidate);
+        }
+        catch
+        {
+            // Ignore malformed third-party result URLs.
+        }
+    }
+
+    private static bool IsExcludedSearchHost(string host) =>
+        ExcludedSearchHosts.Any(excluded =>
+            host.Equals(excluded, StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(
+                "." + excluded,
+                StringComparison.OrdinalIgnoreCase));
+
+    private static string NormalizeKnownDownloadUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return url;
+        }
+
+        var segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+            && segments.Length >= 5
+            && segments[2].Equals("blob", StringComparison.OrdinalIgnoreCase))
+        {
+            var rawPath = string.Join('/', segments.Skip(4));
+            return $"https://raw.githubusercontent.com/"
+                   + $"{segments[0]}/{segments[1]}/{segments[3]}/{rawPath}";
+        }
+
+        if (uri.Host.EndsWith("gitlab.com", StringComparison.OrdinalIgnoreCase)
+            && uri.AbsolutePath.Contains(
+                "/-/blob/",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return url.Replace(
+                "/-/blob/",
+                "/-/raw/",
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (uri.Host.EndsWith("dropbox.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var builder = new UriBuilder(uri);
+            var queryParts = builder.Query
+                .TrimStart('?')
+                .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Where(part => !part.StartsWith(
+                    "dl=",
+                    StringComparison.OrdinalIgnoreCase))
+                .Append("dl=1");
+            builder.Query = string.Join('&', queryParts);
+            return builder.Uri.ToString();
+        }
+
+        return url;
     }
     
     /// <summary>
@@ -1325,7 +1789,7 @@ public partial class WadDownloader : IDisposable
     {
         var downloadUrls = new List<string>();
         var baseName = Path.GetFileNameWithoutExtension(wadFileName).ToLowerInvariant();
-        var targetExtensions = Utilities.WadExtensions.AllSupportedExtensions;
+        pageUrl = NormalizeKnownDownloadUrl(pageUrl);
         
         try
         {
@@ -1337,7 +1801,10 @@ public partial class WadDownloader : IDisposable
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(AppConstants.Timeouts.PageCrawlTimeoutSeconds));
             
-            var response = await WebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            using var response = await WebClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cts.Token);
             if (!response.IsSuccessStatusCode)
             {
                 LogUrlFailure("Page crawl", request.Method, pageUrl, response.StatusCode);
@@ -1350,7 +1817,10 @@ public partial class WadDownloader : IDisposable
                 !contentType.Contains("text", StringComparison.OrdinalIgnoreCase))
             {
                 // Might be a direct download link
-                if (targetExtensions.Any(ext => pageUrl.ToLowerInvariant().EndsWith(ext)))
+                if (TryGetDirectDownloadFileName(
+                        pageUrl,
+                        out var directFileName)
+                    && IsWebCandidateNameMatch(directFileName, baseName))
                 {
                     downloadUrls.Add(pageUrl);
                 }
@@ -1372,10 +1842,10 @@ public partial class WadDownloader : IDisposable
                 var matchedFileName = ExtractDownloadFileName(absoluteUrl);
                 if (string.IsNullOrWhiteSpace(matchedFileName)) continue;
 
-                var fileName = Path.GetFileNameWithoutExtension(matchedFileName).ToLowerInvariant();
-                
-                // Match if filename contains base name or vice versa
-                if (!fileName.Contains(baseName) && !baseName.Contains(fileName)) continue;
+                if (!IsWebCandidateNameMatch(matchedFileName, baseName))
+                {
+                    continue;
+                }
 
                 if (!downloadUrls.Contains(absoluteUrl))
                 {
@@ -1390,12 +1860,38 @@ public partial class WadDownloader : IDisposable
         
         return downloadUrls;
     }
+
+    private static bool IsWebCandidateNameMatch(
+        string candidateFileName,
+        string targetBaseName)
+    {
+        var candidateBaseName = Path
+            .GetFileNameWithoutExtension(candidateFileName)
+            .ToLowerInvariant();
+        return candidateBaseName.Length > 0
+               && targetBaseName.Length > 0
+               && candidateBaseName.Equals(
+                   targetBaseName,
+                   StringComparison.OrdinalIgnoreCase);
+    }
     
     [GeneratedRegex(@"uddg=([^&""']+)", RegexOptions.IgnoreCase)]
     private static partial Regex UddgUrlRegex();
-    
-    [GeneratedRegex(@"class=[""']result__url[""'][^>]*>([^<]+)", RegexOptions.IgnoreCase)]
-    private static partial Regex ResultUrlRegex();
+
+    [GeneratedRegex(
+        @"href=[""'](/wad/[a-f0-9]{40})[""']",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex WadArchiveResultRegex();
+
+    [GeneratedRegex(
+        @"href=[""'](/wad/[a-f0-9]{40}/download/[^""']+)[""']",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex WadArchiveDownloadPageRegex();
+
+    [GeneratedRegex(
+        @"https://archive\.org/download/wadarchive/[^""'<>\s]+?\.(?:wad|pk3|pk7|ipk3|ipk7|pke)\.gz",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex WadArchiveFileUrlRegex();
     
     /// <summary>
     /// Parses a page for all WAD download links and returns filename -> URL mapping.
@@ -1448,198 +1944,14 @@ public partial class WadDownloader : IDisposable
     }
     
     /// <summary>
-    /// Domain worker - processes one WAD at a time from its queue with max threads.
-    /// Handles retry logic for failed downloads.
-    /// </summary>
-    private async Task DomainWorkerAsync(
-        string domain,
-        ConcurrentQueue<(WadDownloadTask Task, string Url, long Size)> queue,
-        string downloadPath,
-        Func<bool> isSearchComplete,
-        Action<WadDownloadTask, string, long, string> enqueueDownload,
-        ConcurrentDictionary<string, bool> queuedTasks,
-        object urlLock,
-        SemaphoreSlim? downloadLimitSemaphore,
-        SemaphoreSlim? domainLimitSemaphore,
-        CancellationToken ct)
-    {
-        LogVerbose($"Domain worker started: {domain}");
-        
-        while (!ct.IsCancellationRequested)
-        {
-            if (queue.TryDequeue(out var item))
-            {
-                var (task, url, size) = item;
-                
-                // Skip if already completed (might have succeeded from alternate source)
-                if (task.Status == WadDownloadStatus.Completed) continue;
-                
-                task.SourceUrl = url;
-                task.TotalBytes = size;
-                
-                // Get effective thread settings from domain thread manager
-                var (maxThreads, minSegmentSizeKb, shouldProbe, adaptiveLearning) = 
-                    _domainConfig.GetEffectiveThreadSettings(domain);
-                
-                var domainThreads = maxThreads;
-                
-                // Probe domain if recommended by thread manager
-                if (shouldProbe)
-                {
-                    LogVerbose($"Probing thread capacity for {domain}...");
-                    domainThreads = await ProbeDomainThreadCapacityAsync(domain, url, ct);
-                    LogInfo($"Domain {domain} supports {domainThreads} threads");
-                }
-                
-                // Calculate threads for this file using domain manager's settings
-                task.ThreadCount = CalculateOptimalThreads(size, domainThreads, minSegmentSizeKb);
-
-                var success = false;
-                var domainSlotAcquired = false;
-                var downloadSlotAcquired = false;
-
-                try
-                {
-                    if (domainLimitSemaphore != null)
-                    {
-                        await domainLimitSemaphore.WaitAsync(ct);
-                        domainSlotAcquired = true;
-                    }
-
-                    if (downloadLimitSemaphore != null)
-                    {
-                        await downloadLimitSemaphore.WaitAsync(ct);
-                        downloadSlotAcquired = true;
-                    }
-
-                    success = await ExecuteDownloadAsync(task, downloadPath, ct);
-                }
-                finally
-                {
-                    if (downloadSlotAcquired)
-                    {
-                        downloadLimitSemaphore!.Release();
-                    }
-
-                    if (domainSlotAcquired)
-                    {
-                        domainLimitSemaphore!.Release();
-                    }
-                }
-                
-                // Handle retry logic if download failed
-                if (!success && task.Status != WadDownloadStatus.Cancelled)
-                {
-                    task.RetryCount++;
-                    
-                    // Try same source again if under retry limit
-                    if (!task.SkipSourceRetry && task.RetryCount <= WadDownloadTask.MaxRetriesPerSource)
-                    {
-                        LogWarning($"Retrying {task.Wad.FileName} from {url} (attempt {task.RetryCount}/{WadDownloadTask.MaxRetriesPerSource})");
-                        task.BytesDownloaded = 0;
-                        task.Status = WadDownloadStatus.Queued;
-                        task.StatusMessage = $"Retry {task.RetryCount} ({domain})";
-                        ProgressUpdated?.Invoke(this, task);
-                        
-                        // Re-queue for retry
-                        queue.Enqueue((task, url, size));
-                    }
-                    else if (task.AlternateUrls.Count > 0)
-                    {
-                        lock (urlLock)
-                        {
-                            task.ExhaustedUrls.Add(url);
-                        }
-
-                        // Try next alternate source
-                        string altUrl;
-                        long altSize;
-                        string? altDownloadedFileName;
-                        lock (urlLock)
-                        {
-                            var alternateSource = task.AlternateUrls[0];
-                            task.AlternateUrls.RemoveAt(0);
-                            altUrl = alternateSource.Url;
-                            altSize = alternateSource.Size;
-                            altDownloadedFileName = alternateSource.DownloadedFileName;
-                        }
-                        task.RetryCount = 0;
-                        
-                        var altDomain = new Uri(altUrl).Host;
-                        LogWarning($"Trying alternate source for {task.Wad.FileName}: {altUrl}");
-                        
-                        task.BytesDownloaded = 0;
-                        task.SourceUrl = altUrl;
-                        task.TotalBytes = altSize;
-                        task.DownloadedFileName = altDownloadedFileName;
-                        task.SkipSourceRetry = false;
-                        task.Status = WadDownloadStatus.Queued;
-                        task.StatusMessage = $"Queued ({altDomain})";
-                        ProgressUpdated?.Invoke(this, task);
-                        
-                        // Re-queue for alternate (will be processed by appropriate domain worker)
-                        enqueueDownload(task, altUrl, altSize, altDomain);
-                    }
-                    else
-                    {
-                        lock (urlLock)
-                        {
-                            task.ExhaustedUrls.Add(url);
-                        }
-
-                        LogWarning($"Source exhausted for {task.Wad.FileName}, resuming source discovery");
-                        await ResumeSourceDiscoveryAsync(task, queuedTasks, urlLock, enqueueDownload, ct);
-                    }
-                }
-            }
-            else if (isSearchComplete())
-            {
-                // No more items and search is done
-                break;
-            }
-            else
-            {
-                // Wait a bit for more items
-                await Task.Delay(100, ct);
-            }
-        }
-        
-        LogVerbose($"Domain worker completed: {domain}");
-    }
-    
-    /// <summary>
-    /// Calculates optimal thread count based on file size and domain settings.
-    /// Global thread cap is already applied by DomainThreadConfig.GetEffectiveThreadSettings().
-    /// </summary>
-    private int CalculateOptimalThreads(long fileSize, int domainMaxThreads, int minSegmentSizeKb)
-    {
-        int minSegmentSize = minSegmentSizeKb * 1024;
-        int maxBySegmentSize = (int)Math.Max(1, fileSize / minSegmentSize);
-        
-        // Note: domainMaxThreads already has global MaxThreadsPerFile cap applied by DomainThreadConfig
-        
-        // Scale threads with file size
-        int maxByFileSize = fileSize switch
-        {
-            < 1_000_000 => 4,        // < 1 MB: 4 threads
-            < 5_000_000 => 16,       // < 5 MB: 16 threads
-            < 20_000_000 => 32,      // < 20 MB: 32 threads
-            < 50_000_000 => 64,      // < 50 MB: 64 threads
-            < 100_000_000 => 128,    // < 100 MB: 128 threads
-            _ => domainMaxThreads    // >= 100 MB: use domain max
-        };
-        
-        int threads = Math.Min(Math.Min(maxByFileSize, domainMaxThreads), maxBySegmentSize);
-        
-        LogVerbose($"Using {threads} threads for {FormatBytes(fileSize)} (domain max: {domainMaxThreads}, segment: {minSegmentSizeKb}KB)");
-        return threads;
-    }
-    
-    /// <summary>
     /// Executes the actual download for a task.
     /// Returns true if download succeeded, false if it failed and may be retried.
     /// </summary>
-    private async Task<bool> ExecuteDownloadAsync(WadDownloadTask task, string downloadPath, CancellationToken ct)
+    private async Task<bool> ExecuteDownloadAsync(
+        WadDownloadTask task,
+        string downloadPath,
+        bool supportsRange,
+        CancellationToken ct)
     {
         if (string.IsNullOrEmpty(task.SourceUrl))
         {
@@ -1653,6 +1965,8 @@ public partial class WadDownloader : IDisposable
         var domain = uri.Host;
         var archivedFilesToRestore = new List<(string OriginalPath, string ArchivedPath)>();
         var downloadSucceeded = false;
+        var downloadOutputOwned = false;
+        string? outputPath = null;
         
         try
         {
@@ -1664,7 +1978,7 @@ public partial class WadDownloader : IDisposable
             
             // Use the actual filename from the download (may differ from requested if found as different extension)
             var downloadFileName = GetLowercaseFileName(task.DownloadedFileName ?? task.Wad.FileName);
-            var outputPath = Path.Combine(downloadPath, downloadFileName);
+            outputPath = Path.Combine(downloadPath, downloadFileName);
             
             // Ensure directory exists
             var directory = Path.GetDirectoryName(outputPath);
@@ -1716,21 +2030,31 @@ public partial class WadDownloader : IDisposable
             {
                 archivedFilesToRestore.Add((outputPath, archivedOutputPath));
             }
+            downloadOutputOwned = true;
             
-            // Check for range support
-            bool supportsRange = await TestRangeRequestAsync(uri, ct);
-            
-            // Get min segment size from domain thread manager
-            var (_, minSegmentSizeKb, _, _) = _domainConfig.GetEffectiveThreadSettings(domain);
-            int minSegmentSize = minSegmentSizeKb * 1024;
-            
-            if (supportsRange && task.TotalBytes > minSegmentSize * 2 && task.ThreadCount > 1)
+            if (supportsRange && task.TotalBytes > 0 && task.ThreadCount > 1)
             {
                 await MultiThreadedDownloadAsync(task, outputPath, ct);
             }
             else
             {
                 await SingleThreadDownloadAsync(task, outputPath, ct);
+            }
+
+            var downloadedLength = new FileInfo(outputPath).Length;
+            if (task.TotalBytes > 0
+                && downloadedLength != task.TotalBytes)
+            {
+                task.Status = WadDownloadStatus.Failed;
+                task.StatusMessage = "Incomplete download";
+                task.ErrorMessage =
+                    $"Expected {task.TotalBytes} bytes but received "
+                    + $"{downloadedLength}";
+                LogWarning(
+                    $"Incomplete download for {task.Wad.FileName} from "
+                    + $"{task.SourceUrl}: expected {task.TotalBytes} bytes, "
+                    + $"received {downloadedLength}");
+                return false;
             }
             
             // Extract archive if needed and find the WAD file inside
@@ -1741,6 +2065,19 @@ public partial class WadDownloader : IDisposable
                 task.StatusMessage = "Extraction failed";
                 task.ErrorMessage = "Could not find WAD in downloaded archive";
                 task.SkipSourceRetry = true;
+                return false;
+            }
+            if (!await HasExpectedFileSignatureAsync(finalPath, ct))
+            {
+                TryDeleteFile(finalPath);
+                task.Status = WadDownloadStatus.Failed;
+                task.StatusMessage = "Invalid download";
+                task.ErrorMessage =
+                    "The downloaded content is not a valid WAD/package file";
+                task.SkipSourceRetry = true;
+                LogWarning(
+                    $"Rejected invalid content for {task.Wad.FileName} "
+                    + $"from {task.SourceUrl}");
                 return false;
             }
 
@@ -1800,7 +2137,6 @@ public partial class WadDownloader : IDisposable
             // Notify UI of final speed update
             ProgressUpdated?.Invoke(this, task);
             
-            _domainConfig.UpdateThreadCount(domain, task.ThreadCount);
             LogSuccess($"Downloaded {task.Wad.FileName} from {task.SourceUrl} in {sw.Elapsed.TotalSeconds:F1}s ({FormatBytes((long)speed)}/s)");
             
             downloadSucceeded = true;
@@ -1809,14 +2145,16 @@ public partial class WadDownloader : IDisposable
         }
         catch (TooManyConnectionsException)
         {
-            _domainConfig.ReduceThreadCount(domain, task.ThreadCount);
+            var (currentDomainBudget, _, _, _) =
+                _domainConfig.GetEffectiveDomainBudgetSettings(domain);
+            _domainConfig.ReduceThreadCount(domain, currentDomainBudget);
             task.Status = WadDownloadStatus.Failed;
             task.StatusMessage = "Too many connections";
             task.ErrorMessage = "Server rejected connections - threads reduced";
             LogWarning($"Failed {task.Wad.FileName} from {task.SourceUrl}: Too many connections, reducing threads");
             return false;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             task.Status = WadDownloadStatus.Cancelled;
             task.StatusMessage = "Cancelled";
@@ -1833,63 +2171,92 @@ public partial class WadDownloader : IDisposable
         }
         finally
         {
-            if (!downloadSucceeded && archivedFilesToRestore.Count > 0)
+            if (!downloadSucceeded)
             {
-                RestoreArchivedFiles(archivedFilesToRestore);
+                if (downloadOutputOwned
+                    && !string.IsNullOrEmpty(outputPath))
+                {
+                    TryDeleteFile(outputPath);
+                }
+
+                if (archivedFilesToRestore.Count > 0)
+                {
+                    RestoreArchivedFiles(archivedFilesToRestore);
+                }
             }
         }
     }
-    
-    /// <summary>
-    /// Probes domain to find maximum supported thread count.
-    /// </summary>
-    private async Task<int> ProbeDomainThreadCapacityAsync(string domain, string testUrl, CancellationToken ct)
+
+    private static async Task<bool> HasExpectedFileSignatureAsync(
+        string filePath,
+        CancellationToken ct)
     {
-        int currentThreads = 2;
-        int lastSuccessful = currentThreads;
-        
-        // Get max probe limit from domain thread manager
-        var (maxThreads, _, _, _) = _domainConfig.GetEffectiveThreadSettings(domain);
-        int maxProbeThreads = Math.Max(maxThreads * 2, 512); // Probe up to 2x current max or 512
-        
-        while (currentThreads <= maxProbeThreads)
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+        if (extension is not (
+            ".wad"
+            or ".pk3"
+            or ".ipk3"
+            or ".pke"
+            or ".pk7"
+            or ".ipk7"))
         {
-            try
+            return true;
+        }
+
+        var header = new byte[8];
+        await using var stream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            header.Length,
+            useAsync: true);
+        var bytesRead = await stream.ReadAsync(header, ct);
+
+        if (extension == ".wad")
+        {
+            return bytesRead >= 4
+                   && ((header[0] == (byte)'I'
+                        && header[1] == (byte)'W'
+                        && header[2] == (byte)'A'
+                        && header[3] == (byte)'D')
+                       || (header[0] == (byte)'P'
+                           && header[1] == (byte)'W'
+                           && header[2] == (byte)'A'
+                           && header[3] == (byte)'D'));
+        }
+
+        if (extension is ".pk7" or ".ipk7")
+        {
+            return bytesRead >= 6
+                   && header[0] == 0x37
+                   && header[1] == 0x7A
+                   && header[2] == 0xBC
+                   && header[3] == 0xAF
+                   && header[4] == 0x27
+                   && header[5] == 0x1C;
+        }
+
+        return bytesRead >= 4
+               && header[0] == 0x50
+               && header[1] == 0x4B
+               && ((header[2] == 0x03 && header[3] == 0x04)
+                   || (header[2] == 0x05 && header[3] == 0x06)
+                   || (header[2] == 0x07 && header[3] == 0x08));
+    }
+
+    private static void TryDeleteFile(string filePath)
+    {
+        try
+        {
+            if (File.Exists(filePath))
             {
-                // Try making multiple concurrent HEAD requests
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(AppConstants.Timeouts.ConnectionTestTimeoutMs);
-                LogVerbose($"Thread probe batch: HEAD {testUrl} x{currentThreads}");
-                
-                var testTasks = Enumerable.Range(0, currentThreads)
-                    .Select(async _ =>
-                    {
-                        using var request = new HttpRequestMessage(HttpMethod.Head, testUrl);
-                        using var response = await HttpClient.SendAsync(request, cts.Token);
-                        return response.IsSuccessStatusCode;
-                    });
-                
-                var results = await Task.WhenAll(testTasks);
-                
-                if (results.All(r => r))
-                {
-                    lastSuccessful = currentThreads;
-                    currentThreads *= 2;
-                }
-                else
-                {
-                    break;
-                }
-            }
-            catch (Exception ex)
-            {
-                LogUrlFailure("Thread probe", HttpMethod.Head, testUrl, ex, ct);
-                break;
+                File.Delete(filePath);
             }
         }
-        
-        _domainConfig.UpdateThreadCount(domain, lastSuccessful);
-        return lastSuccessful;
+        catch
+        {
+        }
     }
     
     private async Task<bool> TestRangeRequestAsync(Uri uri, CancellationToken ct)
@@ -1947,26 +2314,20 @@ public partial class WadDownloader : IDisposable
             FileOptions.Asynchronous | FileOptions.RandomAccess);
         RandomAccess.SetLength(outputHandle, totalBytes);
         
-        long lastBytes = 0;
-        var lastUpdate = DateTime.Now;
-        var progressTimer = new System.Timers.Timer(AppConstants.UiIntervals.UiUpdateThrottleMs);
-        progressTimer.Elapsed += (_, _) =>
+        long ReadDownloadedBytes()
         {
-            var now = DateTime.Now;
-            var currentBytes = downloadedBytes.Sum();
-            var elapsed = (now - lastUpdate).TotalSeconds;
-            
-            if (elapsed > 0)
+            long total = 0;
+            for (var i = 0; i < downloadedBytes.Length; i++)
             {
-                task.BytesPerSecond = (currentBytes - lastBytes) / elapsed;
+                total += Volatile.Read(ref downloadedBytes[i]);
             }
-            
-            task.BytesDownloaded = currentBytes;
-            lastBytes = currentBytes;
-            lastUpdate = now;
-            ProgressUpdated?.Invoke(this, task);
-        };
-        progressTimer.Start();
+
+            return total;
+        }
+
+        using var progressSampler = StartProgressSampling(
+            task,
+            ReadDownloadedBytes);
         
         const int maxSegmentRetries = 3;
 
@@ -2008,12 +2369,10 @@ public partial class WadDownloader : IDisposable
                 throw new Exception($"{failedSegments.Count} segments failed to download after {maxSegmentRetries} retries");
             }
 
-            task.BytesDownloaded = downloadedBytes.Sum();
         }
         finally
         {
-            progressTimer.Stop();
-            progressTimer.Dispose();
+            progressSampler.ReportNow();
         }
     }
     
@@ -2118,27 +2477,18 @@ public partial class WadDownloader : IDisposable
         
         var buffer = new byte[AppConstants.BufferSizes.NetworkBuffer];
         int bytesRead;
-        var sw = Stopwatch.StartNew();
-        long lastBytes = 0;
-        var lastUpdate = DateTime.Now;
+        long downloadedBytes = 0;
+        using var progressSampler = StartProgressSampling(
+            task,
+            () => Interlocked.Read(ref downloadedBytes));
         
         while ((bytesRead = await stream.ReadAsync(buffer, ct)) > 0)
         {
             await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
-            task.BytesDownloaded += bytesRead;
-            
-            var now = DateTime.Now;
-            if ((now - lastUpdate).TotalMilliseconds >= AppConstants.UiIntervals.UiUpdateThrottleMs)
-            {
-                var elapsed = sw.Elapsed.TotalSeconds;
-                var speed = elapsed > 0 ? (task.BytesDownloaded - lastBytes) / (now - lastUpdate).TotalSeconds : 0;
-                task.BytesPerSecond = speed;
-                
-                lastBytes = task.BytesDownloaded;
-                lastUpdate = now;
-                ProgressUpdated?.Invoke(this, task);
-            }
+            Interlocked.Add(ref downloadedBytes, bytesRead);
         }
+
+        progressSampler.ReportNow();
     }
     
     private async Task<long> GetFileSizeAsync(string url, CancellationToken ct)
@@ -2150,6 +2500,13 @@ public partial class WadDownloader : IDisposable
             using var response = await HttpClient.SendAsync(request, ct);
             if (response.IsSuccessStatusCode)
             {
+                if (IsHtmlResponse(response))
+                {
+                    LogVerbose(
+                        $"HEAD request returned HTML instead of a file: {url}");
+                    return -1;
+                }
+
                 if (response.Content.Headers.ContentLength.HasValue)
                 {
                     return response.Content.Headers.ContentLength.Value;
@@ -2172,28 +2529,68 @@ public partial class WadDownloader : IDisposable
         try
         {
             using var fallbackRequest = new HttpRequestMessage(HttpMethod.Get, url);
-            LogUrlAttempt("HEAD fallback", fallbackRequest.Method, url);
+            fallbackRequest.Headers.Range =
+                new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+            LogUrlAttempt("File probe fallback", fallbackRequest.Method, url);
             using var fallbackResponse = await HttpClient.SendAsync(fallbackRequest, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (fallbackResponse.IsSuccessStatusCode && fallbackResponse.Content.Headers.ContentLength.HasValue)
+            if (fallbackResponse.IsSuccessStatusCode
+                && IsHtmlResponse(fallbackResponse))
+            {
+                LogVerbose(
+                    $"File probe returned HTML instead of a file: {url}");
+                return -1;
+            }
+
+            if (fallbackResponse.IsSuccessStatusCode
+                && fallbackResponse.Content.Headers.ContentRange?.Length
+                    is { } rangeLength)
+            {
+                return rangeLength;
+            }
+
+            if (fallbackResponse.IsSuccessStatusCode
+                && fallbackResponse.Content.Headers.ContentLength.HasValue)
             {
                 return fallbackResponse.Content.Headers.ContentLength.Value;
             }
 
             if (!fallbackResponse.IsSuccessStatusCode)
             {
-                LogUrlFailure("HEAD fallback", fallbackRequest.Method, url, fallbackResponse.StatusCode);
+                LogUrlFailure(
+                    "File probe fallback",
+                    fallbackRequest.Method,
+                    url,
+                    fallbackResponse.StatusCode);
             }
             else
             {
-                LogWarning($"HEAD fallback succeeded without Content-Length: GET {url}");
+                LogWarning(
+                    $"File probe succeeded without a total size: GET {url}");
                 return 0;
             }
         }
         catch (Exception ex)
         {
-            LogUrlFailure("HEAD fallback", HttpMethod.Get, url, ex, ct);
+            LogUrlFailure(
+                "File probe fallback",
+                HttpMethod.Get,
+                url,
+                ex,
+                ct);
         }
         return -1;
+    }
+
+    private static bool IsHtmlResponse(HttpResponseMessage response)
+    {
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        return mediaType != null
+               && (mediaType.Equals(
+                       "text/html",
+                       StringComparison.OrdinalIgnoreCase)
+                   || mediaType.Equals(
+                       "application/xhtml+xml",
+                       StringComparison.OrdinalIgnoreCase));
     }
     
     /// <summary>
@@ -2256,6 +2653,15 @@ public partial class WadDownloader : IDisposable
         List<(string OriginalPath, string ArchivedPath)> archivedFilesToRestore)
     {
         var archiveExt = Path.GetExtension(archivePath).ToLowerInvariant();
+
+        if (archiveExt == ".gz")
+        {
+            return ExtractGzipDownload(
+                task,
+                downloadPath,
+                archivePath,
+                archivedFilesToRestore);
+        }
         
         // Only process archive files (pk3/pk7/wad are already usable directly)
         if (!WadExtensions.IsArchiveExtension(archiveExt))
@@ -2265,7 +2671,7 @@ public partial class WadDownloader : IDisposable
         var requestedExt = Path.GetExtension(task.Wad.FileName).ToLowerInvariant();
         if (requestedExt == archiveExt)
             return archivePath;
-        
+
         try
         {
             task.StatusMessage = "Extracting archive...";
@@ -2311,6 +2717,63 @@ public partial class WadDownloader : IDisposable
         catch (Exception ex)
         {
             LogWarning($"Failed to extract archive {archivePath}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private string? ExtractGzipDownload(
+        WadDownloadTask task,
+        string downloadPath,
+        string archivePath,
+        List<(string OriginalPath, string ArchivedPath)> archivedFilesToRestore)
+    {
+        var outputFileName = GetLowercaseFileName(task.Wad.FileName);
+        var outputPath = Path.Combine(downloadPath, outputFileName);
+
+        try
+        {
+            task.StatusMessage = "Decompressing archive...";
+            ProgressUpdated?.Invoke(this, task);
+
+            if (!ArchiveExistingFile(
+                    outputPath,
+                    "gzip extraction",
+                    out var archivedOutputPath))
+            {
+                return null;
+            }
+            if (!string.IsNullOrEmpty(archivedOutputPath))
+            {
+                archivedFilesToRestore.Add(
+                    (outputPath, archivedOutputPath));
+            }
+
+            using var input = File.OpenRead(archivePath);
+            using var gzip =
+                new GZipStream(input, CompressionMode.Decompress);
+            using var output = new FileStream(
+                outputPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None);
+            gzip.CopyTo(output);
+
+            try
+            {
+                File.Delete(archivePath);
+            }
+            catch
+            {
+            }
+
+            LogSuccess(
+                $"Decompressed {task.Wad.FileName} from WAD Archive");
+            return outputPath;
+        }
+        catch (Exception ex)
+        {
+            LogWarning(
+                $"Failed to decompress {archivePath}: {ex.Message}");
             return null;
         }
     }
@@ -2370,6 +2833,22 @@ public partial class WadDownloader : IDisposable
 
         var archiveExt = Path.GetExtension(filePath).ToLowerInvariant();
         var requestedExt = Path.GetExtension(task.Wad.FileName).ToLowerInvariant();
+
+        if (archiveExt == ".gz")
+        {
+            try
+            {
+                await using var compressedStream = File.OpenRead(filePath);
+                await using var gzipStream =
+                    new GZipStream(compressedStream, CompressionMode.Decompress);
+                return await ComputeStreamHashAsync(gzipStream, ct);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         if (!WadExtensions.IsArchiveExtension(archiveExt) || requestedExt == archiveExt)
         {
             return await ComputeFileHashAsync(filePath, ct);
@@ -2462,12 +2941,6 @@ public partial class WadDownloader : IDisposable
         if (!_disposed)
         {
             // Note: HttpClient instances are static and shared - do not dispose them
-            // Only dispose the per-instance domain semaphores
-            foreach (var semaphore in _domainSemaphores.Values)
-            {
-                semaphore.Dispose();
-            }
-            _domainSemaphores.Clear();
             _disposed = true;
         }
         GC.SuppressFinalize(this);
