@@ -1447,7 +1447,8 @@ public class GameLauncher : IDisposable
         string? map,
         string? serverName,
         string? password,
-        string? joinPassword)
+        string? joinPassword,
+        IReadOnlyList<string>? optionalPwadPaths = null)
     {
         exePath ??= SettingsService.Instance.Settings.ZandronumPath;
         if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
@@ -1484,6 +1485,14 @@ public class GameLauncher : IDisposable
         if (pwadPaths.Count > 0)
         {
             args.Add($"-file {string.Join(" ", pwadPaths.Select(p => $"\"{p}\""))}");
+        }
+
+        if (optionalPwadPaths is { Count: > 0 })
+        {
+            // Zandronum's -optfile marks these loaded files as optional for
+            // clients connecting to a hosted server. They remain in the
+            // server's load order, but clients may join without them.
+            args.Add($"-optfile {string.Join(" ", optionalPwadPaths.Select(p => $"\"{p}\""))}");
         }
 
         if (skill >= 0 && skill <= 4)

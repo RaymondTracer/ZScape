@@ -1,12 +1,17 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using ZScape.Controls;
 using ZScape.Models;
 
 namespace ZScape.Views;
@@ -49,7 +54,8 @@ public partial class OptionalWadSelectionDialog : Window
             _items.Add(item);
         }
 
-        SelectionItemsControl.ItemsSource = _items;
+        SetupSelectionList();
+        SelectionListView.ItemsSource = _items;
 
         var requiredCount = _items.Count(item => item.IsRequired);
         var optionalCount = _items.Count - requiredCount;
@@ -64,6 +70,110 @@ public partial class OptionalWadSelectionDialog : Window
         UpdateOptionalActionState();
 
         KeyDown += OnDialogKeyDown;
+    }
+
+    private void SetupSelectionList()
+    {
+        SelectionListView.SelectionMode = ListViewSelectionMode.None;
+        SelectionListView.RowHeight = 34;
+        SelectionListView.SuppressHandCursor = true;
+
+        SelectionListView.AddColumn(new ListViewColumn
+        {
+            Key = "download",
+            Header = "Download",
+            Width = 90,
+            MinWidth = 90,
+            IsFixedWidth = true,
+            CanUserHide = false,
+            CellContentFactory = CreateSelectionCell
+        });
+        SelectionListView.AddColumn(new ListViewColumn
+        {
+            Key = "type",
+            Header = "Type",
+            Width = 100,
+            MinWidth = 10,
+            CanUserHide = false,
+            BindingPath = nameof(WadSelectionItem.TypeLabel)
+        });
+        SelectionListView.AddColumn(new ListViewColumn
+        {
+            Key = "file",
+            Header = "File",
+            Width = 320,
+            IsStar = true,
+            MinWidth = 10,
+            CanUserHide = false,
+            AutoSizeTextPath = nameof(WadSelectionItem.FileName),
+            CellContentFactory = CreateFileCell
+        });
+        SelectionListView.AddColumn(new ListViewColumn
+        {
+            Key = "status",
+            Header = "Status",
+            Width = 170,
+            MinWidth = 10,
+            CanUserHide = false,
+            AutoSizeTextPath = nameof(WadSelectionItem.DetailLabel),
+            CellContentFactory = CreateStatusCell
+        });
+
+        SelectionListView.Build(ListViewOverflowMode.AutoScroll);
+    }
+
+    private static Control CreateSelectionCell()
+    {
+        var checkBox = new CheckBox
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        checkBox.Bind(
+            CheckBox.IsCheckedProperty,
+            new Binding(nameof(WadSelectionItem.IsSelected))
+            {
+                Mode = BindingMode.TwoWay
+            });
+        checkBox.Bind(
+            CheckBox.IsEnabledProperty,
+            new Binding(nameof(WadSelectionItem.CanChangeSelection)));
+        return checkBox;
+    }
+
+    private static Control CreateFileCell()
+    {
+        var text = CreateTextCell();
+        text.Bind(
+            TextBlock.TextProperty,
+            new Binding(nameof(WadSelectionItem.FileName)));
+        text.Bind(
+            ToolTip.TipProperty,
+            new Binding(nameof(WadSelectionItem.FileName)));
+        return text;
+    }
+
+    private static Control CreateStatusCell()
+    {
+        var text = CreateTextCell();
+        text.Foreground = Brushes.Gray;
+        text.Bind(
+            TextBlock.TextProperty,
+            new Binding(nameof(WadSelectionItem.DetailLabel)));
+        text.Bind(
+            ToolTip.TipProperty,
+            new Binding(nameof(WadSelectionItem.DetailLabel)));
+        return text;
+    }
+
+    private static TextBlock CreateTextCell()
+    {
+        return new TextBlock
+        {
+            Padding = new Thickness(8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
     }
 
     public List<WadInfo> SelectedOptionalWads => _items

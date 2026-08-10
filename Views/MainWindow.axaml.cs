@@ -2593,7 +2593,9 @@ public partial class MainWindow : Window
             return;
 
         var launcher = GameLauncher.Instance;
-        var pwadPaths = dialog.SelectedPwadPaths;
+        var pwadPaths = dialog.IsHostMode
+            ? dialog.SelectedRequiredPwadPaths
+            : dialog.SelectedPwadPaths;
 
         if (dialog.IsHostMode)
         {
@@ -2608,7 +2610,8 @@ public partial class MainWindow : Window
                 map: dialog.GetMap(),
                 serverName: dialog.GetServerName(),
                 password: dialog.GetServerPassword(),
-                joinPassword: dialog.GetJoinPassword());
+                joinPassword: dialog.GetJoinPassword(),
+                optionalPwadPaths: dialog.SelectedOptionalPwadPaths);
         }
         else
         {
@@ -3208,7 +3211,17 @@ public partial class MainWindow : Window
         var hasHashedPwads = server.PWADs.Any(p => !string.IsNullOrEmpty(p.Hash));
         if (hasHashedPwads)
         {
-            var hashMismatches = await VerifyWadHashesWithDialogAsync(server);
+            var hashVerification = await VerifyWadHashesWithDialogAsync(server);
+            if (hashVerification.Action == HashVerificationDialogAction.Cancelled)
+            {
+                _logger.Info("Server join cancelled during WAD hash verification.");
+                return;
+            }
+
+            if (hashVerification.Action == HashVerificationDialogAction.Skipped)
+                _logger.Info("WAD hash verification skipped; continuing server join.");
+
+            var hashMismatches = hashVerification.Mismatches;
             var requiredHashMismatches = hashMismatches.Where(mismatch => !mismatch.IsOptional).ToList();
             if (requiredHashMismatches.Count > 0)
             {
@@ -3363,7 +3376,17 @@ public partial class MainWindow : Window
 
         if (hasOptionalServerHashes && optionalHashStateChanged)
         {
-            optionalWadsExcludedFromLaunch = (await VerifyOptionalWadHashesWithDialogAsync(server))
+            var optionalHashVerification = await VerifyOptionalWadHashesWithDialogAsync(server);
+            if (optionalHashVerification.Action == HashVerificationDialogAction.Cancelled)
+            {
+                _logger.Info("Server join cancelled during optional WAD hash verification.");
+                return;
+            }
+
+            if (optionalHashVerification.Action == HashVerificationDialogAction.Skipped)
+                _logger.Info("Optional WAD hash verification skipped; continuing server join.");
+
+            optionalWadsExcludedFromLaunch = optionalHashVerification.Mismatches
                 .Select(mismatch => mismatch.WadName)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
@@ -3397,17 +3420,28 @@ public partial class MainWindow : Window
         }
     }
 
-    private Task<List<GameLauncher.WadHashMismatch>> VerifyOptionalWadHashesWithDialogAsync(ServerInfo server)
+    private enum HashVerificationDialogAction
+    {
+        Completed,
+        Skipped,
+        Cancelled
+    }
+
+    private sealed record HashVerificationDialogResult(
+        List<GameLauncher.WadHashMismatch> Mismatches,
+        HashVerificationDialogAction Action);
+
+    private Task<HashVerificationDialogResult> VerifyOptionalWadHashesWithDialogAsync(ServerInfo server)
     {
         return VerifyWadHashesWithDialogAsync(server, "Verifying Optional PWAD Hashes", GameLauncher.Instance.VerifyOptionalWadHashesAsync);
     }
 
-    private async Task<List<GameLauncher.WadHashMismatch>> VerifyWadHashesWithDialogAsync(ServerInfo server)
+    private async Task<HashVerificationDialogResult> VerifyWadHashesWithDialogAsync(ServerInfo server)
     {
         return await VerifyWadHashesWithDialogAsync(server, "Verifying WAD Hashes", GameLauncher.Instance.VerifyWadHashesAsync);
     }
 
-    private async Task<List<GameLauncher.WadHashMismatch>> VerifyWadHashesWithDialogAsync(
+    private async Task<HashVerificationDialogResult> VerifyWadHashesWithDialogAsync(
         ServerInfo server,
         string dialogTitle,
         Func<ServerInfo, IProgress<GameLauncher.HashVerificationProgress>, CancellationToken, Task<List<GameLauncher.WadHashMismatch>>> verifyAsync)
@@ -3419,23 +3453,24 @@ public partial class MainWindow : Window
         // Fixed dialog height - slots will fill the available space
         const int dialogHeight = 500;
         const int headerHeight = 90; // Space for title, progress bar, count label
+        const int footerHeight = 48; // Space for Skip and Cancel Connection
         const int slotHeight = 20; // Height per file slot
 
         // Calculate how many slots can fit
-        int maxSlotsForHeight = (dialogHeight - headerHeight) / slotHeight;
+        int maxSlotsForHeight = (dialogHeight - headerHeight - footerHeight) / slotHeight;
         int displaySlots = isConcurrent ? maxSlotsForHeight : 1;
 
         var progressWindow = new Window
         {
             Title = dialogTitle,
             Width = 500,
-            Height = isConcurrent ? dialogHeight : 180,
+            Height = isConcurrent ? dialogHeight : 220,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             CanResize = false
         };
 
         // Main container
-        var mainPanel = new StackPanel { Margin = new Thickness(16, 10, 16, 8) };
+        var mainPanel = new StackPanel();
 
         // Status label - for sequential mode: "Hashing filename.pk3..."
         // For concurrent mode: "Concurrent mode (N files)"
@@ -3548,10 +3583,66 @@ public partial class MainWindow : Window
             mainPanel.Children.Add(filePanelsContainer);
         }
 
-        progressWindow.Content = mainPanel;
-
         var cts = new CancellationTokenSource();
         var mismatches = new List<GameLauncher.WadHashMismatch>();
+        var dialogAction = HashVerificationDialogAction.Completed;
+        var verificationFinished = false;
+
+        void RequestDialogAction(HashVerificationDialogAction action)
+        {
+            if (verificationFinished)
+                return;
+
+            dialogAction = action;
+            cts.Cancel();
+            progressWindow.Close();
+        }
+
+        var actionPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        var skipButton = new Button
+        {
+            Content = "Skip Verification",
+            MinWidth = 130
+        };
+        var cancelButton = new Button
+        {
+            Content = "Cancel Connection",
+            MinWidth = 135
+        };
+        skipButton.Click += (_, _) => RequestDialogAction(HashVerificationDialogAction.Skipped);
+        cancelButton.Click += (_, _) => RequestDialogAction(HashVerificationDialogAction.Cancelled);
+        actionPanel.Children.Add(skipButton);
+        actionPanel.Children.Add(cancelButton);
+
+        // Keep actions in their own auto-sized grid row. The verification
+        // content changes height as file slots appear/disappear, but this
+        // footer remains anchored to the bottom of the dialog.
+        var dialogLayout = new Grid { Margin = new Thickness(16, 10, 16, 8) };
+        dialogLayout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Star });
+        dialogLayout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(mainPanel, 0);
+        Grid.SetRow(actionPanel, 1);
+        dialogLayout.Children.Add(mainPanel);
+        dialogLayout.Children.Add(actionPanel);
+        progressWindow.Content = dialogLayout;
+
+        // Closing the window with Alt+F4, the title-bar X, or the owner closing
+        // is equivalent to cancelling the pending connection.
+        progressWindow.Closing += (_, _) =>
+        {
+            if (!verificationFinished && dialogAction == HashVerificationDialogAction.Completed)
+            {
+                dialogAction = HashVerificationDialogAction.Cancelled;
+                cts.Cancel();
+            }
+        };
 
         var progress = new Progress<GameLauncher.HashVerificationProgress>(p =>
         {
@@ -3622,7 +3713,9 @@ public partial class MainWindow : Window
             }
         });
 
-        progressWindow.Opened += async (_, _) =>
+        var verificationCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task RunVerificationAsync()
         {
             try
             {
@@ -3630,16 +3723,40 @@ public partial class MainWindow : Window
             }
             catch (OperationCanceledException)
             {
-                // User cancelled
+                // Skip and Cancel both cancel the hash operation. The button/X
+                // action is retained so the caller can decide whether to launch.
+                if (dialogAction == HashVerificationDialogAction.Completed)
+                    dialogAction = HashVerificationDialogAction.Cancelled;
+            }
+            catch (Exception ex)
+            {
+                dialogAction = HashVerificationDialogAction.Cancelled;
+                _logger.Error($"Hash verification failed: {ex.Message}");
             }
             finally
             {
-                progressWindow.Close();
+                verificationFinished = true;
+                verificationCompleted.TrySetResult(true);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (progressWindow.IsVisible)
+                        progressWindow.Close();
+                });
             }
-        };
+        }
+
+        progressWindow.Opened += (_, _) => _ = RunVerificationAsync();
 
         await progressWindow.ShowDialog(this);
-        return mismatches;
+        await verificationCompleted.Task;
+        cts.Dispose();
+
+        // A skipped verification intentionally contributes no mismatch data:
+        // continue with the local files exactly as they are.
+        var resultMismatches = dialogAction == HashVerificationDialogAction.Completed
+            ? mismatches
+            : [];
+        return new HashVerificationDialogResult(resultMismatches, dialogAction);
     }
 
     private async Task<bool> DownloadTestingVersionAsync(ServerInfo server)

@@ -100,12 +100,24 @@ public class SettingsService
         settings.FavoriteServerNameRules = NormalizeRules(settings.FavoriteServerNameRules);
         settings.HiddenServerNameRules = NormalizeRules(settings.HiddenServerNameRules);
         settings.SavedLaunchGameConfigs ??= [];
+        NormalizeLaunchConfig(settings.LastLaunchGameConfig);
+        foreach (var savedLaunchConfig in settings.SavedLaunchGameConfigs)
+            NormalizeLaunchConfig(savedLaunchConfig.Config);
 
         NormalizeFilter(settings.CurrentFilter);
         foreach (var preset in settings.FilterPresets)
         {
             NormalizeFilter(preset);
         }
+    }
+
+    private static void NormalizeLaunchConfig(LaunchGameConfig? config)
+    {
+        if (config == null)
+            return;
+
+        config.PwadPaths ??= [];
+        config.PwadEntries ??= [];
     }
 
     private static void ApplyLegacySettingsCompatibility(AppSettings settings, JsonElement settingsJson)

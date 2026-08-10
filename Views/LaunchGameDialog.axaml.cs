@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Data;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
@@ -9,6 +10,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using ZScape.Controls;
 using ZScape.Models;
 using ZScape.Services;
 
@@ -32,6 +34,12 @@ public partial class LaunchGameDialog : Window
     /// <summary>The selected PWAD full paths.</summary>
     public IReadOnlyList<string> SelectedPwadPaths { get; private set; } = [];
 
+    /// <summary>Enabled required PWADs selected for the host command.</summary>
+    public IReadOnlyList<string> SelectedRequiredPwadPaths { get; private set; } = [];
+
+    /// <summary>Enabled optional PWADs selected for the host -optfile list.</summary>
+    public IReadOnlyList<string> SelectedOptionalPwadPaths { get; private set; } = [];
+
     /// <summary>The selected Zandronum executable path, or null for stable.</summary>
     public string? SelectedExePath { get; private set; }
 
@@ -44,7 +52,8 @@ public partial class LaunchGameDialog : Window
     /// <summary>Whether the dialog was confirmed.</summary>
     public bool Confirmed { get; private set; }
 
-    private readonly ObservableCollection<string> _pwads = [];
+    private readonly ObservableCollection<LaunchPwadEntry> _pwads = [];
+    private bool _updatingPwadEditor;
 
     public LaunchGameDialog()
     {
@@ -53,9 +62,12 @@ public partial class LaunchGameDialog : Window
         KeyDown += OnDialogKeyDown;
         Loaded += OnLoaded;
         IwadComboBox.SelectionChanged += IwadComboBox_SelectionChanged;
-        PwadsListBox.ItemsSource = _pwads;
-        PwadsListBox.SelectionChanged += PwadsListBox_SelectionChanged;
-        PwadsListBox.KeyDown += PwadsListBox_KeyDown;
+        SetupPwadList();
+        PwadsListView.ItemsSource = _pwads;
+        PwadsListView.SelectionChanged += PwadsListView_SelectionChanged;
+        PwadsListView.KeyDown += PwadsListView_KeyDown;
+        _pwads.CollectionChanged += (_, _) => UpdatePwadListState();
+        UpdatePwadListState();
     }
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
@@ -74,6 +86,102 @@ public partial class LaunchGameDialog : Window
             CancelButton_Click(sender, e);
             e.Handled = true;
         }
+    }
+
+    private void SetupPwadList()
+    {
+        PwadsListView.SelectionMode = ListViewSelectionMode.Single;
+        PwadsListView.RowHeight = 30;
+        PwadsListView.AlternatingRowColors = true;
+        PwadsListView.FillLastVisibleColumn = true;
+
+        PwadsListView.AddColumn(new ListViewColumn
+        {
+            Key = "enabled",
+            Header = "Use",
+            HeaderToolTip = "Include this file in the launch command",
+            Width = 58,
+            MinWidth = 58,
+            IsFixedWidth = true,
+            CanUserHide = false,
+            CellContentFactory = () => CreatePwadCheckBox(nameof(LaunchPwadEntry.Enabled))
+        });
+        PwadsListView.AddColumn(new ListViewColumn
+        {
+            Key = "optional",
+            Header = "Optional",
+            HeaderToolTip = "Host mode only: let clients join without downloading this file",
+            Width = 82,
+            MinWidth = 82,
+            IsFixedWidth = true,
+            IsVisibleByDefault = false,
+            CanUserHide = false,
+            CellContentFactory = () => CreatePwadCheckBox(nameof(LaunchPwadEntry.Optional))
+        });
+        PwadsListView.AddColumn(new ListViewColumn
+        {
+            Key = "status",
+            Header = "Status",
+            HeaderToolTip = "Whether the file exists and is enabled",
+            Width = 88,
+            MinWidth = 88,
+            IsFixedWidth = true,
+            CanUserHide = false,
+            CellContentFactory = CreatePwadStatusCell
+        });
+        PwadsListView.AddColumn(new ListViewColumn
+        {
+            Key = "file",
+            Header = "File",
+            Width = 360,
+            MinWidth = 120,
+            CanUserHide = false,
+            AutoSizeTextPath = nameof(LaunchPwadEntry.FileName),
+            CellContentFactory = CreatePwadFileCell
+        });
+
+        PwadsListView.Build(ListViewOverflowMode.AutoScroll);
+        PwadsListView.SetColumnVisible("optional", IsHostMode);
+    }
+
+    private static Control CreatePwadCheckBox(string propertyName)
+    {
+        var checkBox = new CheckBox
+        {
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center
+        };
+        checkBox.Bind(
+            CheckBox.IsCheckedProperty,
+            new Binding(propertyName) { Mode = BindingMode.TwoWay });
+        return checkBox;
+    }
+
+    private static Control CreatePwadStatusCell()
+    {
+        var text = new TextBlock
+        {
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            Padding = new Thickness(6, 0)
+        };
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(LaunchPwadEntry.StatusDisplay)));
+        text.Bind(TextBlock.ForegroundProperty, new Binding(nameof(LaunchPwadEntry.StatusForeground)));
+        return text;
+    }
+
+    private static Control CreatePwadFileCell()
+    {
+        var text = new TextBlock
+        {
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Padding = new Thickness(8, 0)
+        };
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(LaunchPwadEntry.FileName)));
+        text.Bind(ToolTip.TipProperty, new Binding(nameof(LaunchPwadEntry.Path)));
+        return text;
     }
 
     // ── Version selection ─────────────────────────────────────────────
@@ -200,6 +308,27 @@ public partial class LaunchGameDialog : Window
         MaxPlayersPanel.IsVisible = IsHostMode;
         MaxClientsPanel.IsVisible = IsHostMode;
         HostAdvancedPanel.IsVisible = IsHostMode;
+        UpdatePwadOptionalColumnVisibility();
+    }
+
+    private void UpdatePwadOptionalColumnVisibility()
+    {
+        HostOptionalHint.IsVisible = IsHostMode;
+        PwadsListView.SetColumnVisible("optional", IsHostMode);
+    }
+
+    private void UpdatePwadListState()
+    {
+        PwadEmptyLabel.IsVisible = _pwads.Count == 0;
+        if (_pwads.Count == 0)
+        {
+            RemovePwadButton.IsEnabled = false;
+            MoveUpPwadButton.IsEnabled = false;
+            MoveDownPwadButton.IsEnabled = false;
+            _updatingPwadEditor = true;
+            PwadEditTextBox.Text = string.Empty;
+            _updatingPwadEditor = false;
+        }
     }
 
     // ── PWAD picker ──────────────────────────────────────────────────
@@ -225,8 +354,11 @@ public partial class LaunchGameDialog : Window
         foreach (var file in files)
         {
             var path = file.Path.LocalPath;
-            if (!_pwads.Contains(path, StringComparer.OrdinalIgnoreCase))
-                _pwads.Add(path);
+            if (_pwads.All(entry =>
+                    !entry.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
+            {
+                _pwads.Add(new LaunchPwadEntry(path));
+            }
         }
 
         foreach (var file in files)
@@ -235,64 +367,99 @@ public partial class LaunchGameDialog : Window
             if (!string.IsNullOrEmpty(dir))
                 _wadManager.AddSearchPath(dir);
         }
+
+        if (PwadsListView.SelectedItem == null && _pwads.Count > 0)
+            PwadsListView.SelectItem(_pwads[^1]);
     }
 
-    private void PwadsListBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private int GetSelectedPwadIndex()
     {
-        var idx = PwadsListBox.SelectedIndex;
+        if (PwadsListView.SelectedItem is not LaunchPwadEntry entry)
+            return -1;
+
+        return _pwads.IndexOf(entry);
+    }
+
+    private void PwadsListView_SelectionChanged(object? sender, EventArgs e)
+    {
+        var idx = GetSelectedPwadIndex();
         var count = _pwads.Count;
         RemovePwadButton.IsEnabled = idx >= 0;
         MoveUpPwadButton.IsEnabled = idx > 0;
         MoveDownPwadButton.IsEnabled = idx >= 0 && idx < count - 1;
 
-        if (idx >= 0 && idx < _pwads.Count)
-            PwadEditTextBox.Text = _pwads[idx];
-        else
-            PwadEditTextBox.Text = "";
+        _updatingPwadEditor = true;
+        PwadEditTextBox.Text = idx >= 0 && idx < _pwads.Count
+            ? _pwads[idx].Path
+            : "";
+        _updatingPwadEditor = false;
     }
 
     private void RemovePwadButton_Click(object? sender, RoutedEventArgs e)
     {
-        var idx = PwadsListBox.SelectedIndex;
+        var idx = GetSelectedPwadIndex();
         if (idx < 0 || idx >= _pwads.Count) return;
         _pwads.RemoveAt(idx);
+        if (_pwads.Count > 0)
+            PwadsListView.SelectItem(_pwads[Math.Min(idx, _pwads.Count - 1)]);
+        else
+            PwadsListView.ClearSelection();
     }
 
     private void MoveUpPwadButton_Click(object? sender, RoutedEventArgs e)
     {
-        var idx = PwadsListBox.SelectedIndex;
+        var idx = GetSelectedPwadIndex();
         if (idx <= 0 || idx >= _pwads.Count) return;
         _pwads.Move(idx, idx - 1);
-        PwadsListBox.SelectedIndex = idx - 1;
+        PwadsListView.SelectItem(_pwads[idx - 1]);
     }
 
     private void MoveDownPwadButton_Click(object? sender, RoutedEventArgs e)
     {
-        var idx = PwadsListBox.SelectedIndex;
+        var idx = GetSelectedPwadIndex();
         if (idx < 0 || idx >= _pwads.Count - 1) return;
         _pwads.Move(idx, idx + 1);
-        PwadsListBox.SelectedIndex = idx + 1;
+        PwadsListView.SelectItem(_pwads[idx + 1]);
     }
 
     private void PwadEditTextBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
-        var idx = PwadsListBox.SelectedIndex;
+        if (_updatingPwadEditor)
+            return;
+
+        var idx = GetSelectedPwadIndex();
         if (idx < 0 || idx >= _pwads.Count) return;
         var newPath = PwadEditTextBox.Text?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(newPath)) return;
-        if (_pwads[idx] == newPath) return;
+        if (_pwads[idx].Path == newPath) return;
 
         // Don't allow duplicate entries
         for (int i = 0; i < _pwads.Count; i++)
         {
-            if (i != idx && _pwads[i].Equals(newPath, StringComparison.OrdinalIgnoreCase))
+            if (i != idx
+                && _pwads[i].Path.Equals(newPath, StringComparison.OrdinalIgnoreCase))
                 return;
         }
 
-        _pwads[idx] = newPath;
+        _pwads[idx].Path = newPath;
+        var dir = Path.GetDirectoryName(newPath);
+        if (!string.IsNullOrEmpty(dir))
+            _wadManager.AddSearchPath(dir);
     }
 
-    private void PwadsListBox_KeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    private void EnableAllPwadButton_Click(object? sender, RoutedEventArgs e)
+    {
+        foreach (var pwad in _pwads)
+            pwad.Enabled = true;
+    }
+
+    private void DisableAllPwadButton_Click(object? sender, RoutedEventArgs e)
+    {
+        foreach (var pwad in _pwads)
+            pwad.Enabled = false;
+    }
+
+    private void PwadsListView_KeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
     {
         if (e.Key == Avalonia.Input.Key.Delete)
         {
@@ -396,12 +563,20 @@ public partial class LaunchGameDialog : Window
             }
         }
 
-        // PWADs
+        // PWADs. Keep missing entries visible: they are often the exact file
+        // that needs to be disabled or repaired when a load-order error occurs.
+        PwadsListView.ClearSelection();
         _pwads.Clear();
-        foreach (var pwad in config.PwadPaths)
+        var configuredEntries = config.PwadEntries is { Count: > 0 }
+            ? config.PwadEntries.Where(entry => entry != null).Select(entry => new LaunchPwadEntry(
+                entry.Path,
+                entry.Enabled,
+                entry.Optional))
+            : (config.PwadPaths ?? []).Select(path => new LaunchPwadEntry(path));
+        foreach (var pwad in configuredEntries.Where(entry =>
+                     !string.IsNullOrWhiteSpace(entry.Path)))
         {
-            if (File.Exists(pwad))
-                _pwads.Add(pwad);
+            _pwads.Add(pwad);
         }
 
         // Map
@@ -419,6 +594,7 @@ public partial class LaunchGameDialog : Window
         ServerNameTextBox.Text = config.ServerName ?? "";
 
         _isLoadingConfig = false;
+        UpdatePwadOptionalColumnVisibility();
         UpdateLaunchButton();
     }
 
@@ -430,7 +606,18 @@ public partial class LaunchGameDialog : Window
             IsDedicated = DedicatedServerRadio.IsChecked == true,
             ExePath = SelectedExePath,
             IwadPath = SelectedIwadPath,
-            PwadPaths = _pwads.ToList(),
+            PwadPaths = _pwads
+                .Where(entry => entry.Enabled)
+                .Select(entry => entry.Path)
+                .ToList(),
+            PwadEntries = _pwads
+                .Select(entry => new LaunchPwadConfig
+                {
+                    Path = entry.Path,
+                    Enabled = entry.Enabled,
+                    Optional = entry.Optional
+                })
+                .ToList(),
             Map = string.IsNullOrWhiteSpace(MapTextBox.Text) ? null : MapTextBox.Text.Trim(),
             Skill = SkillComboBox.SelectedIndex + 1,
             MaxPlayers = MaxPlayersNumeric.Value,
@@ -571,7 +758,16 @@ public partial class LaunchGameDialog : Window
 
         IsHostMode = HostModeRadio.IsChecked == true;
         IsDedicated = IsHostMode && DedicatedServerRadio.IsChecked == true;
-        SelectedPwadPaths = _pwads.ToList();
+        var enabledPwads = _pwads.Where(entry => entry.Enabled).ToList();
+        SelectedPwadPaths = enabledPwads.Select(entry => entry.Path).ToList();
+        SelectedRequiredPwadPaths = enabledPwads
+            .Where(entry => !entry.Optional)
+            .Select(entry => entry.Path)
+            .ToList();
+        SelectedOptionalPwadPaths = enabledPwads
+            .Where(entry => entry.Optional)
+            .Select(entry => entry.Path)
+            .ToList();
         Confirmed = true;
 
         // Persist last config

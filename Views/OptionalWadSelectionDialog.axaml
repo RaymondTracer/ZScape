@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
         x:Class="ZScape.Views.OptionalWadSelectionDialog"
         x:CompileBindings="False"
         Title="Server WAD Downloads"
@@ -35,48 +36,7 @@
         </Grid>
 
         <Border Grid.Row="2" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="2">
-            <Grid RowDefinitions="Auto,*">
-                <Border Grid.Row="0" Background="#252526" BorderBrush="#3F3F46" BorderThickness="0,0,0,1">
-                    <Grid ColumnDefinitions="90,100,*,170" Height="30">
-                        <TextBlock Grid.Column="0" Text="Download" VerticalAlignment="Center" Margin="8,0" FontWeight="SemiBold"/>
-                        <TextBlock Grid.Column="1" Text="Type" VerticalAlignment="Center" Margin="8,0" FontWeight="SemiBold"/>
-                        <TextBlock Grid.Column="2" Text="File" VerticalAlignment="Center" Margin="8,0" FontWeight="SemiBold"/>
-                        <TextBlock Grid.Column="3" Text="Status" VerticalAlignment="Center" Margin="8,0" FontWeight="SemiBold"/>
-                    </Grid>
-                </Border>
-
-                <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                    <ItemsControl x:Name="SelectionItemsControl">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#1E1E1E" BorderBrush="#3F3F46" BorderThickness="0,0,0,1" Height="34">
-                                    <Grid ColumnDefinitions="90,100,*,170">
-                                        <CheckBox Grid.Column="0"
-                                                  IsChecked="{Binding IsSelected}"
-                                                  IsEnabled="{Binding CanChangeSelection}"
-                                                  HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Text="{Binding TypeLabel}" VerticalAlignment="Center" Margin="8,0"/>
-                                        <TextBlock Grid.Column="2"
-                                                   Text="{Binding FileName}"
-                                                   VerticalAlignment="Center"
-                                                   Margin="8,0"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   ToolTip.Tip="{Binding FileName}"/>
-                                        <TextBlock Grid.Column="3"
-                                                   Text="{Binding DetailLabel}"
-                                                   VerticalAlignment="Center"
-                                                   Margin="8,0"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Foreground="Gray"
-                                                   ToolTip.Tip="{Binding DetailLabel}"/>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </Grid>
+            <controls:ResizableListView x:Name="SelectionListView"/>
         </Border>
 
         <CheckBox Grid.Row="3" x:Name="RememberSkippedCheckBox"
