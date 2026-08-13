@@ -10,7 +10,7 @@
 
     <Grid Margin="20" RowDefinitions="Auto,*,Auto">
         <StackPanel Grid.Row="0" Spacing="5" Margin="0,0,0,18">
-            <TextBlock Text="Welcome to ZScape!" FontSize="20" FontWeight="Bold"/>
+            <TextBlock Text="Set up ZScape" FontSize="20" FontWeight="Bold"/>
             <TextBlock x:Name="PageTitleTextBlock" Text="Zandronum Setup" FontSize="13" FontWeight="Bold"/>
             <TextBlock x:Name="PageDescriptionTextBlock"
                        Text="Choose your stable installation first, then continue through the rest of the setup."

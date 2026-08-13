@@ -48,6 +48,28 @@ public partial class WadDownloader : IDisposable
         "https://mirror.braindrainlan.nu/pub/idgames/",
         "https://files.xvertigox.com/idgames/",
     ];
+
+    /// <summary>
+    /// Permanent official Freedoom release assets. The phase archive contains
+    /// freedoom1.wad and freedoom2.wad; FreeDM has its own archive. The
+    /// downloader extracts only the WAD requested by the current task.
+    /// </summary>
+    private static readonly Dictionary<string, (string Url, long Size, string ArchiveFileName)>
+        OfficialFreedoomArchives = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["freedoom1.wad"] =
+            ("https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip",
+             24_143_781,
+             "freedoom-0.13.0.zip"),
+        ["freedoom2.wad"] =
+            ("https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip",
+             24_143_781,
+             "freedoom-0.13.0.zip"),
+        ["freedm.wad"] =
+            ("https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedm-0.13.0.zip",
+             11_331_651,
+             "freedm-0.13.0.zip")
+    };
     
     /// <summary>
     /// Sites to exclude from web search results (unlikely to have WAD downloads).
@@ -290,12 +312,18 @@ public partial class WadDownloader : IDisposable
             or WadDownloadStatus.Downloading
             or WadDownloadStatus.Cancelled);
 
-    private static int GetTotalSourcePhases(bool idgamesEnabled, bool webSearchEnabled, bool hasServerUrl, int siteCount)
+    private static int GetTotalSourcePhases(
+        bool idgamesEnabled,
+        bool webSearchEnabled,
+        bool hasServerUrl,
+        bool hasOfficialFreedoomSource,
+        int siteCount)
     {
         return siteCount
             + (idgamesEnabled ? 1 : 0)
             + (webSearchEnabled ? 1 : 0)
-            + (hasServerUrl ? 1 : 0);
+            + (hasServerUrl ? 1 : 0)
+            + (hasOfficialFreedoomSource ? 1 : 0);
     }
 
     private void ResetTaskForSourceDiscovery(WadDownloadTask task)
@@ -680,6 +708,7 @@ public partial class WadDownloader : IDisposable
                 IdgamesEnabled,
                 WebSearchEnabled,
                 !string.IsNullOrEmpty(task.Wad.ServerUrl),
+                WadManager.IsFreedoomIwad(task.Wad.FileName),
                 siteCount);
             task.AlternateUrls.Clear();
             task.ExhaustedUrls.Clear();
@@ -728,6 +757,8 @@ public partial class WadDownloader : IDisposable
     {
         try
         {
+            await SearchOfficialFreedoomAsync(tasks, discoveryState, ct);
+
             var serverGroups = tasks
                 .Where(task => !string.IsNullOrEmpty(task.Wad.ServerUrl))
                 .GroupBy(task => task.Wad.ServerUrl!)
@@ -784,6 +815,77 @@ public partial class WadDownloader : IDisposable
         {
             discoveryState.MarkComplete();
         }
+    }
+
+    /// <summary>
+    /// Adds the official Freedoom archive as an immediate source for each
+    /// requested Freedoom IWAD. Archive extraction selects only the requested
+    /// file, so joining a Freedoom Phase 2 server downloads freedoom2.wad
+    /// rather than the entire suite.
+    /// </summary>
+    private Task SearchOfficialFreedoomAsync(
+        List<WadDownloadTask> tasks,
+        SourceDiscoveryState discoveryState,
+        CancellationToken ct)
+    {
+        var freedoomTasks = tasks
+            .Where(task => WadManager.IsFreedoomIwad(task.Wad.FileName))
+            .ToList();
+        if (freedoomTasks.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        LogInfo(
+            $"Freedoom: adding official release sources for "
+            + $"{freedoomTasks.Count} IWAD(s)...");
+
+        try
+        {
+            foreach (var task in freedoomTasks)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!IsEligibleForSourceDiscovery(task))
+                {
+                    continue;
+                }
+
+                var requestedFileName = Path.GetFileName(task.Wad.FileName);
+                if (!OfficialFreedoomArchives.TryGetValue(
+                        requestedFileName,
+                        out var archive))
+                {
+                    continue;
+                }
+
+                RecordDiscoveredSource(
+                    task,
+                    archive.Url,
+                    archive.Size,
+                    "official Freedoom release",
+                    $"Found {task.Wad.FileName} in the official Freedoom release "
+                    + $"at {archive.Url} ({FormatBytes(archive.Size)})",
+                    $"Added official Freedoom alternate for {task.Wad.FileName}: "
+                    + archive.Url,
+                    archive.ArchiveFileName,
+                    discoveryState);
+            }
+        }
+        finally
+        {
+            foreach (var task in freedoomTasks)
+            {
+                task.IncrementSitesSearched();
+                if (task.Status == WadDownloadStatus.Searching)
+                {
+                    task.StatusMessage =
+                        $"Searching ({task.SitesSearched}/{task.TotalSitesToSearch})...";
+                    ProgressUpdated?.Invoke(this, task);
+                }
+            }
+        }
+
+        return Task.CompletedTask;
     }
     
     /// <summary>

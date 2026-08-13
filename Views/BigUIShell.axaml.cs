@@ -55,10 +55,6 @@ public partial class BigUIShell : UserControl
 
         ApplyActiveTab("servers");
 
-        // Global escape handler on the root
-        RootGrid.AddHandler(KeyDownEvent, OnGlobalKeyDown,
-            RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
-
         // Server list: intercept Left/Up-at-top/Down-at-bottom BEFORE the list sees them
         BigServerListView.AddHandler(KeyDownEvent, OnServerListPreviewKeyDown,
             RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -282,22 +278,22 @@ public partial class BigUIShell : UserControl
         yesBtn.Click += (_, _) => { Cleanup(); tcs.TrySetResult(true); };
         noBtn.Click += (_, _) => { Cleanup(); tcs.TrySetResult(false); };
 
-        // Escape dismisses = cancel
+        // Big UI is deliberately directional: Left/Right chooses an action and
+        // the focused button receives Enter/Space normally. Do not add letter
+        // shortcuts or an Escape-only exit path here; controller and touch
+        // users should not need a keyboard convention to use this overlay.
         contentBarrier.AddHandler(KeyDownEvent, (object? s, KeyEventArgs ke) =>
         {
-            if (ke.Key == Key.Escape || ke.Key == Key.N)
+            if (ke.Key is Key.Left or Key.Right)
             {
-                Cleanup();
-                tcs.TrySetResult(false);
+                if (yesBtn.IsFocused)
+                    noBtn.Focus();
+                else
+                    yesBtn.Focus();
+
                 ke.Handled = true;
             }
-            else if (ke.Key == Key.Y || ke.Key == Key.Enter)
-            {
-                Cleanup();
-                tcs.TrySetResult(true);
-                ke.Handled = true;
-            }
-        }, RoutingStrategies.Bubble, handledEventsToo: true);
+        }, RoutingStrategies.Tunnel, handledEventsToo: true);
 
         rootGrid.Children.Add(contentBarrier);
         yesBtn.Focus();
@@ -410,15 +406,6 @@ public partial class BigUIShell : UserControl
         if (e.Key == Key.Down)
         {
             BigServerListView.Focus();
-            e.Handled = true;
-        }
-    }
-
-    private void OnGlobalKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Escape)
-        {
-            ExitBigUIRequested?.Invoke();
             e.Handled = true;
         }
     }

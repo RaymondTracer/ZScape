@@ -8,12 +8,20 @@ namespace ZScape.Services;
 /// </summary>
 public class ScreenshotMonitorService : IDisposable
 {
+    private const int ScreenshotMoveAttempts = 40;
+    private static readonly TimeSpan ScreenshotMoveRetryDelay =
+        TimeSpan.FromMilliseconds(250);
+
     private static ScreenshotMonitorService? _instance;
     public static ScreenshotMonitorService Instance => _instance ??= new ScreenshotMonitorService();
     
     private readonly LoggingService _logger = LoggingService.Instance;
     private readonly List<FileSystemWatcher> _watchers = [];
     private readonly object _lock = new();
+    private readonly object _pendingMoveLock = new();
+    private readonly HashSet<string> _pendingScreenshotMoves =
+        new(StringComparer.OrdinalIgnoreCase);
+    private int _screenshotsMovedCount;
     private bool _isMonitoring;
     private bool _disposed;
     
@@ -35,7 +43,7 @@ public class ScreenshotMonitorService : IDisposable
     /// <summary>
     /// Gets the number of screenshots moved in this session.
     /// </summary>
-    public int ScreenshotsMovedCount { get; private set; }
+    public int ScreenshotsMovedCount => Volatile.Read(ref _screenshotsMovedCount);
     
     private ScreenshotMonitorService() { }
     
@@ -112,7 +120,8 @@ public class ScreenshotMonitorService : IDisposable
                 _isMonitoring = true;
                 _logger.Info($"Screenshot monitoring started. Watching: {string.Join(", ", watchedDirs)}. Destination: {DestinationPath}");
                 
-                // Move any existing screenshots on startup
+                // Queue existing screenshots through the same lock-aware move
+                // path used by live FileSystemWatcher events.
                 MoveExistingScreenshots();
             }
             catch (Exception ex)
@@ -179,7 +188,7 @@ public class ScreenshotMonitorService : IDisposable
     
     private void OnScreenshotCreated(object sender, FileSystemEventArgs e)
     {
-        MoveScreenshot(e.FullPath);
+        QueueScreenshotMove(e.FullPath);
     }
     
     private void OnScreenshotRenamed(object sender, RenamedEventArgs e)
@@ -188,54 +197,164 @@ public class ScreenshotMonitorService : IDisposable
         if (Path.GetFileName(e.FullPath).StartsWith("Screenshot_", StringComparison.OrdinalIgnoreCase) &&
             Path.GetExtension(e.FullPath).Equals(".png", StringComparison.OrdinalIgnoreCase))
         {
-            MoveScreenshot(e.FullPath);
+            QueueScreenshotMove(e.FullPath);
         }
     }
-    
-    private void MoveScreenshot(string sourcePath)
+
+    /// <summary>
+    /// Starts one lock-aware move per source path. FileSystemWatcher commonly
+    /// raises several events while Zandronum is still writing the PNG, so
+    /// duplicate events deliberately share a single retry loop.
+    /// </summary>
+    private void QueueScreenshotMove(string sourcePath)
     {
         if (string.IsNullOrEmpty(DestinationPath))
             return;
-            
+
+        lock (_pendingMoveLock)
+        {
+            if (!_pendingScreenshotMoves.Add(sourcePath))
+            {
+                return;
+            }
+        }
+
+        _ = MoveScreenshotWhenReadyAsync(sourcePath);
+    }
+
+    /// <summary>
+    /// Waits for the screenshot producer to release its file handle, then
+    /// moves the completed file. Individual lock failures are deliberately
+    /// silent; only a file that remains unavailable for the full retry window
+    /// is reported.
+    /// </summary>
+    private async Task MoveScreenshotWhenReadyAsync(string sourcePath)
+    {
         try
         {
-            // Wait briefly for file to be fully written
-            Thread.Sleep(100);
-            
-            if (!File.Exists(sourcePath))
-                return;
-                
-            var fileName = Path.GetFileName(sourcePath);
-            var destPath = Path.Combine(DestinationPath, fileName);
-            
-            // Handle name conflicts by appending a number
-            if (File.Exists(destPath))
+            for (var attempt = 1; attempt <= ScreenshotMoveAttempts; attempt++)
             {
-                var baseName = Path.GetFileNameWithoutExtension(fileName);
-                var ext = Path.GetExtension(fileName);
-                var counter = 1;
-                while (File.Exists(destPath))
+                if (string.IsNullOrEmpty(DestinationPath))
                 {
-                    destPath = Path.Combine(DestinationPath, $"{baseName}_{counter++}{ext}");
+                    return;
+                }
+
+                if (File.Exists(sourcePath)
+                    && IsFileReadyToMove(sourcePath)
+                    && TryMoveScreenshot(sourcePath, out var destinationPath))
+                {
+                    var fileName = Path.GetFileName(sourcePath);
+                    var sourceVersion =
+                        Path.GetFileName(Path.GetDirectoryName(sourcePath))
+                        ?? "unknown";
+                    Interlocked.Increment(ref _screenshotsMovedCount);
+                    _logger.Info(
+                        $"Moved screenshot from {sourceVersion}: {fileName}");
+                    ScreenshotMoved?.Invoke(
+                        this,
+                        new ScreenshotMovedEventArgs(
+                            sourcePath,
+                            destinationPath!,
+                            sourceVersion));
+                    return;
+                }
+
+                if (attempt < ScreenshotMoveAttempts)
+                {
+                    await Task.Delay(ScreenshotMoveRetryDelay)
+                        .ConfigureAwait(false);
                 }
             }
-            
-            File.Move(sourcePath, destPath);
-            ScreenshotsMovedCount++;
-            
-            var sourceVersion = Path.GetFileName(Path.GetDirectoryName(sourcePath)) ?? "unknown";
-            _logger.Info($"Moved screenshot from {sourceVersion}: {fileName}");
-            
-            ScreenshotMoved?.Invoke(this, new ScreenshotMovedEventArgs(sourcePath, destPath, sourceVersion));
+
+            if (File.Exists(sourcePath))
+            {
+                _logger.Warning(
+                    $"Screenshot remained in use for "
+                    + $"{ScreenshotMoveAttempts * ScreenshotMoveRetryDelay.TotalMilliseconds / 1000:F0} seconds "
+                    + $"and was not moved: {sourcePath}");
+            }
         }
         catch (Exception ex)
         {
             _logger.Warning($"Failed to move screenshot {sourcePath}: {ex.Message}");
         }
+        finally
+        {
+            lock (_pendingMoveLock)
+            {
+                _pendingScreenshotMoves.Remove(sourcePath);
+            }
+        }
     }
-    
+
     /// <summary>
-    /// Moves any existing screenshots from testing version directories and stable folder.
+    /// Verifies that the writer has released the screenshot before attempting
+    /// the move. The exclusive handle is immediately disposed; File.Move is
+    /// still retried if another process races in after this check.
+    /// </summary>
+    private static bool IsFileReadyToMove(string sourcePath)
+    {
+        try
+        {
+            using var file = new FileStream(
+                sourcePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.None);
+            _ = file.Length;
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private bool TryMoveScreenshot(string sourcePath, out string? destinationPath)
+    {
+        destinationPath = null;
+        if (string.IsNullOrEmpty(DestinationPath))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(sourcePath);
+        var targetPath = Path.Combine(DestinationPath, fileName);
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        var extension = Path.GetExtension(fileName);
+        var counter = 1;
+        while (File.Exists(targetPath))
+        {
+            targetPath = Path.Combine(
+                DestinationPath,
+                $"{baseName}_{counter++}{extension}");
+        }
+
+        try
+        {
+            File.Move(sourcePath, targetPath);
+            destinationPath = targetPath;
+            return true;
+        }
+        catch (IOException)
+        {
+            // Source is still locked or a competing event won the move. Both
+            // are transient from the monitor's point of view.
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Queues screenshots already present in the stable and testing folders.
+    /// Returns the number of files queued for lock-aware consolidation.
     /// </summary>
     public int MoveExistingScreenshots()
     {
@@ -244,80 +363,61 @@ public class ScreenshotMonitorService : IDisposable
             return 0;
             
         Directory.CreateDirectory(destPath);
-        
-        int moved = 0;
-        
-        // Helper to move screenshots from a directory
-        void MoveScreenshotsFromDir(string dir, string source)
+
+        var queued = 0;
+
+        void QueueScreenshotsFromDirectory(string directory)
         {
-            if (!Directory.Exists(dir)) return;
-            
+            if (!Directory.Exists(directory)) return;
+
             // Don't move from the destination folder itself
-            if (Path.GetFullPath(dir).Equals(Path.GetFullPath(destPath), StringComparison.OrdinalIgnoreCase))
+            if (Path.GetFullPath(directory).Equals(
+                    Path.GetFullPath(destPath),
+                    StringComparison.OrdinalIgnoreCase))
                 return;
-                
-            var screenshots = Directory.GetFiles(dir, "Screenshot_*.png", SearchOption.TopDirectoryOnly);
+
+            var screenshots = Directory.GetFiles(
+                directory,
+                "Screenshot_*.png",
+                SearchOption.TopDirectoryOnly);
             foreach (var screenshot in screenshots)
             {
-                try
-                {
-                    var fileName = Path.GetFileName(screenshot);
-                    var dest = Path.Combine(destPath, fileName);
-                    
-                    // Handle name conflicts
-                    if (File.Exists(dest))
-                    {
-                        var baseName = Path.GetFileNameWithoutExtension(fileName);
-                        var ext = Path.GetExtension(fileName);
-                        var counter = 1;
-                        while (File.Exists(dest))
-                        {
-                            dest = Path.Combine(destPath, $"{baseName}_{counter++}{ext}");
-                        }
-                    }
-                    
-                    File.Move(screenshot, dest);
-                    moved++;
-                    _logger.Info($"Moved screenshot from {source}: {fileName}");
-                }
-                catch (Exception ex)
-                {
-                    _logger.Warning($"Failed to move screenshot {screenshot}: {ex.Message}");
-                }
+                QueueScreenshotMove(screenshot);
+                queued++;
             }
         }
-        
+
         try
         {
             // Move from stable Zandronum folder
             var stableDir = GetStableZandronumDir();
             if (!string.IsNullOrEmpty(stableDir))
             {
-                MoveScreenshotsFromDir(stableDir, "stable");
+                QueueScreenshotsFromDirectory(stableDir);
             }
-            
+
             // Move from testing version subdirectories
             var testingRoot = GetTestingRootPath();
             if (!string.IsNullOrEmpty(testingRoot) && Directory.Exists(testingRoot))
             {
                 foreach (var versionDir in Directory.GetDirectories(testingRoot))
                 {
-                    var versionName = Path.GetFileName(versionDir);
-                    MoveScreenshotsFromDir(versionDir, versionName);
+                    QueueScreenshotsFromDirectory(versionDir);
                 }
             }
-            
-            if (moved > 0)
+
+            if (queued > 0)
             {
-                _logger.Info($"Moved {moved} existing screenshots to {destPath}");
+                _logger.Verbose(
+                    $"Queued {queued} existing screenshot(s) for consolidation");
             }
         }
         catch (Exception ex)
         {
             _logger.Error($"Error scanning for existing screenshots: {ex.Message}");
         }
-        
-        return moved;
+
+        return queued;
     }
     
     /// <summary>

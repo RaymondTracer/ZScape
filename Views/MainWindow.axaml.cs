@@ -94,6 +94,8 @@ public partial class MainWindow : Window
     private LogPanelControl? _logControl;
     private MenuItem? ToggleAddressFavoriteMenuItem;
     private MenuItem? ToggleNameFavoriteMenuItem;
+    private MenuItem? OpenServerUrlMenuItem;
+    private MenuItem? CopyServerUrlMenuItem;
 
     // Observable collections for data binding
     public ObservableCollection<ServerViewModel> Servers { get; private set; } = [];
@@ -278,6 +280,16 @@ public partial class MainWindow : Window
         var downloadItem = new MenuItem { Header = "_Download WADs..." };
         downloadItem.Click += DownloadWadsMenuItem_Click;
         contextMenu.Items.Add(downloadItem);
+
+        contextMenu.Items.Add(new Separator());
+
+        OpenServerUrlMenuItem = new MenuItem { Header = "_Open URL" };
+        OpenServerUrlMenuItem.Click += OpenServerUrlMenuItem_Click;
+        contextMenu.Items.Add(OpenServerUrlMenuItem);
+
+        CopyServerUrlMenuItem = new MenuItem { Header = "Copy _URL" };
+        CopyServerUrlMenuItem.Click += CopyServerUrlMenuItem_Click;
+        contextMenu.Items.Add(CopyServerUrlMenuItem);
 
         contextMenu.Items.Add(new Separator());
 
@@ -1904,7 +1916,13 @@ public partial class MainWindow : Window
 
     private void DisplayServerDetails(ServerInfo server)
     {
-        if (ServerDetailsText == null) return;
+        if (ServerDetailsText == null
+            || ServerWebsiteRow == null
+            || ServerWebsiteLinkButton == null
+            || ServerWebsiteLinkText == null)
+        {
+            return;
+        }
 
         var sb = new System.Text.StringBuilder();
         var version = string.IsNullOrWhiteSpace(server.GameVersion) ? "Unknown" : server.GameVersion;
@@ -1926,9 +1944,20 @@ public partial class MainWindow : Window
         sb.AppendLine($"IWAD: {server.IWAD}");
 
         if (server.IsPassworded) sb.AppendLine("Password Protected: Yes");
-        if (!string.IsNullOrWhiteSpace(server.Website)) sb.AppendLine($"URL: {server.Website}");
 
-        ServerDetailsText.Text = sb.ToString();
+        // AppendLine leaves a terminal line break after the final detail. Trim
+        // it so the URL row begins immediately below the preceding value.
+        ServerDetailsText.Text = sb.ToString().TrimEnd('\r', '\n');
+        if (TryGetServerWebsiteUri(server, out var websiteUri))
+        {
+            ServerWebsiteLinkText.Text = websiteUri.AbsoluteUri;
+            ServerWebsiteRow.IsVisible = true;
+        }
+        else
+        {
+            ServerWebsiteLinkText.Text = string.Empty;
+            ServerWebsiteRow.IsVisible = false;
+        }
     }
 
     private void DisplayWadList(ServerInfo server)
@@ -2628,18 +2657,17 @@ public partial class MainWindow : Window
     {
         if (_selectedServer == null) return;
 
-        var missingWads = _selectedServer.PWADs
-            .Where(w => _wadManager.FindWad(w.Name) == null)
-            .Select(w => w.Name)
-            .ToList();
+        // Use the shared missing-WAD policy so this action can fetch free
+        // IWADs (including the Freedoom family), while commercial IWADs
+        // remain intentionally excluded from automatic download.
+        var wadInfos = _wadManager.GetMissingWadsForServer(_selectedServer);
 
-        if (missingWads.Count == 0)
+        if (wadInfos.Count == 0)
         {
-            _logger.Info("All WADs are already available");
+            _logger.Info("All downloadable WADs are already available");
             return;
         }
 
-        var wadInfos = missingWads.Select(w => new WadInfo(w)).ToList();
         var downloader = new WadDownloader(_settings.Settings.DownloadSites.Count > 0
             ? _settings.Settings.DownloadSites
             : null);
@@ -2687,6 +2715,82 @@ public partial class MainWindow : Window
             await clipboard.SetTextAsync(address);
             _logger.Info($"Copied server address to clipboard: {address}");
         }
+    }
+
+    private void OpenServerUrlMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        OpenSelectedServerWebsite();
+    }
+
+    private async void CopyServerUrlMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        if (!TryGetSelectedServerWebsiteUri(out var websiteUri))
+        {
+            return;
+        }
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard == null)
+        {
+            return;
+        }
+
+        var websiteUrl = websiteUri.AbsoluteUri;
+        await clipboard.SetTextAsync(websiteUrl);
+        _logger.Info($"Copied server URL to clipboard: {websiteUrl}");
+    }
+
+    private void ServerWebsiteLinkButton_Click(object? sender, RoutedEventArgs e)
+    {
+        OpenSelectedServerWebsite();
+    }
+
+    private void OpenSelectedServerWebsite()
+    {
+        if (!TryGetSelectedServerWebsiteUri(out var websiteUri))
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = websiteUri.AbsoluteUri,
+                UseShellExecute = true
+            });
+            _logger.Info($"Opened server URL: {websiteUri.AbsoluteUri}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(
+                $"Failed to open server URL {websiteUri.AbsoluteUri}: {ex.Message}");
+        }
+    }
+
+    private bool TryGetSelectedServerWebsiteUri(out Uri websiteUri)
+    {
+        if (_selectedServer != null)
+        {
+            return TryGetServerWebsiteUri(_selectedServer, out websiteUri);
+        }
+
+        websiteUri = null!;
+        return false;
+    }
+
+    private static bool TryGetServerWebsiteUri(ServerInfo server, out Uri websiteUri)
+    {
+        if (Uri.TryCreate(server.Website?.Trim(), UriKind.Absolute, out var parsedUri)
+            && (parsedUri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                || parsedUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            websiteUri = parsedUri;
+            return true;
+        }
+
+        websiteUri = null!;
+        return false;
     }
 
     private async void RefreshServerMenuItem_Click(object? sender, RoutedEventArgs e)
@@ -2996,6 +3100,17 @@ public partial class MainWindow : Window
 
     private void ServerContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        var hasServerWebsite = TryGetSelectedServerWebsiteUri(out _);
+        if (OpenServerUrlMenuItem != null)
+        {
+            OpenServerUrlMenuItem.IsEnabled = hasServerWebsite;
+        }
+
+        if (CopyServerUrlMenuItem != null)
+        {
+            CopyServerUrlMenuItem.IsEnabled = hasServerWebsite;
+        }
+
         if (_selectedServer != null)
         {
             if (ToggleAddressFavoriteMenuItem != null)
@@ -3201,7 +3316,28 @@ public partial class MainWindow : Window
             }
 
         var (_, missingWads) = launcher.CheckRequiredWads(server);
-        var (requiredWadsNeedingDownload, requiredCacheChanged) = launcher.ResolveMissingWadsByHash(missingWads);
+        var missingRestrictedIwads = missingWads
+            .Where(missing => WadManager.IsForbiddenWad(missing.Name))
+            .Select(missing => Path.GetFileName(missing.Name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (missingRestrictedIwads.Count > 0)
+        {
+            var missingIwadList = string.Join(", ", missingRestrictedIwads);
+            await ShowMessageAsync(
+                "Commercial IWAD Required",
+                $"This server requires {missingIwadList}.\n\n"
+                + "ZScape cannot download commercial IWADs automatically. "
+                + "Place your legal copy in the configured WAD folder or "
+                + "Zandronum folder, then try again.");
+            _logger.Warning(
+                $"Server join requires a locally supplied commercial IWAD: "
+                + missingIwadList);
+            return;
+        }
+
+        var (requiredWadsNeedingDownload, requiredCacheChanged) =
+            launcher.ResolveMissingWadsByHash(missingWads);
         AddPendingWads(requiredWadsNeedingDownload);
         if (requiredCacheChanged)
         {
@@ -4796,7 +4932,7 @@ public partial class MainWindow : Window
             {
                 var openPage = await ShowConfirmDialogAsync(
                     "Update Available",
-                    $"A new version (v{e.NewVersion}) is available!\n\nCurrent version: v{e.CurrentVersion}\n\nWould you like to view the release page?");
+                    $"A new version (v{e.NewVersion}) is available.\n\nCurrent version: v{e.CurrentVersion}\n\nWould you like to view the release page?");
 
                 if (openPage)
                 {

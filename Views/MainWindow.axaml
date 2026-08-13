@@ -20,6 +20,21 @@
         <Style Selector="ToggleButton:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="#3A7033"/>
         </Style>
+        <Style Selector="Button.server-url-link">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style Selector="Button.server-url-link:pointerover">
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <Style Selector="Button.server-url-link:pressed">
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
     </Window.Styles>
     
     <DockPanel>
@@ -135,7 +150,24 @@
                     <DockPanel>
                         <TextBlock DockPanel.Dock="Top" Classes="header" Text="Server Details" />
                         <ScrollViewer>
-                            <TextBlock x:Name="ServerDetailsText" TextWrapping="Wrap" />
+                            <StackPanel>
+                                <TextBlock x:Name="ServerDetailsText" TextWrapping="Wrap" />
+                                <Grid x:Name="ServerWebsiteRow"
+                                      ColumnDefinitions="Auto,*"
+                                      IsVisible="False">
+                                    <TextBlock Text="URL: " VerticalAlignment="Top" />
+                                    <Button x:Name="ServerWebsiteLinkButton"
+                                            Grid.Column="1"
+                                            Classes="server-url-link"
+                                            ToolTip.Tip="Open server URL"
+                                            Click="ServerWebsiteLinkButton_Click">
+                                        <TextBlock x:Name="ServerWebsiteLinkText"
+                                                   Foreground="{DynamicResource AccentBrush}"
+                                                   TextDecorations="Underline"
+                                                   TextWrapping="WrapWithOverflow" />
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
                         </ScrollViewer>
                     </DockPanel>
                 </Border>

@@ -103,7 +103,7 @@ public partial class FirstTimeSetupDialog : Window
         if (_observedLatestStableRelease != null)
         {
             LatestStableTextBlock.Text =
-                $"Latest stable observed from {_observedStableServerCount} live stable server(s): {_observedLatestStableRelease.Version} ({_observedLatestStableRelease.PlatformLabel}). ZScape can download that archive automatically or open the official download in your browser.";
+                $"Latest stable seen on {_observedStableServerCount} live stable server(s): {_observedLatestStableRelease.Version} ({_observedLatestStableRelease.PlatformLabel}). Download it in ZScape or open the official page.";
             DownloadStableButton.IsEnabled = true;
             return;
         }
@@ -111,7 +111,7 @@ public partial class FirstTimeSetupDialog : Window
         if (_stableReleaseService.IsStableReleasePlatformSupported(out var errorMessage))
         {
             LatestStableTextBlock.Text =
-                "ZScape can refresh the master server to discover the latest stable version currently used by live servers, then either download it automatically or open the official archive in your browser.";
+                "Refresh the master server to find the stable version used by live servers, then download it in ZScape or open the official page.";
             DownloadStableButton.IsEnabled = true;
             return;
         }
@@ -1057,8 +1057,8 @@ public partial class FirstTimeSetupDialog : Window
         var dialog = new Window
         {
             Title = "Download Latest Stable",
-            Width = 560,
-            Height = 240,
+            Width = 620,
+            Height = 230,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             CanResize = false,
             Content = new StackPanel
@@ -1069,7 +1069,7 @@ public partial class FirstTimeSetupDialog : Window
                 {
                     new TextBlock
                     {
-                        Text = "Do you want to download the latest stable version from the website, or automatically?\n\nAutomatic first refreshes the master server to find the newest stable version currently used by live servers, keeps those results for the main server list after setup, then downloads the matching archive directly. Website uses the same discovered version but lets your browser handle the download.",
+                        Text = "Choose how to get the latest stable Zandronum build.\n\nDownload in ZScape refreshes the master server, finds the version used by live servers, and downloads it. Open Download Page uses the same version in your browser.",
                         TextWrapping = Avalonia.Media.TextWrapping.Wrap
                     },
                     new StackPanel
@@ -1080,8 +1080,8 @@ public partial class FirstTimeSetupDialog : Window
                         Children =
                         {
                             new Button { Content = "Cancel", Width = 90 },
-                            new Button { Content = "Website", Width = 100 },
-                            new Button { Content = "Automatic", Width = 100 }
+                            new Button { Content = "Open Download Page", Width = 170 },
+                            new Button { Content = "Download in ZScape", Width = 170 }
                         }
                     }
                 }

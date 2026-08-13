@@ -12,6 +12,15 @@ public class WadManager
 {
     private static WadManager? _instance;
     public static WadManager Instance => _instance ??= new WadManager();
+
+    /// <summary>
+    /// Freedoom game-data IWAD filenames. Unlike commercial IWADs, these are
+    /// eligible for automatic source discovery and download.
+    /// </summary>
+    public static readonly HashSet<string> FreedoomIwadFiles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "freedoom1.wad", "freedoom2.wad", "freedm.wad"
+    };
     
     private readonly ConcurrentDictionary<string, string> _wadCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _fileNameIndex = new(StringComparer.OrdinalIgnoreCase);
@@ -21,17 +30,22 @@ public class WadManager
     private readonly LoggingService _logger = LoggingService.Instance;
     
     /// <summary>
-    /// Forbidden WAD names that should never be downloaded (commercial IWADs, etc.).
+    /// WAD names that should never be downloaded automatically, such as
+    /// commercial IWADs and restricted expansion data.
+    ///
+    /// The Freedoom family is deliberately not listed here: freedoom1.wad,
+    /// freedoom2.wad, and freedm.wad are free game-data IWADs and are eligible
+    /// for normal source discovery and download.
     /// </summary>
     public static readonly HashSet<string> ForbiddenWads = new(StringComparer.OrdinalIgnoreCase)
     {
         "attack", "blacktwr", "bloodsea", "canyon", "catwalk", "combine",
-        "doom", "doom1", "doom2", "doomu", "freedoom1", "freedoom2",
+        "doom", "doom1", "doom2", "doomu",
         "fistula", "garrison", "geryon", "heretic", "hexen", "hexdd",
         "manor", "mephisto", "minos", "nessus", "paradox", "plutonia",
         "subspace", "subterra", "teeth", "tnt", "ttrap", "sigil_shreds",
         "sigil_shreds_compat", "strife1", "vesperas", "virgil", "voices",
-        "chex", "chex3", "hacx", "freedm", "nerve"
+        "chex", "chex3", "hacx", "nerve"
     };
     
     /// <summary>
@@ -332,7 +346,7 @@ public class WadManager
         {
             var baseName = Path.GetFileNameWithoutExtension(wadName);
             
-            // Skip forbidden WADs
+            // Skip commercial or otherwise restricted WADs.
             if (ForbiddenWads.Contains(baseName))
                 continue;
             
@@ -364,12 +378,22 @@ public class WadManager
     }
     
     /// <summary>
-    /// Checks if a WAD name is forbidden (commercial IWAD, etc.).
+    /// Checks if a WAD name is excluded from automatic download.
     /// </summary>
     public static bool IsForbiddenWad(string wadName)
     {
         var baseName = Path.GetFileNameWithoutExtension(wadName);
         return ForbiddenWads.Contains(baseName);
+    }
+
+    /// <summary>
+    /// Checks whether a filename identifies one of Freedoom's downloadable
+    /// game-data IWADs.
+    /// </summary>
+    public static bool IsFreedoomIwad(string wadName)
+    {
+        var fileName = Path.GetFileName(wadName);
+        return FreedoomIwadFiles.Contains(fileName);
     }
 
     /// <summary>

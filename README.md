@@ -29,8 +29,8 @@ build. ZScape runs on Windows, Linux, and macOS and currently targets .NET 10.
 - Launch offline games or host a server from saved launch profiles.
 - Install required stable and testing builds and manage installed testing
   versions.
-- Use the standard desktop layout or Big UI, an HTPC-style layout with keyboard
-  and SDL game-controller navigation.
+- Use the standard desktop layout or Big UI, a controller-friendly layout with
+  arrow-key and SDL game-controller navigation.
 - Choose a dark or light theme during first-run setup.
 
 ### Download and maintain files
