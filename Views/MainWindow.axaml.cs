@@ -2533,6 +2533,17 @@ public partial class MainWindow : Window
         await dialog.ShowDialog(this);
     }
 
+    private async void ZandronumConfigurationManagerMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var dialog = new ZandronumConfigurationManagerDialog();
+        await dialog.ShowDialog(this);
+    }
+
+    private async void ThemeEditorMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var dialog = new ThemeEditorDialog();
+        await dialog.ShowDialog(this);
+    }
 
     private async void PreferencesMenuItem_Click(object? sender, RoutedEventArgs e)
     {

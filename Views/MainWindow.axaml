@@ -66,10 +66,14 @@
                 <MenuItem Header="_Auto-Refresh" x:Name="AutoRefreshMenuItem" Click="AutoRefreshMenuItem_Click" />
                 <MenuItem Header="Auto-Refresh _Favorites" x:Name="AutoRefreshFavoritesOnlyMenuItem" Click="AutoRefreshFavoritesOnlyMenuItem_Click" />
                 <Separator />
+                <MenuItem Header="_Preferences..." Click="PreferencesMenuItem_Click" />
+            </MenuItem>
+            <MenuItem Header="_Tools">
                 <MenuItem Header="_WAD Browser..." Click="WadBrowserMenuItem_Click" />
                 <MenuItem Header="_Testing Version Manager..." Click="TestingVersionsMenuItem_Click" />
+                <MenuItem Header="Zandronum _Configuration Manager..." Click="ZandronumConfigurationManagerMenuItem_Click" />
                 <Separator />
-                <MenuItem Header="_Preferences..." Click="PreferencesMenuItem_Click" />
+                <MenuItem Header="_Theme Editor..." Click="ThemeEditorMenuItem_Click" />
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="_About ZScape" Click="AboutMenuItem_Click" />

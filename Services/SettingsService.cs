@@ -100,6 +100,12 @@ public class SettingsService
         settings.FavoriteServerNameRules = NormalizeRules(settings.FavoriteServerNameRules);
         settings.HiddenServerNameRules = NormalizeRules(settings.HiddenServerNameRules);
         settings.SavedLaunchGameConfigs ??= [];
+        settings.ZandronumConfigSync ??= new ZandronumConfigSyncSettings();
+        settings.ZandronumConfigSync.SelectedSections = (settings.ZandronumConfigSync.SelectedSections ?? [])
+            .Where(section => !string.IsNullOrWhiteSpace(section))
+            .Select(section => section.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         NormalizeLaunchConfig(settings.LastLaunchGameConfig);
         foreach (var savedLaunchConfig in settings.SavedLaunchGameConfigs)
             NormalizeLaunchConfig(savedLaunchConfig.Config);
@@ -570,6 +576,14 @@ public class AppSettings
     // Zandronum executable paths
     public string ZandronumPath { get; set; } = string.Empty;
     public string ZandronumTestingPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Controls the optional, post-exit synchronization of
+    /// zandronum-{current-user}.ini files between configured Zandronum
+    /// versions. It is disabled by default and never watches arbitrary
+    /// Zandronum processes.
+    /// </summary>
+    public ZandronumConfigSyncSettings ZandronumConfigSync { get; set; } = new();
     
     // Server query settings
     /// <summary>Interval in milliseconds between sending server queries. Lower = faster but more aggressive.</summary>

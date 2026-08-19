@@ -84,7 +84,8 @@ public class GameLauncher : IDisposable
             
             LoggingService.Instance.Verbose($"Launching: {exePath} {args}");
             
-            Process.Start(startInfo);
+            var launchedProcess = Process.Start(startInfo);
+            ZandronumConfigSyncService.Instance.TrackLaunchedProcess(launchedProcess, exePath);
             
             // Record connection in history
             SettingsService.Instance.RecordConnection(
@@ -1415,7 +1416,8 @@ public class GameLauncher : IDisposable
                 UseShellExecute = false,
                 WorkingDirectory = Path.GetDirectoryName(exePath)
             };
-            Process.Start(startInfo);
+            var launchedProcess = Process.Start(startInfo);
+            ZandronumConfigSyncService.Instance.TrackLaunchedProcess(launchedProcess, exePath);
 
             var msg = "Launched Zandronum in offline mode";
             LaunchSuccess?.Invoke(this, msg);
@@ -1535,7 +1537,8 @@ public class GameLauncher : IDisposable
                 UseShellExecute = false,
                 WorkingDirectory = Path.GetDirectoryName(resolvedExePath)
             };
-            Process.Start(startInfo);
+            var launchedProcess = Process.Start(startInfo);
+            ZandronumConfigSyncService.Instance.TrackLaunchedProcess(launchedProcess, resolvedExePath);
 
             var mode = isDedicated ? "dedicated server" : "listen server";
             var msg = $"Launched Zandronum as {mode}";

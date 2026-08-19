@@ -1,0 +1,127 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
+        x:Class="ZScape.Views.ZandronumConfigurationManagerDialog"
+        x:CompileBindings="False"
+        Title="Zandronum Configuration Manager"
+        Width="1060" Height="700"
+        MinWidth="760" MinHeight="500"
+        WindowStartupLocation="CenterOwner">
+
+    <Grid Margin="12" RowDefinitions="Auto,Auto,*,Auto">
+        <StackPanel Grid.Row="0" Spacing="3" Margin="0,0,0,10">
+            <TextBlock Text="Zandronum Configuration Manager" FontSize="18" FontWeight="Bold" />
+            <TextBlock x:Name="DescriptionText"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+        </StackPanel>
+
+        <Border Grid.Row="1"
+                Margin="0,0,0,10"
+                Padding="10,8"
+                Background="{DynamicResource SecondaryBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="1"
+                CornerRadius="3">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <CheckBox Grid.Column="0"
+                          x:Name="AutoSyncCheckBox"
+                          Content="Automatically sync after a ZScape-launched version closes"
+                          VerticalAlignment="Center"
+                          Margin="0,0,12,0"
+                          IsCheckedChanged="AutoSyncCheckBox_IsCheckedChanged" />
+                <TextBlock Grid.Column="1"
+                           Text="Only processes launched by ZScape are monitored; no system-wide process watcher is used."
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           Margin="0,0,12,0"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <Button Grid.Column="2"
+                        x:Name="RefreshButton"
+                        Content="Refresh Versions"
+                        Click="RefreshButton_Click"
+                        MinWidth="118" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2" ColumnDefinitions="1.2*,*" Margin="0,0,0,10">
+            <Grid Grid.Column="0" RowDefinitions="Auto,*,Auto" Margin="0,0,10,0">
+                <TextBlock Grid.Row="0"
+                           Text="Detected Zandronum versions"
+                           FontWeight="Bold"
+                           Margin="0,0,0,6" />
+                <controls:ResizableListView Grid.Row="1"
+                                            x:Name="VersionListView"
+                                            Margin="0,0,0,6" />
+                <TextBlock Grid.Row="2"
+                           x:Name="VersionListHint"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+            </Grid>
+
+            <Border Grid.Column="1"
+                    Padding="10"
+                    Background="{DynamicResource SecondaryBackgroundBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="3">
+                <Grid RowDefinitions="Auto,Auto,*,Auto">
+                    <TextBlock Grid.Row="0" Text="Sync scope" FontWeight="Bold" Margin="0,0,0,8" />
+
+                    <StackPanel Grid.Row="1" Spacing="4" Margin="0,0,0,8">
+                        <CheckBox x:Name="SyncWholeFileCheckBox"
+                                  Content="Sync entire INI file (replace every setting)"
+                                  IsCheckedChanged="SyncWholeFileCheckBox_IsCheckedChanged" />
+                        <TextBlock Text="Otherwise select only the INI sections that should follow the launched version. Existing target files are backed up before each write."
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,3,0,0">
+                            <Button x:Name="SelectCommonButton"
+                                    Content="Select Common Settings"
+                                    Click="SelectCommonButton_Click" />
+                            <Button x:Name="ClearSectionsButton"
+                                    Content="Clear Selection"
+                                    Click="ClearSectionsButton_Click" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="2"
+                                  x:Name="SectionsScrollViewer"
+                                  VerticalScrollBarVisibility="Visible"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  Margin="0,0,0,8">
+                        <StackPanel x:Name="SectionsPanel" Spacing="2" />
+                    </ScrollViewer>
+
+                    <TextBlock Grid.Row="3"
+                               x:Name="ScopeSummaryText"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto,Auto">
+            <TextBlock Grid.Column="0"
+                       x:Name="StatusText"
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap" />
+            <Button Grid.Column="1"
+                    x:Name="CompareButton"
+                    Content="Compare"
+                    Click="CompareButton_Click"
+                    Margin="0,0,8,0"
+                    MinWidth="84" />
+            <Button Grid.Column="2"
+                    x:Name="SyncButton"
+                    Content="Sync Selected Version to All"
+                    Click="SyncButton_Click"
+                    Margin="0,0,8,0"
+                    MinWidth="184" />
+            <Button Grid.Column="3"
+                    Content="Close"
+                    Click="CloseButton_Click"
+                    MinWidth="72" />
+        </Grid>
+    </Grid>
+</Window>
