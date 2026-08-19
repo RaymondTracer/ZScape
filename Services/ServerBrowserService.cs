@@ -28,6 +28,11 @@ public class ServerBrowserService : IDisposable
     }
 
     public event EventHandler<ServerInfo>? ServerUpdated;
+    /// <summary>
+    /// Raised when the address-backed server collection changes as a whole,
+    /// including when a master-server response creates pending query entries.
+    /// </summary>
+    public event EventHandler? ServerListChanged;
     public event EventHandler? RefreshStarted;
     public event EventHandler<int>? RefreshProgress;
     public event EventHandler<RefreshCompletedEventArgs>? RefreshCompleted;
@@ -132,6 +137,11 @@ public class ServerBrowserService : IDisposable
                 _servers[key] = new ServerInfo { EndPoint = endpoint, IsRefreshPending = true };
             }
 
+            // The master-server list is now known, even though each endpoint
+            // still needs a direct query. Let the UI show one address-backed
+            // <Refreshing> entry per queued endpoint immediately.
+            ServerListChanged?.Invoke(this, EventArgs.Empty);
+
             // Sort endpoints: favorites first, then manual servers, then rest
             var favorites = _settings.Settings.FavoriteServers;
             var manualAddresses = new HashSet<string>(manualEndpoints.Select(e => e.ToString()));
@@ -167,11 +177,7 @@ public class ServerBrowserService : IDisposable
         }
         finally
         {
-            // Clear all pending flags - refresh is complete (successful or not)
-            foreach (var server in _servers.Values)
-            {
-                server.IsRefreshPending = false;
-            }
+            FinalizePendingServers();
             IsRefreshing = false;
         }
     }
@@ -219,8 +225,21 @@ public class ServerBrowserService : IDisposable
                     {
                         existingServer.IsRefreshPending = true;
                     }
+                    else
+                    {
+                        // A favourite can outlive the in-memory browser list.
+                        // Give it the same address-backed pending entry as a
+                        // master-server endpoint until its query completes.
+                        _servers[favKey] = new ServerInfo
+                        {
+                            EndPoint = endpoint,
+                            IsRefreshPending = true
+                        };
+                    }
                 }
             }
+
+            ServerListChanged?.Invoke(this, EventArgs.Empty);
 
             await QueryAllServersAsync(endpoints, _refreshCts.Token);
 
@@ -242,14 +261,7 @@ public class ServerBrowserService : IDisposable
         }
         finally
         {
-            // Clear pending flags for favorites
-            foreach (var favKey in favoriteAddresses)
-            {
-                if (_servers.TryGetValue(favKey, out var server))
-                {
-                    server.IsRefreshPending = false;
-                }
-            }
+            FinalizePendingServers();
             IsRefreshing = false;
         }
     }
@@ -293,95 +305,108 @@ public class ServerBrowserService : IDisposable
     /// </summary>
     public async Task RefreshServerAsync(ServerInfo server, CancellationToken cancellationToken = default)
     {
-        var settings = _settings.Settings;
-        int retryAttempts = Math.Max(1, settings.QueryRetryAttempts);
-        int retryDelayMs = Math.Max(100, settings.QueryRetryDelayMs);
-        
-        ServerInfo? result = null;
-        
-        for (int attempt = 1; attempt <= retryAttempts; attempt++)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                break;
-            
-            using var queryClient = new ServerQueryClient();
-            result = await queryClient.QueryServerAsync(server.EndPoint, cancellationToken);
-            
-            if (result != null && result.IsOnline && result.IsQueried)
-                break; // Success
-            
-            if (attempt < retryAttempts)
-            {
-                _logger.Verbose($"Retry {attempt}/{retryAttempts} for {server.EndPoint} in {retryDelayMs}ms");
-                await Task.Delay(retryDelayMs, cancellationToken);
-            }
-        }
-        
-        if (result != null && result.IsOnline && result.IsQueried)
-        {
-            result.ConsecutiveFailures = 0;
-            var key = server.EndPoint.ToString();
-            _servers[key] = result;
-            ServerUpdated?.Invoke(this, result);
-        }
-        else
-        {
-            // Query failed - update failure count on existing entry
-            var key = server.EndPoint.ToString();
-            if (_servers.TryGetValue(key, out var existingServer))
-            {
-                existingServer.ConsecutiveFailures++;
-                ServerUpdated?.Invoke(this, existingServer);
-            }
-        }
+        await RefreshServerAsync(server.EndPoint, server, cancellationToken);
     }
-    
+
     /// <summary>
     /// Queries a server by endpoint address (for manual server adding) with retry logic.
     /// </summary>
     public async Task RefreshServerAsync(IPEndPoint endpoint, CancellationToken cancellationToken = default)
     {
+        await RefreshServerAsync(
+            endpoint,
+            initialServer: null,
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Refreshes a single address while keeping its existing list entry stable.
+    /// A newly supplied endpoint is represented by the same address-backed
+    /// pending entry used for master-server discovery.
+    /// </summary>
+    private async Task RefreshServerAsync(
+        IPEndPoint endpoint,
+        ServerInfo? initialServer,
+        CancellationToken cancellationToken)
+    {
         var settings = _settings.Settings;
         int retryAttempts = Math.Max(1, settings.QueryRetryAttempts);
         int retryDelayMs = Math.Max(100, settings.QueryRetryDelayMs);
         
-        ServerInfo? result = null;
-        
-        for (int attempt = 1; attempt <= retryAttempts; attempt++)
+        var key = endpoint.ToString();
+        var pendingServer = initialServer == null
+            ? _servers.GetOrAdd(key, _ => new ServerInfo { EndPoint = endpoint })
+            : _servers.GetOrAdd(key, initialServer);
+        pendingServer.IsRefreshPending = true;
+        ServerUpdated?.Invoke(this, pendingServer);
+
+        try
         {
-            if (cancellationToken.IsCancellationRequested)
-                break;
-            
-            using var queryClient = new ServerQueryClient();
-            result = await queryClient.QueryServerAsync(endpoint, cancellationToken);
-            
-            if (result != null && result.IsOnline && result.IsQueried)
-                break; // Success
-            
-            if (attempt < retryAttempts)
+            ServerInfo? result = null;
+
+            for (int attempt = 1; attempt <= retryAttempts; attempt++)
             {
-                _logger.Verbose($"Retry {attempt}/{retryAttempts} for {endpoint} in {retryDelayMs}ms");
-                await Task.Delay(retryDelayMs, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using var queryClient = new ServerQueryClient();
+                result = await queryClient.QueryServerAsync(endpoint, cancellationToken);
+
+                if (result != null && result.IsOnline && result.IsQueried)
+                    break; // Success
+
+                if (attempt < retryAttempts)
+                {
+                    _logger.Verbose($"Retry {attempt}/{retryAttempts} for {endpoint} in {retryDelayMs}ms");
+                    await Task.Delay(retryDelayMs, cancellationToken);
+                }
             }
+
+            CompleteSingleServerRefresh(key, result, countFailure: true);
         }
-        
+        catch (OperationCanceledException)
+        {
+            // A user-cancelled direct refresh is not a failed server. Restore
+            // the old row if there is one, or remove a placeholder-only row.
+            CompleteSingleServerRefresh(key, result: null, countFailure: false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Verbose($"Query failed for {endpoint}: {ex.Message}");
+            CompleteSingleServerRefresh(key, result: null, countFailure: true);
+        }
+    }
+
+    /// <summary>
+    /// Finishes a one-address refresh without ever retaining a blank endpoint
+    /// as though it were a real server row.
+    /// </summary>
+    private void CompleteSingleServerRefresh(string key, ServerInfo? result, bool countFailure)
+    {
         if (result != null && result.IsOnline && result.IsQueried)
         {
             result.ConsecutiveFailures = 0;
-            var key = endpoint.ToString();
+            result.IsRefreshPending = false;
             _servers[key] = result;
             ServerUpdated?.Invoke(this, result);
+            return;
         }
-        else
+
+        if (!_servers.TryGetValue(key, out var existingServer))
+            return;
+
+        existingServer.IsRefreshPending = false;
+
+        if (!existingServer.IsQueried)
         {
-            // Query failed - update failure count on existing entry
-            var key = endpoint.ToString();
-            if (_servers.TryGetValue(key, out var existingServer))
-            {
-                existingServer.ConsecutiveFailures++;
-                ServerUpdated?.Invoke(this, existingServer);
-            }
+            if (_servers.TryRemove(key, out _))
+                ServerListChanged?.Invoke(this, EventArgs.Empty);
+            return;
         }
+
+        if (countFailure)
+            existingServer.ConsecutiveFailures++;
+
+        ServerUpdated?.Invoke(this, existingServer);
     }
 
     /// <summary>
@@ -436,6 +461,17 @@ public class ServerBrowserService : IDisposable
                     // Failed - increment failure count on existing entry
                     if (_servers.TryGetValue(key, out var existingServer))
                     {
+                        // Fresh master-list entries have no usable data to
+                        // keep after their query fails. Remove their temporary
+                        // <Refreshing> row instead of turning it into a blank
+                        // pseudo-server.
+                        if (!existingServer.IsQueried)
+                        {
+                            if (_servers.TryRemove(key, out _))
+                                ServerListChanged?.Invoke(this, EventArgs.Empty);
+                            continue;
+                        }
+
                         existingServer.ConsecutiveFailures++;
                         existingServer.IsRefreshPending = false;
                         
@@ -545,6 +581,36 @@ public class ServerBrowserService : IDisposable
             // Release semaphore slot for next query
             semaphore.Release();
         }
+    }
+
+    /// <summary>
+    /// Completes the visual lifecycle of pending entries after a refresh ends.
+    /// Real, previously queried servers keep their last known data; unresolved
+    /// placeholder-only endpoints disappear because there is no server data to
+    /// show once they are no longer queued or refreshing.
+    /// </summary>
+    private void FinalizePendingServers()
+    {
+        var changed = false;
+        foreach (var entry in _servers.ToArray())
+        {
+            var server = entry.Value;
+            if (!server.IsRefreshPending)
+                continue;
+
+            if (!server.IsQueried)
+            {
+                changed |= _servers.TryRemove(entry.Key, out _);
+            }
+            else
+            {
+                server.IsRefreshPending = false;
+                changed = true;
+            }
+        }
+
+        if (changed)
+            ServerListChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -866,6 +932,10 @@ public class ServerBrowserService : IDisposable
                     _servers[key] = new ServerInfo { EndPoint = endpoint, IsRefreshPending = true };
                 }
             }
+
+            // The saved queue has now been reconstructed. Expose every
+            // address-backed pending entry before its individual query returns.
+            ServerListChanged?.Invoke(this, EventArgs.Empty);
             
             // Query the pending servers
             await QueryAllServersAsync(pendingServers, _refreshCts.Token);
@@ -886,6 +956,7 @@ public class ServerBrowserService : IDisposable
         }
         finally
         {
+            FinalizePendingServers();
             IsRefreshing = false;
         }
     }

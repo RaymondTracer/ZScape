@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
@@ -67,6 +67,10 @@ public partial class MainWindow : Window
     private DateTime? _lastRefreshTime;
 
     private ServerInfo? _selectedServer;
+    // A context menu belongs to a specific server row.  Keeping this bit of
+    // pointer context prevents a stale selection from making a right-click on
+    // the empty list canvas look like it applies to that old server.
+    private bool? _serverContextMenuTargetIsRow;
     private readonly List<ListViewSortDescriptor> _sortDescriptors =
     [
         new(2, PlayersColumnKey, false),
@@ -730,6 +734,7 @@ public partial class MainWindow : Window
         _browserService.RefreshProgress += BrowserService_RefreshProgress;
         _browserService.RefreshCompleted += BrowserService_RefreshCompleted;
         _browserService.ServerUpdated += BrowserService_ServerUpdated;
+        _browserService.ServerListChanged += BrowserService_ServerListChanged;
         _logger.LogAdded += Logger_LogAdded;
 
         // Log flush timer - uses DispatcherTimer to integrate with UI event loop
@@ -1488,6 +1493,17 @@ public partial class MainWindow : Window
             }
         }
 
+        // ResizableListView deliberately keeps its selection state while its
+        // ItemsSource changes.  If filtering or a refresh removed the selected
+        // view model, however, there is no longer a highlighted row to which
+        // the detail panes can belong.  Clear both sides together instead of
+        // leaving the previous server's information visible.
+        if (ServerListView.SelectedItem is not ServerViewModel selectedVm
+            || !Servers.Contains(selectedVm))
+        {
+            ClearServerSelectionAndDetails();
+        }
+
         UpdateStatusBar();
     }
 
@@ -1505,6 +1521,22 @@ public partial class MainWindow : Window
         {
             // Hide offline servers
             if (!s.IsOnline) return false;
+
+            // Endpoint discovery completes before individual server queries.
+            // At this stage we only know the address, so show the temporary
+            // <Refreshing> row instead of treating its default values as real
+            // empty/full/passworded server data. Favorites and an address
+            // search can still be evaluated accurately.
+            if (s.IsRefreshPending)
+            {
+                if (favoritesOnly && !GetFavoriteMatch(s).IsFavorite)
+                    return false;
+
+                return string.IsNullOrEmpty(searchText)
+                    || TextMatchUtility.IsLooseSearchMatch(
+                        $"{s.Address}:{s.Port}",
+                        searchText);
+            }
 
             // Hidden name rules apply globally before other filters.
             if (IsServerHiddenByRule(s)) return false;
@@ -1896,7 +1928,10 @@ public partial class MainWindow : Window
         if (PlayerCountLabel != null)
         {
             var totalPlayers = Servers.Sum(s => s.CurrentPlayers);
-            var totalBots = Servers.Sum(s => s.BotCount);
+            // Display cells are intentionally blank while an endpoint is
+            // pending. Totals must continue to use the underlying numeric
+            // server data rather than the presentation string.
+            var totalBots = Servers.Sum(s => s.Server.BotCount);
             var totalHumans = totalPlayers - totalBots;
 
             if (totalBots > 0)
@@ -1921,6 +1956,15 @@ public partial class MainWindow : Window
             || ServerWebsiteLinkButton == null
             || ServerWebsiteLinkText == null)
         {
+            return;
+        }
+
+        if (server.IsRefreshPending)
+        {
+            ServerDetailsText.Text =
+                $"Server: <Refreshing>\nAddress: {server.Address}:{server.Port}\nStatus: Waiting for server response...";
+            ServerWebsiteLinkText.Text = string.Empty;
+            ServerWebsiteRow.IsVisible = false;
             return;
         }
 
@@ -1960,9 +2004,61 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Clears every panel that is derived from a selected server.  These panes
+    /// must never retain content once the corresponding list row is gone.
+    /// </summary>
+    private void ClearSelectedServerDetails()
+    {
+        _selectedServer = null;
+
+        if (ServerDetailsText != null)
+            ServerDetailsText.Text = string.Empty;
+
+        if (ServerWebsiteLinkText != null)
+            ServerWebsiteLinkText.Text = string.Empty;
+
+        if (ServerWebsiteRow != null)
+            ServerWebsiteRow.IsVisible = false;
+
+        Wads.Clear();
+        Players.Clear();
+
+        if (WadsLabel != null)
+            WadsLabel.Text = "WADs";
+
+        if (PlayersLabel != null)
+            PlayersLabel.Text = "Players";
+
+        // "Status" is selected dynamically for a non-team game.  Restore the
+        // neutral default when there is no server selected so the empty pane
+        // does not retain presentation state from the previous server.
+        PlayersListControl.SetColumnHeader("team", "Team");
+    }
+
+    /// <summary>
+    /// Clears the list selection and its dependent panes as one user-visible
+    /// action.  The selection change normally clears the panes through its
+    /// event, but the explicit fallback also covers an already-empty list.
+    /// </summary>
+    private void ClearServerSelectionAndDetails()
+    {
+        if (ServerListView.SelectedItem != null || ServerListView.SelectedItems.Count > 0)
+            ServerListView.ClearSelection();
+        else
+            ClearSelectedServerDetails();
+    }
+
     private void DisplayWadList(ServerInfo server)
     {
         Wads.Clear();
+
+        if (server.IsRefreshPending)
+        {
+            if (WadsLabel != null)
+                WadsLabel.Text = "WADs";
+            return;
+        }
 
         // Add IWAD with status
         if (!string.IsNullOrEmpty(server.IWAD))
@@ -1988,6 +2084,14 @@ public partial class MainWindow : Window
     private void DisplayPlayerList(ServerInfo server)
     {
         Players.Clear();
+
+        if (server.IsRefreshPending)
+        {
+            PlayersListControl.SetColumnHeader("team", "Team");
+            if (PlayersLabel != null)
+                PlayersLabel.Text = "Players";
+            return;
+        }
 
         // Determine if this game mode uses teams
         bool isTeamGame = server.GameMode.IsTeamGame;
@@ -2428,6 +2532,7 @@ public partial class MainWindow : Window
         var dialog = new TestingVersionManagerDialog();
         await dialog.ShowDialog(this);
     }
+
 
     private async void PreferencesMenuItem_Click(object? sender, RoutedEventArgs e)
     {
@@ -2929,10 +3034,14 @@ public partial class MainWindow : Window
                 DisplayWadList(_selectedServer);
                 DisplayPlayerList(_selectedServer);
             }
+            else
+            {
+                ClearSelectedServerDetails();
+            }
         }
         else
         {
-            _selectedServer = null;
+            ClearSelectedServerDetails();
         }
     }
 
@@ -2948,6 +3057,12 @@ public partial class MainWindow : Window
 
             if (server != null)
             {
+                if (server.IsRefreshPending)
+                {
+                    _logger.Info($"Server {server.Address}:{server.Port} is still refreshing");
+                    return;
+                }
+
                 _ = LaunchServerAsync(server);
             }
         }
@@ -2959,6 +3074,25 @@ public partial class MainWindow : Window
     private void ServerScrollViewer_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
         var point = e.GetCurrentPoint(ServerListView.ScrollViewer);
+
+        var isServerRow = IsPointerOverServerRow(e.Source);
+        if (point.Properties.IsRightButtonPressed)
+        {
+            _serverContextMenuTargetIsRow = isServerRow;
+        }
+
+        if (!isServerRow)
+        {
+            // Empty-canvas clicks behave like a normal desktop list: left and
+            // right clicks both deselect the current row and therefore clear
+            // its details.  A blank-area right-click is recorded above so
+            // Opening below can still suppress the server-specific menu.
+            if (point.Properties.IsLeftButtonPressed || point.Properties.IsRightButtonPressed)
+                ClearServerSelectionAndDetails();
+
+            return;
+        }
+
         if (point.Properties.IsMiddleButtonPressed)
         {
             // Find the row under the pointer
@@ -2972,6 +3106,9 @@ public partial class MainWindow : Window
 
                     if (server != null)
                     {
+                        if (server.IsRefreshPending)
+                            return;
+
                         _logger.Info($"Middle-click refresh: {server.Address}:{server.Port}");
                         _ = _browserService.RefreshServerAsync(server);
                         e.Handled = true;
@@ -2979,6 +3116,18 @@ public partial class MainWindow : Window
                 }
             }
         }
+    }
+
+    private static bool IsPointerOverServerRow(object? source)
+    {
+        if (source is not Visual visual)
+            return false;
+
+        return visual
+            .GetVisualAncestors()
+            .Prepend(visual)
+            .OfType<Border>()
+            .Any(border => border.DataContext is ServerViewModel);
     }
 
     private void ServerListView_SortRequested(
@@ -3100,6 +3249,17 @@ public partial class MainWindow : Window
 
     private void ServerContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        var openedOnEmptySpace = _serverContextMenuTargetIsRow == false;
+        _serverContextMenuTargetIsRow = null;
+        if (openedOnEmptySpace
+            || _selectedServer == null
+            || _selectedServer.IsRefreshPending
+            || ServerListView.SelectedItem is not ServerViewModel)
+        {
+            e.Cancel = true;
+            return;
+        }
+
         var hasServerWebsite = TryGetSelectedServerWebsiteUri(out _);
         if (OpenServerUrlMenuItem != null)
         {
@@ -4455,6 +4615,10 @@ public partial class MainWindow : Window
     {
         Dispatcher.UIThread.Post(() =>
         {
+            // A refresh replaces the list data.  Do not let the panels retain
+            // information from the now-invalid previous selection while it is
+            // in progress or after the refreshed list arrives.
+            ClearServerSelectionAndDetails();
             Servers.Clear();
             if (StopButton != null) StopButton.IsEnabled = true;
             if (StopMenuItem != null) StopMenuItem.IsEnabled = true;
@@ -4505,6 +4669,15 @@ public partial class MainWindow : Window
     private void BrowserService_ServerUpdated(object? sender, ServerInfo server)
     {
         // Just mark that an update is needed - the timer will handle it
+        _serverListNeedsUpdate = true;
+    }
+
+    private void BrowserService_ServerListChanged(object? sender, EventArgs e)
+    {
+        // Endpoint discovery and pending-entry cleanup are batched through the
+        // same UI timer as individual query results. This makes the address
+        // placeholders visible as soon as the master list is available without
+        // forcing hundreds of immediate layout passes.
         _serverListNeedsUpdate = true;
     }
 
@@ -5174,19 +5347,27 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     {
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(RowHeight)));
     }
-    public string Name => DoomColorCodes.StripColorCodes(_server.Name);
-    public string PlayersDisplay => _server.PlayerCountDisplay;
-    public int Ping => _server.Ping;
-    public string Map => _server.Map;
-    public string GameModeDisplay => _server.GameMode.ShortName;
-    public string IWAD => _server.IWAD;
-    public string WadsDisplay => string.Join(", ", _server.PWADs.Select(wad => wad.Name));
-    public string Country => _server.Country;
-    public string GameVersion => _server.GameVersion;
+    public string Name => _server.IsRefreshPending
+        ? "<Refreshing>"
+        : DoomColorCodes.StripColorCodes(_server.Name);
+    public string PlayersDisplay => _server.IsRefreshPending
+        ? string.Empty
+        : _server.PlayerCountDisplay;
+    public string Ping => _server.IsRefreshPending || _server.Ping < 0
+        ? string.Empty
+        : _server.Ping.ToString();
+    public string Map => _server.IsRefreshPending ? string.Empty : _server.Map;
+    public string GameModeDisplay => _server.IsRefreshPending ? string.Empty : _server.GameMode.ShortName;
+    public string IWAD => _server.IsRefreshPending ? string.Empty : _server.IWAD;
+    public string WadsDisplay => _server.IsRefreshPending
+        ? string.Empty
+        : string.Join(", ", _server.PWADs.Select(wad => wad.Name));
+    public string Country => _server.IsRefreshPending ? string.Empty : _server.Country;
+    public string GameVersion => _server.IsRefreshPending ? string.Empty : _server.GameVersion;
     public string AddressDisplay => $"{_server.Address}:{_server.Port}";
     public int CurrentPlayers => _server.CurrentPlayers;
-    public int BotCount => _server.BotCount;
-    public int SpectatorCount => _server.SpectatorCount;
+    public string BotCount => _server.IsRefreshPending ? string.Empty : _server.BotCount.ToString();
+    public string SpectatorCount => _server.IsRefreshPending ? string.Empty : _server.SpectatorCount.ToString();
     public string SearchText => _searchText;
     public bool IsFavorite => _favoriteMatch.IsFavorite;
     public bool IsManualServer => _isManual;
@@ -5197,6 +5378,9 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     {
         get
         {
+            if (_server.IsRefreshPending)
+                return Brushes.Transparent;
+
             if (_server.IsFull)
                 return ThemeService.GetBrush("RowFullBrush", "#3C2D2D");
             if (_server.IsEmpty)
