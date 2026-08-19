@@ -312,6 +312,41 @@ public partial class WadDownloader : IDisposable
             or WadDownloadStatus.Downloading
             or WadDownloadStatus.Cancelled);
 
+    /// <summary>
+    /// Determines whether a task should actively search for sources on mirror sites.
+    /// Active downloads, completed files, and cancelled tasks are never searched.
+    /// Queued tasks with a known source only search for alternate sources if multi-source
+    /// downloading is allowed and the target domain count has not been reached.
+    /// </summary>
+    private static bool NeedsSourceDiscovery(
+        WadDownloadTask task,
+        SourceDiscoveryState discoveryState)
+    {
+        if (!IsEligibleForSourceDiscovery(task))
+        {
+            return false;
+        }
+
+        // Searching or failed (needs an initial source)
+        if (task.Status is WadDownloadStatus.Searching or WadDownloadStatus.Failed
+            || string.IsNullOrEmpty(task.SourceUrl))
+        {
+            return true;
+        }
+
+        // Queued with an existing source: check if multi-source downloading is configured
+        var settings = SettingsService.Instance.Settings;
+        var allowsMultipleSources = settings.MaxConcurrentDownloads != 1
+            && (settings.MaxConcurrentDomains == 0 || settings.MaxConcurrentDomains > 1);
+
+        if (!allowsMultipleSources)
+        {
+            return false;
+        }
+
+        return GetDiscoveredDomainCount(task, discoveryState) < TargetWebSourceDomains;
+    }
+
     private static int GetTotalSourcePhases(
         bool idgamesEnabled,
         bool webSearchEnabled,
@@ -405,7 +440,7 @@ public partial class WadDownloader : IDisposable
     private static bool NeedsWebSourceDiscovery(
         WadDownloadTask task,
         SourceDiscoveryState discoveryState) =>
-        IsEligibleForSourceDiscovery(task)
+        NeedsSourceDiscovery(task, discoveryState)
         && GetDiscoveredDomainCount(task, discoveryState) < TargetWebSourceDomains;
 
     private void RecordDiscoveredSource(
@@ -418,7 +453,7 @@ public partial class WadDownloader : IDisposable
         string? downloadedFileName,
         SourceDiscoveryState discoveryState)
     {
-        if (!IsEligibleForSourceDiscovery(task))
+        if (!NeedsSourceDiscovery(task, discoveryState))
         {
             return;
         }
@@ -622,12 +657,13 @@ public partial class WadDownloader : IDisposable
     }
 
     private static Dictionary<string, WadDownloadTask> BuildPageSourceLookup(
-        IEnumerable<WadDownloadTask> tasks)
+        IEnumerable<WadDownloadTask> tasks,
+        SourceDiscoveryState discoveryState)
     {
         var lookup = new Dictionary<string, WadDownloadTask>(
             StringComparer.OrdinalIgnoreCase);
 
-        foreach (var task in tasks.Where(IsEligibleForSourceDiscovery))
+        foreach (var task in tasks.Where(t => NeedsSourceDiscovery(t, discoveryState)))
         {
             foreach (var variant in GetFilenameVariants(task.Wad.FileName))
             {
@@ -644,7 +680,7 @@ public partial class WadDownloader : IDisposable
         SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
-        var neededWads = BuildPageSourceLookup(tasks);
+        var neededWads = BuildPageSourceLookup(tasks, discoveryState);
         if (neededWads.Count == 0)
         {
             return;
@@ -663,7 +699,7 @@ public partial class WadDownloader : IDisposable
         foreach (var (fileName, url) in allLinks)
         {
             if (!neededWads.TryGetValue(fileName, out var match)) continue;
-            if (!IsEligibleForSourceDiscovery(match)) continue;
+            if (!NeedsSourceDiscovery(match, discoveryState)) continue;
 
             var size = await GetFileSizeAsync(url, ct);
             if (size < 0) continue;
@@ -831,6 +867,11 @@ public partial class WadDownloader : IDisposable
             foreach (var site in _downloadSites)
             {
                 ct.ThrowIfCancellationRequested();
+                if (!tasks.Any(task => NeedsSourceDiscovery(task, discoveryState)))
+                {
+                    break;
+                }
+
                 await SearchSiteAsync(
                     site,
                     tasks,
@@ -838,7 +879,7 @@ public partial class WadDownloader : IDisposable
                     ct);
             }
 
-            if (IdgamesEnabled)
+            if (IdgamesEnabled && tasks.Any(task => NeedsSourceDiscovery(task, discoveryState)))
             {
                 ct.ThrowIfCancellationRequested();
                 await SearchIdgamesAsync(
@@ -847,7 +888,7 @@ public partial class WadDownloader : IDisposable
                     ct);
             }
 
-            if (WebSearchEnabled)
+            if (WebSearchEnabled && tasks.Any(task => NeedsSourceDiscovery(task, discoveryState)))
             {
                 ct.ThrowIfCancellationRequested();
                 await SearchWebAsync(
@@ -883,7 +924,8 @@ public partial class WadDownloader : IDisposable
         CancellationToken ct)
     {
         var freedoomTasks = tasks
-            .Where(task => WadManager.IsFreedoomIwad(task.Wad.FileName))
+            .Where(task => WadManager.IsFreedoomIwad(task.Wad.FileName)
+                           && NeedsSourceDiscovery(task, discoveryState))
             .ToList();
         if (freedoomTasks.Count == 0)
         {
@@ -899,7 +941,7 @@ public partial class WadDownloader : IDisposable
             foreach (var task in freedoomTasks)
             {
                 ct.ThrowIfCancellationRequested();
-                if (!IsEligibleForSourceDiscovery(task))
+                if (!NeedsSourceDiscovery(task, discoveryState))
                 {
                     continue;
                 }
@@ -952,13 +994,22 @@ public partial class WadDownloader : IDisposable
         SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
+        var tasksToCheck = tasks
+            .Where(task => NeedsSourceDiscovery(task, discoveryState))
+            .ToList();
+
+        if (tasksToCheck.Count == 0)
+        {
+            return;
+        }
+
         try
         {
             LogInfo($"Checking server URL: {serverUrl}");
 
             await SearchPageForWadsAsync(
                 serverUrl,
-                tasks,
+                tasksToCheck,
                 discoveryState,
                 ct);
         }
@@ -991,6 +1042,15 @@ public partial class WadDownloader : IDisposable
         SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
+        var tasksToCheck = tasks
+            .Where(task => NeedsSourceDiscovery(task, discoveryState))
+            .ToList();
+
+        if (tasksToCheck.Count == 0)
+        {
+            return;
+        }
+
         try
         {
             var siteUri = new Uri(site.Contains("%WadName%") ? site.Replace("%WadName%", "test") : site);
@@ -1001,8 +1061,6 @@ public partial class WadDownloader : IDisposable
             if (site.Contains("%WadName%", StringComparison.OrdinalIgnoreCase))
             {
                 // Check each WAD with HEAD request and GET fallback - try multiple extensions if needed.
-                var tasksToCheck = tasks.Where(IsEligibleForSourceDiscovery).ToList();
-                
                 var checkTasks = tasksToCheck.Select(async task =>
                 {
                     // Build list of filenames to try
@@ -1013,7 +1071,7 @@ public partial class WadDownloader : IDisposable
                         // A source may have been found while this site's
                         // filename variants were being prepared. Avoid issuing
                         // more HEAD/GET probes once the scheduler starts it.
-                        if (!IsEligibleForSourceDiscovery(task))
+                        if (!NeedsSourceDiscovery(task, discoveryState))
                         {
                             break;
                         }
@@ -1045,7 +1103,7 @@ public partial class WadDownloader : IDisposable
                 LogVerbose($"Parsing site page: {site}");
                 await SearchPageForWadsAsync(
                     site,
-                    tasks,
+                    tasksToCheck,
                     discoveryState,
                     ct);
             }
@@ -1079,6 +1137,15 @@ public partial class WadDownloader : IDisposable
         SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
+        var tasksToCheck = tasks
+            .Where(task => NeedsSourceDiscovery(task, discoveryState))
+            .ToList();
+
+        if (tasksToCheck.Count == 0)
+        {
+            return;
+        }
+
         LogInfo("Searching /idgames Archive...");
         
         try
@@ -1093,10 +1160,10 @@ public partial class WadDownloader : IDisposable
             
             LogVerbose($"/idgames: index loaded with {index.Count} files");
             
-            foreach (var task in tasks)
+            foreach (var task in tasksToCheck)
             {
                 if (ct.IsCancellationRequested) break;
-                if (!IsEligibleForSourceDiscovery(task)) continue;
+                if (!NeedsSourceDiscovery(task, discoveryState)) continue;
                 
                 try
                 {
@@ -1153,16 +1220,23 @@ public partial class WadDownloader : IDisposable
                         task,
                         workingUrl,
                         actualSize,
-                        $"/idgames - {domain}",
-                        $"Found {task.Wad.FileName} on /idgames at {workingUrl} ({FormatBytes(actualSize)})",
+                        $"/idgames ({domain})",
+                        $"Found {task.Wad.FileName} on /idgames at {workingUrl} ({FormatBytes(fileSize)})",
                         $"Added /idgames alternate for {task.Wad.FileName}: {workingUrl}",
-                        downloadedFileName,
+                        zipName,
                         discoveryState);
                     
-                    // Add remaining mirrors as alternates
-                    foreach (var altUrl in downloadUrls.Where(u => u != workingUrl))
+                    // Add other mirrors as alternate sources
+                    foreach (var mirrorUrl in downloadUrls.Skip(1))
                     {
-                        AddAlternateSource(task, altUrl, actualSize, downloadedFileName, $"Added /idgames alternate for {task.Wad.FileName}: {altUrl}", discoveryState);
+                        var mirrorDomain = new Uri(mirrorUrl).Host;
+                        AddAlternateSource(
+                            task,
+                            mirrorUrl,
+                            actualSize,
+                            zipName,
+                            $"Added /idgames mirror for {task.Wad.FileName}: {mirrorDomain}",
+                            discoveryState);
                     }
                 }
                 catch (Exception ex)
@@ -1174,11 +1248,11 @@ public partial class WadDownloader : IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            LogWarning($"/idgames search error: {ex.Message}");
+            LogError($"/idgames search error: {ex.Message}");
         }
         finally
         {
-            // Update search progress
+            // Update search progress for all tasks
             foreach (var task in tasks)
             {
                 task.IncrementSitesSearched();
