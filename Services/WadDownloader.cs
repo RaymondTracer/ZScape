@@ -531,26 +531,80 @@ public partial class WadDownloader : IDisposable
             : fileName.ToLowerInvariant();
     }
 
+    private static Uri EnsureDirectoryBaseUri(Uri uri)
+    {
+        if (uri.AbsolutePath.EndsWith("/"))
+        {
+            return uri;
+        }
+
+        var lastSegment = uri.Segments.LastOrDefault() ?? string.Empty;
+        if (!lastSegment.Contains('.') || lastSegment.Equals(".", StringComparison.Ordinal))
+        {
+            var builder = new UriBuilder(uri);
+            if (!builder.Path.EndsWith("/"))
+            {
+                builder.Path += "/";
+                return builder.Uri;
+            }
+        }
+
+        return uri;
+    }
+
+    private static Uri ExtractHtmlBaseUri(Uri documentUri, string html)
+    {
+        try
+        {
+            var match = HtmlBaseTagRegex().Match(html);
+            if (match.Success)
+            {
+                var href = WebUtility.HtmlDecode(match.Groups["href"].Success
+                    ? match.Groups["href"].Value
+                    : match.Groups[1].Value);
+                if (!string.IsNullOrWhiteSpace(href) && Uri.TryCreate(documentUri, href, out var parsedBase))
+                {
+                    return parsedBase;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return documentUri;
+    }
+
     private static bool TryBuildAbsoluteUrl(Uri baseUri, string href, out string absoluteUrl)
     {
         absoluteUrl = string.Empty;
         try
         {
-            if (href.StartsWith("http://") || href.StartsWith("https://"))
+            href = href.Trim();
+            if (string.IsNullOrWhiteSpace(href)
+                || href.StartsWith("#")
+                || href.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)
+                || href.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (href.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || href.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 absoluteUrl = href;
             }
             else if (href.StartsWith("//"))
             {
-                absoluteUrl = "https:" + href;
+                absoluteUrl = $"{baseUri.Scheme}:{href}";
             }
             else if (href.StartsWith("/"))
             {
-                absoluteUrl = $"{baseUri.Scheme}://{baseUri.Host}{href}";
+                absoluteUrl = $"{baseUri.Scheme}://{baseUri.Authority}{href}";
             }
             else
             {
-                absoluteUrl = new Uri(baseUri, href).ToString();
+                var effectiveBase = EnsureDirectoryBaseUri(baseUri);
+                absoluteUrl = new Uri(effectiveBase, href).ToString();
             }
 
             if (!Uri.TryCreate(absoluteUrl, UriKind.Absolute, out _))
@@ -1775,7 +1829,7 @@ public partial class WadDownloader : IDisposable
             // from its current uddg redirect format.
             foreach (Match match in HrefRegex().Matches(html))
             {
-                var href = WebUtility.HtmlDecode(match.Groups[1].Value);
+                var href = WebUtility.HtmlDecode(match.Groups["url"].Success ? match.Groups["url"].Value : match.Groups[1].Value);
                 var redirectMatch = UddgUrlRegex().Match(href);
                 if (redirectMatch.Success)
                 {
@@ -1930,7 +1984,8 @@ public partial class WadDownloader : IDisposable
             }
             
             var html = await response.Content.ReadAsStringAsync(cts.Token);
-            var baseUri = new Uri(pageUrl);
+            var baseUri = response.RequestMessage?.RequestUri ?? new Uri(pageUrl);
+            baseUri = ExtractHtmlBaseUri(baseUri, html);
             
             // Find all links
             var hrefPattern = HrefRegex();
@@ -1938,7 +1993,7 @@ public partial class WadDownloader : IDisposable
             
             foreach (Match match in matches)
             {
-                var href = WebUtility.HtmlDecode(match.Groups[1].Value);
+                var href = WebUtility.HtmlDecode(match.Groups["url"].Success ? match.Groups["url"].Value : match.Groups[1].Value);
                 if (!TryBuildAbsoluteUrl(baseUri, href, out var absoluteUrl)) continue;
 
                 var matchedFileName = ExtractDownloadFileName(absoluteUrl);
@@ -1976,6 +2031,9 @@ public partial class WadDownloader : IDisposable
                    targetBaseName,
                    StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string StripHtmlTags(string html) =>
+        Regex.Replace(html, @"<[^>]+>", string.Empty);
     
     [GeneratedRegex(@"uddg=([^&""']+)", RegexOptions.IgnoreCase)]
     private static partial Regex UddgUrlRegex();
@@ -2013,25 +2071,98 @@ public partial class WadDownloader : IDisposable
             }
             
             var html = await response.Content.ReadAsStringAsync(ct);
-            var baseUri = new Uri(pageUrl);
-            
-            var hrefPattern = HrefRegex();
-            var matches = hrefPattern.Matches(html);
-            
-            foreach (Match match in matches)
+            var baseUri = response.RequestMessage?.RequestUri ?? new Uri(pageUrl);
+            baseUri = ExtractHtmlBaseUri(baseUri, html);
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void AddResult(string candidateFileName, string url)
             {
-                var href = match.Groups[1].Value;
+                if (string.IsNullOrWhiteSpace(candidateFileName) || string.IsNullOrWhiteSpace(url))
+                    return;
+                var key = $"{candidateFileName}::{url}";
+                if (seen.Add(key))
+                {
+                    results.Add((candidateFileName, url));
+                }
+            }
+
+            // 1. Match HTML anchor elements: attributes and inner text
+            var anchorMatches = AnchorElementRegex().Matches(html);
+            foreach (Match anchorMatch in anchorMatches)
+            {
+                var attrs = anchorMatch.Groups["attrs"].Value;
+                var text = anchorMatch.Groups["text"].Value;
+
+                string? href = null;
+                string? downloadAttr = null;
+                string? titleAttr = null;
+
+                var attrMatches = AttributeRegex().Matches(attrs);
+                foreach (Match attrMatch in attrMatches)
+                {
+                    var name = attrMatch.Groups["name"].Value;
+                    var val = attrMatch.Groups["val"].Success
+                        ? attrMatch.Groups["val"].Value
+                        : attrMatch.Groups[2].Value;
+
+                    if (name.Equals("href", StringComparison.OrdinalIgnoreCase))
+                        href = val;
+                    else if (name.Equals("download", StringComparison.OrdinalIgnoreCase))
+                        downloadAttr = val;
+                    else if (name.Equals("title", StringComparison.OrdinalIgnoreCase))
+                        titleAttr = val;
+                }
+
+                if (string.IsNullOrWhiteSpace(href))
+                    continue;
+
+                href = WebUtility.HtmlDecode(href);
+                if (!TryBuildAbsoluteUrl(baseUri, href, out var absoluteUrl))
+                    continue;
+
+                // Priority 1: Filename from the resolved URL path/query
+                var fileName = ExtractDownloadFileName(absoluteUrl);
+
+                // Priority 2: Filename from download attribute
+                if (string.IsNullOrWhiteSpace(fileName) && !string.IsNullOrWhiteSpace(downloadAttr))
+                {
+                    fileName = ExtractDownloadFileName(WebUtility.HtmlDecode(downloadAttr));
+                }
+
+                // Priority 3: Filename from title attribute
+                if (string.IsNullOrWhiteSpace(fileName) && !string.IsNullOrWhiteSpace(titleAttr))
+                {
+                    fileName = ExtractDownloadFileName(WebUtility.HtmlDecode(titleAttr));
+                }
+
+                // Priority 4: Filename from inner link text
+                if (string.IsNullOrWhiteSpace(fileName) && !string.IsNullOrWhiteSpace(text))
+                {
+                    var strippedText = StripHtmlTags(WebUtility.HtmlDecode(text)).Trim();
+                    fileName = ExtractDownloadFileName(strippedText);
+                }
+
+                if (!string.IsNullOrWhiteSpace(fileName))
+                {
+                    AddResult(fileName, absoluteUrl);
+                }
+            }
+
+            // 2. Fallback: match any remaining generic href attributes
+            var hrefMatches = HrefRegex().Matches(html);
+            foreach (Match match in hrefMatches)
+            {
+                var href = match.Groups["url"].Success ? match.Groups["url"].Value : match.Groups[1].Value;
+                if (string.IsNullOrWhiteSpace(href)) continue;
                 href = WebUtility.HtmlDecode(href);
 
-                if (!TryBuildAbsoluteUrl(baseUri, href, out var absoluteUrl))
-                {
-                    continue;
-                }
+                if (!TryBuildAbsoluteUrl(baseUri, href, out var absoluteUrl)) continue;
 
                 var fileName = ExtractDownloadFileName(absoluteUrl);
                 if (!string.IsNullOrWhiteSpace(fileName))
                 {
-                    results.Add((fileName, absoluteUrl));
+                    AddResult(fileName, absoluteUrl);
                 }
             }
             
@@ -2697,7 +2828,9 @@ public partial class WadDownloader : IDisposable
     
     /// <summary>
     /// Gets filename variants to try when searching.
-    /// When the file has a supported extension, only that exact filename is used.
+    /// Returns lowercase variants for direct source querying.
+    /// When the file has a supported WAD extension, includes both the WAD filename and potential archive formats.
+    /// When the file has an archive extension, includes both the archive and potential WAD formats.
     /// When a file has no extension or an unsupported one, tries all supported extensions.
     /// </summary>
     private static List<string> GetFilenameVariants(string filename)
@@ -2725,10 +2858,27 @@ public partial class WadDownloader : IDisposable
                     variants.Add(variant);
             }
         }
-        // If the file has a supported extension, only use that exact filename
-        else if (SupportedExtensions.Contains(originalExt))
+        // If the file has a supported WAD extension, try the exact filename AND archives that might contain it
+        else if (WadExtensions.IsWadExtension(originalExt))
         {
             variants.Add(normalizedFileName);
+            foreach (var archiveExt in WadExtensions.ArchiveExtensions)
+            {
+                var archiveVariant = baseName + archiveExt;
+                if (!variants.Contains(archiveVariant, StringComparer.OrdinalIgnoreCase))
+                    variants.Add(archiveVariant);
+            }
+        }
+        // If the file is an archive, try the archive filename AND WAD formats inside it
+        else if (WadExtensions.IsArchiveExtension(originalExt))
+        {
+            variants.Add(normalizedFileName);
+            foreach (var wadExt in WadExtensions.WadFileExtensions)
+            {
+                var wadVariant = baseName + wadExt;
+                if (!variants.Contains(wadVariant, StringComparer.OrdinalIgnoreCase))
+                    variants.Add(wadVariant);
+            }
         }
         // If unsupported extension, try all supported extensions
         else
@@ -3035,7 +3185,16 @@ public partial class WadDownloader : IDisposable
         }
     }
     
-    [GeneratedRegex(@"href\s*=\s*[""']([^""']+)[""']", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"<base\s+[^>]*?href\s*=\s*(?:[""'](?<href>[^""']+)[""']|(?<href>[^\s>]+))", RegexOptions.IgnoreCase)]
+    private static partial Regex HtmlBaseTagRegex();
+
+    [GeneratedRegex(@"<a\b(?<attrs>[^>]*)>(?<text>.*?)</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex AnchorElementRegex();
+
+    [GeneratedRegex(@"\b(?<name>href|download|title)\s*=\s*(?:[""'](?<val>[^""']+)[""']|(?<val>[^\s>]+))", RegexOptions.IgnoreCase)]
+    private static partial Regex AttributeRegex();
+
+    [GeneratedRegex(@"\bhref\s*=\s*(?:[""'](?<url>[^""']+)[""']|(?<url>[^\s>]+))", RegexOptions.IgnoreCase)]
     private static partial Regex HrefRegex();
     
     public void Dispose()
