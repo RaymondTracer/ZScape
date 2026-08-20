@@ -66,6 +66,18 @@ dotnet build ZScape.sln -c Debug
 dotnet run --project ZScape.csproj
 ```
 
+To build both Windows configurations and keep timestamped, runnable copies
+outside the working tree, run this from PowerShell:
+
+```powershell
+.\scripts\Build-ZScape.ps1
+```
+
+The script places complete Debug and Release outputs under
+`Documents\ZScape\Builds\<timestamp>`. It copies the files after a successful
+build; it does not move or alter an existing Zandronum installation or its
+backups.
+
 The first-run wizard configures Zandronum, WAD paths, theme, and update
 behavior.
 
