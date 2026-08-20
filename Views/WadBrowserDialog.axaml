@@ -14,6 +14,10 @@
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,10">
             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="5">
                 <Button x:Name="RefreshButton" Content="Refresh" Click="RefreshButton_Click"/>
+                <Button x:Name="CacheAllHashesButton"
+                        Content="Cache All Files Now"
+                        ToolTip.Tip="Calculate full MD5 hashes for all local WAD files in the background."
+                        Click="CacheAllHashesButton_Click"/>
                 <Button x:Name="OpenFolderButton" Content="Open Folder" Click="OpenFolderButton_Click"/>
                 <Separator Width="1" Height="24" Margin="5,0"/>
                 <TextBlock Text="Search:" VerticalAlignment="Center"/>

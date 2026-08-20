@@ -1,0 +1,42 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:ZScape.Controls"
+        x:Class="ZScape.Views.WadHashCacheDialog"
+        x:CompileBindings="False"
+        Title="Cache WAD Hashes"
+        Width="780" Height="520"
+        MinWidth="620" MinHeight="390"
+        WindowStartupLocation="CenterOwner"
+        ExtendClientAreaToDecorationsHint="False">
+
+    <Grid Margin="14" RowDefinitions="Auto,Auto,*,Auto">
+        <StackPanel Spacing="3">
+            <TextBlock Text="Cache local WAD hashes" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock x:Name="SummaryText"
+                       Text="Preparing local files..."
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Spacing="4" Margin="0,10,0,10">
+            <ProgressBar x:Name="OverallProgressBar" Minimum="0" Maximum="100" Height="16" />
+            <TextBlock x:Name="CurrentFileText"
+                       Text="Preparing..."
+                       TextTrimming="CharacterEllipsis"
+                       ToolTip.Tip="The file currently being hashed or read from the cache." />
+        </StackPanel>
+
+        <controls:ResizableListView x:Name="CacheListView" Grid.Row="2" />
+
+        <Grid Grid.Row="3" Margin="0,10,0,0" ColumnDefinitions="*,Auto">
+            <TextBlock x:Name="StatusText"
+                       Text="Ready"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <Button x:Name="StopButton" Content="Stop Caching" MinWidth="110" Click="StopButton_Click" />
+                <Button x:Name="CloseButton" Content="Close" MinWidth="88" IsEnabled="False" Click="CloseButton_Click" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

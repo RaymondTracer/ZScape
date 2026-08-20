@@ -111,6 +111,11 @@ public static class SettingsRegistry
             MinValue = 0, MaxValue = 32,
             Help = "0 = unlimited, 1 = sequential, N = max N concurrent hash checks."
         });
+        zandronum.Fields.Add(new(SettingFieldType.Toggle, "EnableWadHashCache",
+            "Cache verified WAD hashes")
+        {
+            Help = "Reuse a full MD5 only while the local file identity, size, and timestamps still match. Disable to rehash every file on every join."
+        });
         general.Sections.Add(zandronum);
 
         var display = new SettingSectionDef("Display Options");
@@ -408,6 +413,7 @@ public static class SettingsFieldAccessor
         "ZandronumPath" => s.ZandronumPath,
         "ZandronumTestingPath" => s.ZandronumTestingPath,
         "HashConcurrency" => s.HashVerificationConcurrency,
+        "EnableWadHashCache" => s.EnableWadHashCache,
         "ColorizePlayerNames" => s.ColorizePlayerNames,
         "ServerListRowHeight" => s.ServerListRowHeight,
         "EnableScreenshotMonitoring" => s.EnableScreenshotMonitoring,
@@ -464,6 +470,7 @@ public static class SettingsFieldAccessor
             case "ZandronumPath": s.ZandronumPath = (string?)value ?? ""; break;
             case "ZandronumTestingPath": s.ZandronumTestingPath = (string?)value ?? ""; break;
             case "HashConcurrency": s.HashVerificationConcurrency = (int)(value ?? 0); break;
+            case "EnableWadHashCache": s.EnableWadHashCache = (bool)(value ?? true); break;
             case "ColorizePlayerNames": s.ColorizePlayerNames = (bool)(value ?? true); break;
             case "ServerListRowHeight": s.ServerListRowHeight = (int)(value ?? 26); break;
             case "EnableScreenshotMonitoring": s.EnableScreenshotMonitoring = (bool)(value ?? false); break;

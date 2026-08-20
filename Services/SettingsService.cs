@@ -559,6 +559,13 @@ public class AppSettings
     /// 0 = unlimited (all files at once), 1 = sequential, N = max N concurrent.
     /// </summary>
     public int HashVerificationConcurrency { get; set; } = 0; // Default: unlimited
+
+    /// <summary>
+    /// Reuses completed local WAD MD5 calculations when the file still has the
+    /// same path, identity, size, and timestamps. The cached MD5 is always
+    /// compared to the server's full expected hash before joining.
+    /// </summary>
+    public bool EnableWadHashCache { get; set; } = true;
     
     // Download concurrency settings
     /// <summary>Maximum concurrent file downloads in total. 0 = unlimited.</summary>

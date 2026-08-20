@@ -109,6 +109,9 @@ running executable. The directory must therefore be writable.
 - `history.json` contains connection history.
 - `domain-settings.json` contains learned and user-defined per-domain download
   settings.
+- `wad-hash-cache.json` stores full local WAD MD5 values with file identity and
+  timestamp metadata. It is enabled by default, can be disabled in
+  **Preferences**, and never replaces a server's full hash comparison.
 - `runtime.log` contains runtime messages and unhandled exception details.
 
 When paths are left blank, the WAD download folder defaults to `WADs` beside the

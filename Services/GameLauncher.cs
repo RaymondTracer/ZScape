@@ -287,6 +287,7 @@ public class GameLauncher : IDisposable
         var mismatches = new System.Collections.Concurrent.ConcurrentBag<WadHashMismatch>();
         var exeFolder = GetExecutableFolder(server);
         var wadManager = WadManager.Instance;
+        var hashCache = WadHashCacheService.Instance;
         var settings = SettingsService.Instance.Settings;
         
         // Verify only the PWADs requested by the caller that advertise hashes.
@@ -400,13 +401,38 @@ public class GameLauncher : IDisposable
                     });
                 };
                 
-                // Compute hash with progress
-                var localHash = await ComputeFileHashWithProgressAsync(item.LocalPath, fileProgressCallback, cancellationToken);
+                // Reuse a verified full MD5 only when the local file snapshot
+                // still matches. The cache never decides a server match on its
+                // own; the full value below is still compared to the server's
+                // advertised full MD5.
+                var hashResult = await hashCache.GetHashAsync(
+                    item.LocalPath,
+                    fileProgressCallback,
+                    cancellationToken);
+                var localHash = hashResult.Hash;
                 if (string.IsNullOrEmpty(localHash))
+                {
+                    LoggingService.Instance.Warning(
+                        $"Could not verify the hash for {item.Pwad.Name}: {hashResult.ErrorMessage ?? "unknown read error"}");
                     return;
+                }
                 
                 // Mark file as complete in progress tracking
                 fileProgress[item.Pwad.Name] = (item.FileSize, item.FileSize);
+
+                if (hashResult.FromCache)
+                {
+                    progress?.Report(new HashVerificationProgress
+                    {
+                        CurrentFile = item.Pwad.Name,
+                        CurrentIndex = completedCount,
+                        TotalFiles = verificationItems.Count,
+                        Status = $"Using cached hash: {item.Pwad.Name}",
+                        FileSize = item.FileSize,
+                        BytesProcessed = item.FileSize,
+                        FileProgress = new Dictionary<string, (long, long)>(fileProgress)
+                    });
+                }
                 
                 // Compare hashes
                 if (!string.Equals(localHash, item.Pwad.Hash, StringComparison.OrdinalIgnoreCase))
@@ -472,45 +498,6 @@ public class GameLauncher : IDisposable
         });
         
         return result;
-    }
-
-    /// <summary>
-    /// Computes MD5 hash of a file with byte-level progress reporting.
-    /// </summary>
-    private static async Task<string?> ComputeFileHashWithProgressAsync(
-        string filePath, 
-        Action<long> progress, 
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 
-                bufferSize: 1024 * 1024, useAsync: true); // 1MB buffer for large files
-            using var md5 = System.Security.Cryptography.MD5.Create();
-            
-            var buffer = new byte[1024 * 1024]; // 1MB read chunks
-            long totalBytesRead = 0;
-            int bytesRead;
-            
-            while ((bytesRead = await stream.ReadAsync(buffer, cancellationToken)) > 0)
-            {
-                md5.TransformBlock(buffer, 0, bytesRead, null, 0);
-                totalBytesRead += bytesRead;
-                progress(totalBytesRead);
-            }
-            
-            md5.TransformFinalBlock([], 0, 0);
-            return BitConverter.ToString(md5.Hash!).Replace("-", "").ToLowerInvariant();
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            LoggingService.Instance.Error($"Failed to compute hash for {filePath}: {ex.Message}");
-            return null;
-        }
     }
 
     /// <summary>

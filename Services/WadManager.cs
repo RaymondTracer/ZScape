@@ -175,7 +175,12 @@ public class WadManager
         _logger.Verbose($"WAD cache refreshed: {_wadCache.Count} files found in {pathCount} paths");
     }
 
-    private List<string> GetSearchRootsInPriorityOrder()
+    /// <summary>
+    /// Returns the effective WAD search roots in the same priority order used
+    /// for launch and hash-mismatch resolution: executable folders, download
+    /// folder, then user search folders.
+    /// </summary>
+    public IReadOnlyList<string> GetSearchRootsInPriorityOrder()
     {
         var orderedPaths = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

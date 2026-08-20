@@ -2419,6 +2419,7 @@ public partial class WadDownloader : IDisposable
                 }
 
                 LogVerbose($"Hash verified for {task.Wad.FileName}: {finalPath}");
+                await WadHashCacheService.Instance.RecordHashAsync(finalPath, actualHash);
             }
 
             var completedBytes = task.BytesDownloaded;

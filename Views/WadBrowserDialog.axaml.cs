@@ -6,6 +6,7 @@ using Avalonia.Media;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -19,8 +20,10 @@ namespace ZScape.Views;
 /// <summary>
 /// View-model for a single WAD file row in the browser list.
 /// </summary>
-public class WadFileEntry
+public class WadFileEntry : INotifyPropertyChanged
 {
+    private string? _cachedHash;
+
     public string Name { get; set; } = "";
     public string Extension { get; set; } = "";
     public string FullPath { get; set; } = "";
@@ -31,6 +34,26 @@ public class WadFileEntry
 
     public string SizeDisplay => FormatSize(Size);
     public string ModifiedDisplay => Modified.ToString("yyyy-MM-dd HH:mm");
+    public bool IsHashCached => !string.IsNullOrWhiteSpace(CachedHash);
+    public string CachedMarker => IsHashCached ? "✓" : string.Empty;
+    public string? CachedHash
+    {
+        get => _cachedHash;
+        private set
+        {
+            if (string.Equals(_cachedHash, value, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _cachedHash = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CachedHash)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsHashCached)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CachedMarker)));
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public void SetCachedHash(string? hash) => CachedHash = hash;
 
     private static string FormatSize(long bytes)
     {
@@ -74,9 +97,28 @@ public partial class WadBrowserDialog : Window
         });
         WadListView.AddColumn(new ListViewColumn
         {
+            Key = "cached", Header = "Cached", Width = 62, MinWidth = 10,
+            BindingPath = nameof(WadFileEntry.CachedMarker),
+            Foreground = Brushes.LightGreen,
+            ContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            CanSort = true,
+            HeaderToolTip = "A check mark means a valid local full MD5 is cached for this unchanged file."
+        });
+        WadListView.AddColumn(new ListViewColumn
+        {
             Key = "size", Header = "Size", Width = 80, MinWidth = 10,
             BindingPath = "SizeDisplay",
             CanSort = true
+        });
+        WadListView.AddColumn(new ListViewColumn
+        {
+            Key = "hash", Header = "MD5", Width = 270, MinWidth = 10,
+            BindingPath = nameof(WadFileEntry.CachedHash),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = Brushes.Gray,
+            CanSort = true,
+            IsVisibleByDefault = false,
+            HeaderToolTip = "Full cached MD5. Show this optional column from the list header menu."
         });
         WadListView.AddColumn(new ListViewColumn
         {
@@ -126,46 +168,71 @@ public partial class WadBrowserDialog : Window
         _allWads.Clear();
         _filteredWads.Clear();
         WadListView.ClearSelection();
+        RefreshButton.IsEnabled = false;
+        CacheAllHashesButton.IsEnabled = false;
 
-        await Task.Run(() =>
+        try
         {
-            var extensions = new[] { ".wad", ".pk3", ".pk7", ".pke", ".ipk3", ".ipk7", ".deh", ".bex" };
-            var wadPaths = _settings.Settings.WadSearchPaths.Where(Directory.Exists).ToList();
-
-            foreach (var basePath in wadPaths)
+            var scannedWads = await Task.Run(() =>
             {
-                try
+                var entries = new List<WadFileEntry>();
+                var wadPaths = WadManager.Instance.GetSearchRootsInPriorityOrder();
+                var hashCache = WadHashCacheService.Instance;
+
+                foreach (var basePath in wadPaths)
                 {
-                    foreach (var file in Directory.EnumerateFiles(basePath, "*.*", SearchOption.AllDirectories))
+                    try
                     {
-                        var ext = Path.GetExtension(file).ToLowerInvariant();
-                        if (!extensions.Contains(ext)) continue;
-
-                        try
+                        foreach (var file in Directory.EnumerateFiles(basePath, "*.*", SearchOption.AllDirectories))
                         {
-                            var fi = new FileInfo(file);
-                            var entry = new WadFileEntry
-                            {
-                                Name = Path.GetFileNameWithoutExtension(file),
-                                Extension = ext,
-                                FullPath = file,
-                                Size = fi.Length,
-                                Modified = fi.LastWriteTime
-                            };
+                            var ext = Path.GetExtension(file);
+                            if (!WadExtensions.IsSupportedExtension(ext))
+                                continue;
 
-                            Avalonia.Threading.Dispatcher.UIThread.Post(() => _allWads.Add(entry));
+                            try
+                            {
+                                var fileInfo = new FileInfo(file);
+                                var entry = new WadFileEntry
+                                {
+                                    Name = Path.GetFileNameWithoutExtension(file),
+                                    Extension = ext.ToLowerInvariant(),
+                                    FullPath = file,
+                                    Size = fileInfo.Length,
+                                    Modified = fileInfo.LastWriteTime
+                                };
+                                entry.SetCachedHash(hashCache.TryGetCachedHash(file));
+                                entries.Add(entry);
+                            }
+                            catch
+                            {
+                                // A single inaccessible or transient file should
+                                // not stop the rest of the browser scan.
+                            }
                         }
-                        catch { }
+                    }
+                    catch
+                    {
+                        // A configured search root may disappear while the
+                        // browser is open. Continue with the remaining roots.
                     }
                 }
-                catch { }
-            }
-        });
 
-        ApplyFilterAndSort();
-        UpdateStats();
-        _isScanning = false;
-        StatusLabel.Text = "Ready";
+                return entries;
+            });
+
+            foreach (var entry in scannedWads)
+                _allWads.Add(entry);
+
+            ApplyFilterAndSort();
+            UpdateStats();
+            StatusLabel.Text = "Ready";
+        }
+        finally
+        {
+            _isScanning = false;
+            RefreshButton.IsEnabled = true;
+            CacheAllHashesButton.IsEnabled = WadHashCacheService.Instance.IsEnabled;
+        }
     }
 
     #endregion
@@ -193,11 +260,15 @@ public partial class WadBrowserDialog : Window
             {
                 "name" => ApplyWadSort(results, ordered, wad => wad.Name,
                     descriptor.Ascending, StringComparer.OrdinalIgnoreCase),
+                "cached" => ApplyWadSort(results, ordered, wad => wad.IsHashCached,
+                    descriptor.Ascending),
                 "size" => ApplyWadSort(results, ordered, wad => wad.Size,
                     descriptor.Ascending),
                 "modified" => ApplyWadSort(results, ordered, wad => wad.Modified,
                     descriptor.Ascending),
                 "path" => ApplyWadSort(results, ordered, wad => wad.FullPath,
+                    descriptor.Ascending, StringComparer.OrdinalIgnoreCase),
+                "hash" => ApplyWadSort(results, ordered, wad => wad.CachedHash ?? string.Empty,
                     descriptor.Ascending, StringComparer.OrdinalIgnoreCase),
                 _ => ordered
             };
@@ -282,6 +353,28 @@ public partial class WadBrowserDialog : Window
     private async void RefreshButton_Click(object? sender, RoutedEventArgs e)
     {
         await ScanWadsAsync();
+    }
+
+    private async void CacheAllHashesButton_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_isScanning || _allWads.Count == 0)
+            return;
+
+        if (!WadHashCacheService.Instance.IsEnabled)
+        {
+            StatusLabel.Text = "Enable WAD hash caching in Preferences before caching files.";
+            return;
+        }
+
+        var dialog = new WadHashCacheDialog(_allWads.Select(wad => wad.FullPath));
+        await dialog.ShowDialog(this);
+
+        var hashCache = WadHashCacheService.Instance;
+        foreach (var wad in _allWads)
+            wad.SetCachedHash(hashCache.TryGetCachedHash(wad.FullPath));
+
+        ApplyFilterAndSort();
+        UpdateStats();
     }
 
     private void OpenFolderButton_Click(object? sender, RoutedEventArgs e)
