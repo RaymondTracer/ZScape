@@ -3808,19 +3808,41 @@ public partial class MainWindow : Window
 
     private Task<HashVerificationDialogResult> VerifyOptionalWadHashesWithDialogAsync(ServerInfo server)
     {
-        return VerifyWadHashesWithDialogAsync(server, "Verifying Optional PWAD Hashes", GameLauncher.Instance.VerifyOptionalWadHashesAsync);
+        return VerifyWadHashesWithDialogAsync(
+            server,
+            "Verifying Optional PWAD Hashes",
+            GameLauncher.Instance.VerifyOptionalWadHashesAsync,
+            GameLauncher.Instance.CheckCachedOptionalWadHashes);
     }
 
     private async Task<HashVerificationDialogResult> VerifyWadHashesWithDialogAsync(ServerInfo server)
     {
-        return await VerifyWadHashesWithDialogAsync(server, "Verifying WAD Hashes", GameLauncher.Instance.VerifyWadHashesAsync);
+        return await VerifyWadHashesWithDialogAsync(
+            server,
+            "Verifying WAD Hashes",
+            GameLauncher.Instance.VerifyWadHashesAsync,
+            GameLauncher.Instance.CheckCachedWadHashes);
     }
 
     private async Task<HashVerificationDialogResult> VerifyWadHashesWithDialogAsync(
         ServerInfo server,
         string dialogTitle,
-        Func<ServerInfo, IProgress<GameLauncher.HashVerificationProgress>, CancellationToken, Task<List<GameLauncher.WadHashMismatch>>> verifyAsync)
+        Func<ServerInfo, IProgress<GameLauncher.HashVerificationProgress>, CancellationToken, Task<List<GameLauncher.WadHashMismatch>>> verifyAsync,
+        Func<ServerInfo, GameLauncher.CachedWadHashVerificationResult> checkCachedHashes)
     {
+        // The cache check inspects only file metadata and existing full MD5s.
+        // Run it away from the UI thread because a configured WAD path may live
+        // on a slow external or network drive. Only an all-file full-hash match
+        // can bypass the verification dialog; a cache miss or mismatch falls
+        // through to the existing verifier unchanged.
+        var cachedVerification = await Task.Run(() => checkCachedHashes(server));
+        if (cachedVerification.AllHashesMatch)
+        {
+            _logger.Info(
+                $"Skipped WAD hash calculation and dialog: {cachedVerification.VerifiedFileCount} cached full MD5 value(s) match {server.Address}:{server.Port}.");
+            return new HashVerificationDialogResult([], HashVerificationDialogAction.Completed);
+        }
+
         var settings = SettingsService.Instance.Settings;
         var concurrency = settings.HashVerificationConcurrency;
         bool isConcurrent = concurrency != 1;

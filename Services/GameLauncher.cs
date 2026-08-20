@@ -217,6 +217,15 @@ public class GameLauncher : IDisposable
     }
 
     /// <summary>
+    /// Describes whether every relevant PWAD already has a valid cached full
+    /// MD5 that matches the server's advertised full MD5. A successful result
+    /// means no file bytes need to be read and no verification UI is required.
+    /// </summary>
+    public readonly record struct CachedWadHashVerificationResult(
+        bool AllHashesMatch,
+        int VerifiedFileCount);
+
+    /// <summary>
     /// Progress information for hash verification.
     /// </summary>
     public class HashVerificationProgress
@@ -276,6 +285,60 @@ public class GameLauncher : IDisposable
         CancellationToken cancellationToken)
     {
         return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, pwad => pwad.IsOptional);
+    }
+
+    /// <summary>
+    /// Checks whether every server PWAD with an advertised hash can be trusted
+    /// from the local WAD hash cache. This never calculates an MD5: it succeeds
+    /// only when all required local files are present, their cache snapshots are
+    /// still valid, and their full cached MD5 values match the server.
+    /// </summary>
+    public CachedWadHashVerificationResult CheckCachedWadHashes(ServerInfo server)
+    {
+        return CheckCachedWadHashes(server, _ => true);
+    }
+
+    /// <summary>
+    /// Checks the cache-only fast path for server PWADs marked optional.
+    /// </summary>
+    public CachedWadHashVerificationResult CheckCachedOptionalWadHashes(ServerInfo server)
+    {
+        return CheckCachedWadHashes(server, pwad => pwad.IsOptional);
+    }
+
+    private CachedWadHashVerificationResult CheckCachedWadHashes(
+        ServerInfo server,
+        Func<PWadInfo, bool> predicate)
+    {
+        var pwadsWithHashes = server.PWADs
+            .Where(pwad => predicate(pwad) && !string.IsNullOrEmpty(pwad.Hash))
+            .ToList();
+        if (pwadsWithHashes.Count == 0)
+            return new CachedWadHashVerificationResult(false, 0);
+
+        var hashCache = WadHashCacheService.Instance;
+        if (!hashCache.IsEnabled)
+            return new CachedWadHashVerificationResult(false, 0);
+
+        var exeFolder = GetExecutableFolder(server);
+        var verifiedFileCount = 0;
+        foreach (var pwad in pwadsWithHashes)
+        {
+            var localPath = FindWadWithExeFolder(pwad.Name, exeFolder);
+            if (string.IsNullOrEmpty(localPath))
+                return new CachedWadHashVerificationResult(false, verifiedFileCount);
+
+            var cachedHash = hashCache.TryGetCachedHash(localPath);
+            if (string.IsNullOrEmpty(cachedHash)
+                || !string.Equals(cachedHash, pwad.Hash, StringComparison.OrdinalIgnoreCase))
+            {
+                return new CachedWadHashVerificationResult(false, verifiedFileCount);
+            }
+
+            verifiedFileCount++;
+        }
+
+        return new CachedWadHashVerificationResult(true, verifiedFileCount);
     }
 
     private async Task<List<WadHashMismatch>> VerifyWadHashesCoreAsync(

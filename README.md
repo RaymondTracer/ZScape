@@ -111,7 +111,9 @@ running executable. The directory must therefore be writable.
   settings.
 - `wad-hash-cache.json` stores full local WAD MD5 values with file identity and
   timestamp metadata. It is enabled by default, can be disabled in
-  **Preferences**, and never replaces a server's full hash comparison.
+  **Preferences**, and never replaces a server's full hash comparison. When
+  every expected PWAD has a still-valid cached full MD5 that matches, ZScape
+  skips reading those files and does not open the hash-verification dialog.
 - `runtime.log` contains runtime messages and unhandled exception details.
 
 When paths are left blank, the WAD download folder defaults to `WADs` beside the
