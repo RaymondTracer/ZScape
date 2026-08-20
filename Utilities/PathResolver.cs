@@ -9,6 +9,56 @@ namespace ZScape.Utilities;
 public static class PathResolver
 {
     /// <summary>
+    /// Folder under the current user's Documents directory that ZScape owns
+    /// for non-runtime files such as build archives and safe backups.
+    /// </summary>
+    public const string ZScapeDocumentsFolderName = "ZScape";
+
+    /// <summary>
+    /// Subfolder under <see cref="ZScapeDocumentsFolderName"/> containing
+    /// timestamped copies made before ZScape changes a user file.
+    /// </summary>
+    public const string BackupsFolderName = "Backups";
+
+    /// <summary>
+    /// Subfolder under <see cref="ZScapeDocumentsFolderName"/> containing
+    /// manually archived application build outputs.
+    /// </summary>
+    public const string BuildsFolderName = "Builds";
+
+    /// <summary>
+    /// Gets the root directory in Documents that is reserved for ZScape-owned
+    /// files. The directory is not created until a caller needs to write to it.
+    /// </summary>
+    public static string GetZScapeDocumentsPath()
+    {
+        var documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        return string.IsNullOrWhiteSpace(documentsPath)
+            ? Path.Combine(AppContext.BaseDirectory, ZScapeDocumentsFolderName)
+            : Path.Combine(documentsPath, ZScapeDocumentsFolderName);
+    }
+
+    /// <summary>
+    /// Gets the central location for safe copies made before ZScape updates a
+    /// user-managed file.
+    /// </summary>
+    public static string GetBackupsPath() =>
+        Path.Combine(GetZScapeDocumentsPath(), BackupsFolderName);
+
+    /// <summary>
+    /// Gets the central location for timestamped ZScape executable archives.
+    /// </summary>
+    public static string GetBuildsPath() =>
+        Path.Combine(GetZScapeDocumentsPath(), BuildsFolderName);
+
+    /// <summary>
+    /// Gets the central location for snapshots made before configuration
+    /// synchronization changes a Zandronum INI file.
+    /// </summary>
+    public static string GetConfigurationSyncBackupsPath() =>
+        Path.Combine(GetBackupsPath(), "Configuration Sync");
+
+    /// <summary>
     /// Default subfolder name for testing versions.
     /// </summary>
     public const string TestingVersionsFolderName = "TestingVersions";

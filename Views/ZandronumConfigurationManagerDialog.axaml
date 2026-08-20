@@ -72,7 +72,7 @@
                         <CheckBox x:Name="SyncWholeFileCheckBox"
                                   Content="Sync entire INI file (replace every setting)"
                                   IsCheckedChanged="SyncWholeFileCheckBox_IsCheckedChanged" />
-                        <TextBlock Text="Otherwise select only the INI sections that should follow the launched version. Existing target files are backed up before each write."
+                        <TextBlock Text="Otherwise select only the INI sections that should follow the launched version. Existing target files are backed up in Documents\ZScape\Backups before each write."
                                    TextWrapping="Wrap"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                         <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,3,0,0">

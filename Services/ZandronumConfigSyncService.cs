@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using ZScape.Models;
@@ -84,7 +85,7 @@ public sealed class ZandronumConfigSyncService
         var stableVersionsRoot = string.IsNullOrWhiteSpace(settings.ZandronumPath)
             ? null
             : ZandronumStableReleaseService.Instance.GetStableVersionsRootPath(settings.ZandronumPath);
-        foreach (var executablePath in EnumerateZandronumExecutables(stableVersionsRoot))
+        foreach (var executablePath in EnumerateManagedZandronumExecutables(stableVersionsRoot))
         {
             AddCandidate(
                 executablePath,
@@ -92,7 +93,7 @@ public sealed class ZandronumConfigSyncService
         }
 
         var testingRoot = PathResolver.GetTestingVersionsPath(settings);
-        foreach (var executablePath in EnumerateZandronumExecutables(testingRoot))
+        foreach (var executablePath in EnumerateManagedZandronumExecutables(testingRoot))
         {
             AddCandidate(
                 executablePath,
@@ -178,8 +179,9 @@ public sealed class ZandronumConfigSyncService
 
     /// <summary>
     /// Copies the configured scope from one known configuration to all of the
-    /// other known configurations. Existing target files are backed up to
-    /// <c>.zscape-sync.bak</c> before a successful write.
+    /// other known configurations. Existing target files are backed up under
+    /// the current user's Documents\ZScape\Backups folder before a successful
+    /// write.
     /// </summary>
     public async Task<ZandronumConfigSyncResult> SynchronizeFromConfigurationAsync(
         string sourceConfigurationPath,
@@ -565,12 +567,13 @@ public sealed class ZandronumConfigSyncService
     private static void WriteTextWithBackup(string targetPath, string content, Encoding encoding)
     {
         var temporaryPath = targetPath + ".zscape-sync.tmp";
-        var backupPath = targetPath + ".zscape-sync.bak";
+        var backupPath = GetBackupPath(targetPath);
 
         try
         {
             File.WriteAllText(temporaryPath, content, encoding);
-            File.Copy(targetPath, backupPath, overwrite: true);
+            Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+            File.Copy(targetPath, backupPath, overwrite: false);
             File.Move(temporaryPath, targetPath, overwrite: true);
         }
         finally
@@ -586,6 +589,31 @@ public sealed class ZandronumConfigSyncService
                 // write error. The next successful sync will overwrite it.
             }
         }
+    }
+
+    private static string GetBackupPath(string targetPath)
+    {
+        var targetDirectory = Path.GetDirectoryName(targetPath);
+        var directoryLabel = SanitizePathSegment(Path.GetFileName(targetDirectory));
+        var normalizedPath = NormalizePath(targetPath) ?? targetPath;
+        var pathHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedPath)))[..12].ToLowerInvariant();
+        var backupDirectory = Path.Combine(
+            PathResolver.GetConfigurationSyncBackupsPath(),
+            $"{directoryLabel}-{pathHash}");
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff");
+        var fileName = Path.GetFileName(targetPath);
+
+        return Path.Combine(backupDirectory, $"{timestamp}-{fileName}");
+    }
+
+    private static string SanitizePathSegment(string? value)
+    {
+        var candidate = string.IsNullOrWhiteSpace(value) ? "Zandronum" : value;
+        var invalidCharacters = Path.GetInvalidFileNameChars();
+        var sanitized = new string(candidate.Select(character =>
+            invalidCharacters.Contains(character) ? '_' : character).ToArray()).Trim();
+
+        return string.IsNullOrEmpty(sanitized) ? "Zandronum" : sanitized;
     }
 
     private static ZandronumConfigurationVersion CreateConfigurationVersion(
@@ -618,7 +646,7 @@ public sealed class ZandronumConfigSyncService
             fileInfo?.Length ?? 0);
     }
 
-    private static IEnumerable<string> EnumerateZandronumExecutables(string? rootPath)
+    private static IEnumerable<string> EnumerateManagedZandronumExecutables(string? rootPath)
     {
         if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
             yield break;
@@ -627,38 +655,55 @@ public sealed class ZandronumConfigSyncService
             ? new[] { "zandronum.exe" }
             : new[] { "zandronum", "zandronum.x86_64" };
 
-        foreach (var executableName in executableNames)
+        IEnumerable<string>? installationDirectories = null;
+        try
         {
-            IEnumerable<string>? candidates = null;
+            installationDirectories = Directory.EnumerateDirectories(rootPath, "*", SearchOption.TopDirectoryOnly);
+        }
+        catch
+        {
+            yield break;
+        }
+
+        using var enumerator = installationDirectories.GetEnumerator();
+        while (true)
+        {
+            string? installationDirectory;
             try
             {
-                candidates = Directory.EnumerateFiles(rootPath, executableName, SearchOption.AllDirectories);
+                if (!enumerator.MoveNext())
+                    break;
+
+                installationDirectory = enumerator.Current;
             }
             catch
             {
-                continue;
+                // One inaccessible version directory should not prevent the
+                // manager from showing the rest of the configured root.
+                break;
             }
 
-            using var enumerator = candidates.GetEnumerator();
-            while (true)
+            foreach (var executableName in executableNames)
             {
-                string? candidate;
-                try
+                var executablePath = Path.Combine(installationDirectory, executableName);
+                if (File.Exists(executablePath))
                 {
-                    if (!enumerator.MoveNext())
-                        break;
-
-                    candidate = enumerator.Current;
-                }
-                catch
-                {
-                    // One inaccessible nested directory should not prevent the
-                    // manager from showing the rest of the configured root.
+                    yield return executablePath;
                     break;
                 }
 
-                if (!string.IsNullOrWhiteSpace(candidate))
-                    yield return candidate;
+                // macOS app bundles keep the executable at this predictable
+                // location while still remaining one managed version folder.
+                var appBundleExecutablePath = Path.Combine(
+                    installationDirectory,
+                    "Contents",
+                    "MacOS",
+                    executableName);
+                if (File.Exists(appBundleExecutablePath))
+                {
+                    yield return appBundleExecutablePath;
+                    break;
+                }
             }
         }
     }

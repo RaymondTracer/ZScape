@@ -519,7 +519,7 @@ public partial class ZandronumConfigurationManagerDialog : Window
             {
                 StatusText.Text = result.UpdatedFileCount == 0
                     ? "No configuration files needed changes."
-                    : $"Updated {result.UpdatedFileCount} configuration file{(result.UpdatedFileCount == 1 ? string.Empty : "s")}. A .zscape-sync.bak backup was kept beside each changed file.";
+                    : $"Updated {result.UpdatedFileCount} configuration file{(result.UpdatedFileCount == 1 ? string.Empty : "s")}. A timestamped backup was saved under Documents\\ZScape\\Backups.";
             }
         }
         catch (Exception ex)
@@ -552,7 +552,7 @@ public partial class ZandronumConfigurationManagerDialog : Window
         var root = new Grid { Margin = new Thickness(16), RowDefinitions = new RowDefinitions("*,Auto") };
         var message = new TextBlock
         {
-            Text = $"Copy {scopeDescription} from \"{sourceName}\" to {targetCount} other Zandronum version{(targetCount == 1 ? string.Empty : "s")} now?\n\nEach changed target is backed up as {ZandronumConfigSyncService.UserConfigurationFileName}.zscape-sync.bak before it is replaced.",
+            Text = $"Copy {scopeDescription} from \"{sourceName}\" to {targetCount} other Zandronum version{(targetCount == 1 ? string.Empty : "s")} now?\n\nEach changed target is backed up to Documents\\ZScape\\Backups before it is replaced.",
             TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center
         };
