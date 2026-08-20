@@ -332,7 +332,8 @@ public partial class MainWindow : Window
         ServerListView.RowDoubleTapped += OnServerRowDoubleTapped;
         ServerListView.SelectionChanged += OnServerSelectionChanged;
 
-        // Wire up scroll viewer events for middle-click
+        // The scroll viewer owns blank-canvas deselection and context-menu
+        // targeting. Row-specific actions use the list control's row events.
         ServerListView.ScrollViewer.PointerPressed += ServerScrollViewer_PointerPressed;
     }
 
@@ -2913,9 +2914,7 @@ public partial class MainWindow : Window
     {
         if (_selectedServer == null) return;
 
-        _logger.Info($"Refreshing server: {_selectedServer.Address}:{_selectedServer.Port}");
-        await _browserService.RefreshServerAsync(_selectedServer);
-        UpdateServerList();
+        await RefreshOneServerAsync(_selectedServer, "Refreshing server");
     }
 
     private void ToggleFavoriteAddressMenuItem_Click(object? sender, RoutedEventArgs e)
@@ -3019,13 +3018,28 @@ public partial class MainWindow : Window
     #region Event Handlers - Server List
 
     /// <summary>
-    /// Handle row click - middle-button skip is handled separately.
-    /// Selection is managed by the built-in highlighting; this just handles
-    /// any additional per-click logic.
+    /// Handles row-specific pointer actions. The custom list view supplies the
+    /// actual row data context here, rather than requiring visual-tree guesses
+    /// from a nested cell control.
     /// </summary>
     private void OnServerRowPressed(object? sender, ListViewRowPointerEventArgs e)
     {
-        // Middle-click is handled by ServerScrollViewer_PointerPressed
+        if (!e.PointerArgs.GetCurrentPoint(e.RowBorder).Properties.IsMiddleButtonPressed)
+            return;
+
+        // A row-level middle click is consumed here so the scroll viewer does
+        // not apply its own pointer behavior after the refresh is requested.
+        e.PointerArgs.Handled = true;
+
+        if (e.DataContext is not ServerViewModel vm)
+            return;
+
+        var server = _browserService.Servers.FirstOrDefault(candidate =>
+            $"{candidate.Address}:{candidate.Port}" == vm.AddressDisplay);
+        if (server == null)
+            return;
+
+        _ = RefreshOneServerAsync(server, "Middle-click refresh");
     }
 
     /// <summary>
@@ -3080,7 +3094,8 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handle middle-click on scroll viewer for server refresh.
+    /// Handles blank-canvas selection clearing and tracks whether a context
+    /// menu was opened over a real server row.
     /// </summary>
     private void ServerScrollViewer_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -3104,28 +3119,28 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (point.Properties.IsMiddleButtonPressed)
+    }
+
+    private async Task RefreshOneServerAsync(ServerInfo server, string action)
+    {
+        if (server.IsRefreshPending)
         {
-            // Find the row under the pointer
-            if (e.Source is Control control)
-            {
-                var border = control.FindAncestorOfType<Border>();
-                if (border?.DataContext is ServerViewModel vm)
-                {
-                    var server = _browserService.Servers.FirstOrDefault(s =>
-                        $"{s.Address}:{s.Port}" == vm.AddressDisplay);
+            _logger.Info($"Server {server.Address}:{server.Port} is already refreshing");
+            return;
+        }
 
-                    if (server != null)
-                    {
-                        if (server.IsRefreshPending)
-                            return;
-
-                        _logger.Info($"Middle-click refresh: {server.Address}:{server.Port}");
-                        _ = _browserService.RefreshServerAsync(server);
-                        e.Handled = true;
-                    }
-                }
-            }
+        _logger.Info($"{action}: {server.Address}:{server.Port}");
+        try
+        {
+            await _browserService.RefreshServerAsync(server);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"Could not refresh {server.Address}:{server.Port}: {ex.Message}");
+        }
+        finally
+        {
+            UpdateServerList();
         }
     }
 
