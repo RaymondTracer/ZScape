@@ -69,6 +69,36 @@ public sealed class WadHashCacheService
         Action<long>? progress,
         CancellationToken cancellationToken)
     {
+        return await GetHashCoreAsync(
+            filePath,
+            progress,
+            cancellationToken,
+            forceRefresh: false).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Recalculates a file's full MD5 even when its current snapshot already
+    /// has a valid cache entry. The freshly calculated value replaces that
+    /// entry only when the file remains unchanged throughout the calculation.
+    /// </summary>
+    public async Task<WadHashResult> RefreshHashAsync(
+        string filePath,
+        Action<long>? progress,
+        CancellationToken cancellationToken)
+    {
+        return await GetHashCoreAsync(
+            filePath,
+            progress,
+            cancellationToken,
+            forceRefresh: true).ConfigureAwait(false);
+    }
+
+    private async Task<WadHashResult> GetHashCoreAsync(
+        string filePath,
+        Action<long>? progress,
+        CancellationToken cancellationToken,
+        bool forceRefresh)
+    {
         var initialSnapshot = TryCreateSnapshot(filePath);
         if (initialSnapshot == null)
         {
@@ -79,7 +109,7 @@ public sealed class WadHashCacheService
                 ErrorMessage: "The file no longer exists or could not be inspected.");
         }
 
-        if (IsEnabled && TryGetCachedHash(initialSnapshot) is { } cachedHash)
+        if (!forceRefresh && IsEnabled && TryGetCachedHash(initialSnapshot) is { } cachedHash)
         {
             progress?.Invoke(initialSnapshot.Length);
             return new WadHashResult(cachedHash, FromCache: true, initialSnapshot.Length, ErrorMessage: null);

@@ -234,7 +234,7 @@ public partial class MainWindow : Window
         {
             Key = "status",
             Header = "Status",
-            HeaderToolTip = "Whether the IWAD or PWAD is available locally. MISMATCH means a valid cached local MD5 differs from this server's expected hash.",
+            HeaderToolTip = "[FOUND] means the WAD is available locally. [CACHED] means a valid cached local MD5 also matches this server's expected hash. MISMATCH means they differ.",
             Width = 76,
             MinWidth = 60,
             IsFixedWidth = true,
@@ -5534,15 +5534,24 @@ public class WadViewModel
             && !string.IsNullOrWhiteSpace(cachedHash)
             && !string.IsNullOrWhiteSpace(expectedHash)
             && !string.Equals(cachedHash, expectedHash, StringComparison.OrdinalIgnoreCase);
+        var hasCachedHashMatch = isAvailable
+            && !string.IsNullOrWhiteSpace(cachedHash)
+            && !string.IsNullOrWhiteSpace(expectedHash)
+            && string.Equals(cachedHash, expectedHash, StringComparison.OrdinalIgnoreCase);
 
         if (hasHashMismatch)
         {
             status = "MISMATCH";
             color = Brushes.Tomato;
         }
+        else if (hasCachedHashMatch)
+        {
+            status = "[CACHED]";
+            color = new SolidColorBrush(Color.FromRgb(50, 205, 50)); // LimeGreen
+        }
         else if (isAvailable)
         {
-            status = "[OK]";
+            status = "[FOUND]";
             color = new SolidColorBrush(Color.FromRgb(50, 205, 50)); // LimeGreen
         }
         else if (isForbiddenIwad)

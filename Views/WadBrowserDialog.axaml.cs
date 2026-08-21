@@ -7,7 +7,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -70,6 +69,9 @@ public partial class WadBrowserDialog : Window
     private readonly List<WadFileEntry> _allWads = new();
     private ObservableCollection<WadFileEntry> _filteredWads = new();
     private bool _isScanning;
+    private bool _isRefreshingSelectedHash;
+    private MenuItem? _locateFileMenuItem;
+    private MenuItem? _refreshHashCacheMenuItem;
 
     private readonly List<ListViewSortDescriptor> _sortDescriptors =
     [
@@ -138,6 +140,8 @@ public partial class WadBrowserDialog : Window
         WadListView.SetSortDescriptors(_sortDescriptors);
         WadListView.SortRequested += WadListView_SortRequested;
         WadListView.ItemsSource = _filteredWads;
+        WadListView.SelectionChanged += (_, _) => UpdateActionAvailability();
+        ConfigureWadContextMenu();
 
         // Wire up row events
         WadListView.RowDoubleTapped += OnWadRowDoubleTapped;
@@ -146,6 +150,7 @@ public partial class WadBrowserDialog : Window
         KeyDown += OnDialogKeyDown;
 
         Loaded += async (_, _) => await ScanWadsAsync();
+        UpdateActionAvailability();
     }
 
     private void OnDialogKeyDown(object? sender, KeyEventArgs e)
@@ -170,6 +175,9 @@ public partial class WadBrowserDialog : Window
         WadListView.ClearSelection();
         RefreshButton.IsEnabled = false;
         CacheAllHashesButton.IsEnabled = false;
+        RefreshSelectedHashButton.IsEnabled = false;
+        LocateFileButton.IsEnabled = false;
+        DeleteSelectedButton.IsEnabled = false;
 
         try
         {
@@ -230,8 +238,7 @@ public partial class WadBrowserDialog : Window
         finally
         {
             _isScanning = false;
-            RefreshButton.IsEnabled = true;
-            CacheAllHashesButton.IsEnabled = WadHashCacheService.Instance.IsEnabled;
+            UpdateActionAvailability();
         }
     }
 
@@ -313,16 +320,10 @@ public partial class WadBrowserDialog : Window
 
     #region Row Interaction
 
-    private void OnWadRowDoubleTapped(object? sender, ListViewRowEventArgs e)
+    private async void OnWadRowDoubleTapped(object? sender, ListViewRowEventArgs e)
     {
         if (e.DataContext is WadFileEntry wad)
-        {
-            var folder = Path.GetDirectoryName(wad.FullPath);
-            if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
-            {
-                Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
-            }
-        }
+            await LocateWadFileAsync(wad);
     }
 
     #endregion
@@ -375,18 +376,131 @@ public partial class WadBrowserDialog : Window
 
         ApplyFilterAndSort();
         UpdateStats();
+        UpdateActionAvailability();
     }
 
-    private void OpenFolderButton_Click(object? sender, RoutedEventArgs e)
+    private async void RefreshSelectedHashButton_Click(object? sender, RoutedEventArgs e)
     {
-        var selected = WadListView.SelectedItem as WadFileEntry;
-        if (selected == null) return;
+        await RefreshSelectedHashAsync();
+    }
 
-        var folder = Path.GetDirectoryName(selected.FullPath);
-        if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
+    private async void LocateFileButton_Click(object? sender, RoutedEventArgs e)
+    {
+        var selected = GetSingleSelectedWad();
+        if (selected != null)
+            await LocateWadFileAsync(selected);
+    }
+
+    private async void LocateFileMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var selected = GetSingleSelectedWad();
+        if (selected != null)
+            await LocateWadFileAsync(selected);
+    }
+
+    private async void RefreshHashCacheMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        await RefreshSelectedHashAsync();
+    }
+
+    private async Task RefreshSelectedHashAsync()
+    {
+        var selected = GetSingleSelectedWad();
+        if (_isScanning || _isRefreshingSelectedHash || selected == null)
+            return;
+
+        var hashCache = WadHashCacheService.Instance;
+        if (!hashCache.IsEnabled)
         {
-            Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
+            StatusLabel.Text = "Enable WAD hash caching in Preferences before refreshing a file hash.";
+            return;
         }
+
+        _isRefreshingSelectedHash = true;
+        StatusLabel.Text = $"Refreshing cached MD5 for {selected.NameWithExtension}...";
+        UpdateActionAvailability();
+
+        try
+        {
+            var result = await hashCache.RefreshHashAsync(
+                selected.FullPath,
+                progress: null,
+                CancellationToken.None);
+            var cachedHash = hashCache.TryGetCachedHash(selected.FullPath);
+            selected.SetCachedHash(cachedHash);
+
+            if (!result.IsSuccess)
+            {
+                StatusLabel.Text = $"Could not refresh {selected.NameWithExtension}: "
+                    + (result.ErrorMessage ?? "unknown read error");
+                return;
+            }
+
+            ApplyFilterAndSort();
+            UpdateStats();
+            StatusLabel.Text = cachedHash == null
+                ? $"{selected.NameWithExtension} changed while its MD5 was calculated; no cache entry was saved."
+                : $"Refreshed cached MD5 for {selected.NameWithExtension}.";
+        }
+        catch (Exception ex)
+        {
+            selected.SetCachedHash(hashCache.TryGetCachedHash(selected.FullPath));
+            StatusLabel.Text = $"Could not refresh {selected.NameWithExtension}: {ex.Message}";
+        }
+        finally
+        {
+            _isRefreshingSelectedHash = false;
+            UpdateActionAvailability();
+        }
+    }
+
+    private async Task LocateWadFileAsync(WadFileEntry wad)
+    {
+        var result = await FileManagerService.LocateFileAsync(wad.FullPath);
+        StatusLabel.Text = result.Succeeded
+            ? $"Located {wad.NameWithExtension}."
+            : $"Could not locate {wad.NameWithExtension}: {result.ErrorMessage ?? "unknown error"}";
+    }
+
+    private void ConfigureWadContextMenu()
+    {
+        var contextMenu = new ContextMenu();
+        contextMenu.Opening += (_, _) => UpdateActionAvailability();
+
+        _locateFileMenuItem = new MenuItem { Header = "_Locate File" };
+        _locateFileMenuItem.Click += LocateFileMenuItem_Click;
+        contextMenu.Items.Add(_locateFileMenuItem);
+
+        _refreshHashCacheMenuItem = new MenuItem { Header = "Refresh _Hash Cache" };
+        _refreshHashCacheMenuItem.Click += RefreshHashCacheMenuItem_Click;
+        contextMenu.Items.Add(_refreshHashCacheMenuItem);
+
+        WadListView.ContextMenu = contextMenu;
+    }
+
+    private WadFileEntry? GetSingleSelectedWad()
+    {
+        var selected = WadListView.SelectedItems.OfType<WadFileEntry>().ToList();
+        return selected.Count == 1 ? selected[0] : null;
+    }
+
+    private void UpdateActionAvailability()
+    {
+        var selectedCount = WadListView.SelectedItems.OfType<WadFileEntry>().Count();
+        var hasSingleSelection = selectedCount == 1;
+        var hasSelection = selectedCount > 0;
+        var isBusy = _isScanning || _isRefreshingSelectedHash;
+        var hashCachingEnabled = WadHashCacheService.Instance.IsEnabled;
+
+        RefreshButton.IsEnabled = !isBusy;
+        CacheAllHashesButton.IsEnabled = !isBusy && hashCachingEnabled && _allWads.Count > 0;
+        RefreshSelectedHashButton.IsEnabled = !isBusy && hashCachingEnabled && hasSingleSelection;
+        LocateFileButton.IsEnabled = !isBusy && hasSingleSelection;
+        DeleteSelectedButton.IsEnabled = !isBusy && hasSelection;
+        if (_locateFileMenuItem != null)
+            _locateFileMenuItem.IsEnabled = !isBusy && hasSingleSelection;
+        if (_refreshHashCacheMenuItem != null)
+            _refreshHashCacheMenuItem.IsEnabled = !isBusy && hashCachingEnabled && hasSingleSelection;
     }
 
     private void SearchTextBox_TextChanged(object? sender, TextChangedEventArgs e)
@@ -472,6 +586,7 @@ public partial class WadBrowserDialog : Window
 
         StatusLabel.Text = $"Deleted {deleted} file(s)";
         UpdateStats();
+        UpdateActionAvailability();
     }
 
     private void CloseButton_Click(object? sender, RoutedEventArgs e)
