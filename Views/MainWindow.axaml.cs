@@ -234,23 +234,12 @@ public partial class MainWindow : Window
         {
             Key = "status",
             Header = "Status",
-            HeaderToolTip = "Whether the IWAD or PWAD is available locally",
+            HeaderToolTip = "Whether the IWAD or PWAD is available locally. MISMATCH means a valid cached local MD5 differs from this server's expected hash.",
             Width = 76,
             MinWidth = 60,
             IsFixedWidth = true,
             CanUserHide = false,
             CellContentFactory = CreateWadStatusCell
-        });
-        WadsListControl.AddColumn(new ListViewColumn
-        {
-            Key = "cached",
-            Header = "Cached",
-            HeaderToolTip = "A check mark means a valid local full MD5 is cached for this unchanged file.",
-            Width = 62,
-            MinWidth = 10,
-            BindingPath = nameof(WadViewModel.CachedMarker),
-            Foreground = Brushes.LightGreen,
-            ContentAlignment = Avalonia.Layout.HorizontalAlignment.Center
         });
         WadsListControl.AddColumn(new ListViewColumn
         {
@@ -262,16 +251,6 @@ public partial class MainWindow : Window
             BindingPath = nameof(WadViewModel.Name),
             TextTrimming = TextTrimming.CharacterEllipsis,
             AutoSizeTextPath = nameof(WadViewModel.Name)
-        });
-        WadsListControl.AddColumn(new ListViewColumn
-        {
-            Key = "hash",
-            Header = "MD5",
-            HeaderToolTip = "Full cached MD5. MISMATCH means the cached local MD5 differs from the selected server's expected hash.",
-            Width = 270,
-            MinWidth = 10,
-            IsVisibleByDefault = false,
-            CellContentFactory = CreateWadHashCell
         });
 
         WadsListControl.Build(ListViewOverflowMode.Fill);
@@ -286,19 +265,6 @@ public partial class MainWindow : Window
         };
         text.Bind(TextBlock.TextProperty, new Binding(nameof(WadViewModel.Status)));
         text.Bind(TextBlock.ForegroundProperty, new Binding(nameof(WadViewModel.StatusColor)));
-        return text;
-    }
-
-    private static Control CreateWadHashCell()
-    {
-        var text = new TextBlock
-        {
-            Padding = new Thickness(6, 0),
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis
-        };
-        text.Bind(TextBlock.TextProperty, new Binding(nameof(WadViewModel.HashDisplay)));
-        text.Bind(TextBlock.ForegroundProperty, new Binding(nameof(WadViewModel.HashColor)));
         return text;
     }
 
@@ -5553,9 +5519,6 @@ public class WadViewModel
     public string DisplayText { get; set; } = "";
     public IBrush StatusColor { get; set; } = Brushes.White;
     public bool IsIwad { get; set; }
-    public string CachedMarker { get; set; } = string.Empty;
-    public string HashDisplay { get; set; } = string.Empty;
-    public IBrush HashColor { get; set; } = Brushes.Gray;
 
     public static WadViewModel Create(
         string wadName,
@@ -5599,14 +5562,7 @@ public class WadViewModel
             Status = status,
             DisplayText = $"{status} {wadName}",
             StatusColor = color,
-            IsIwad = isIwad,
-            CachedMarker = string.IsNullOrWhiteSpace(cachedHash) ? string.Empty : "✓",
-            HashDisplay = hasHashMismatch ? "MISMATCH" : cachedHash ?? string.Empty,
-            HashColor = hasHashMismatch
-                ? Brushes.Tomato
-                : string.IsNullOrWhiteSpace(cachedHash)
-                    ? Brushes.Gray
-                    : Brushes.LightGreen
+            IsIwad = isIwad
         };
     }
 }
