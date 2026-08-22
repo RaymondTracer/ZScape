@@ -377,7 +377,9 @@ public class ResizableListView : UserControl
     public IReadOnlyList<ListViewSortDescriptor> SortDescriptors => _sortDescriptors;
 
     /// <summary>
-    /// Context menu to attach to the scroll viewer.
+    /// Context menu for the list canvas and its rows. Right-clicking a row
+    /// opens this menu directly from that row so it is reliable across
+    /// Avalonia backends.
     /// </summary>
     public new ContextMenu? ContextMenu
     {
@@ -1534,6 +1536,19 @@ public class ResizableListView : UserControl
                 if (_selectionMode != ListViewSelectionMode.None)
                     HandleRowSelection(b, e.KeyModifiers);
                 RowPressed?.Invoke(this, new ListViewRowPointerEventArgs(b.DataContext, b, e));
+
+                // The row is created inside the ItemsControl rather than being
+                // the ScrollViewer itself. Relying on inherited ContextMenu
+                // lookup therefore fails on some Avalonia backends. Open the
+                // shared menu directly from the real row after selection and
+                // RowPressed handlers have updated their row-specific state.
+                if (!e.Handled
+                    && e.GetCurrentPoint(b).Properties.IsRightButtonPressed
+                    && ContextMenu is { } contextMenu)
+                {
+                    contextMenu.Open(b);
+                    e.Handled = true;
+                }
             };
             border.DoubleTapped += (s, e) =>
             {
