@@ -14,6 +14,11 @@
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,10">
             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="5">
                 <Button x:Name="RefreshButton" Content="Refresh" Click="RefreshButton_Click"/>
+                <Button x:Name="CancelScanButton"
+                        Content="Cancel Scan"
+                        IsEnabled="False"
+                        ToolTip.Tip="Stop the current WAD folder scan and keep the previous results."
+                        Click="CancelScanButton_Click"/>
                 <Button x:Name="CacheAllHashesButton"
                         Content="Cache All Files Now"
                         ToolTip.Tip="Calculate full MD5 hashes for all local WAD files in the background."
@@ -36,14 +41,21 @@
         <!-- WAD list -->
         <controls:ResizableListView x:Name="WadListView" Grid.Row="1" />
         
-        <!-- Status bar -->
-        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="0,5,0,0">
-            <TextBlock x:Name="StatusLabel" Text="Loading..." VerticalAlignment="Center"/>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
-                <TextBlock x:Name="CountLabel" Text="0 files" VerticalAlignment="Center"/>
-                <TextBlock x:Name="TotalSizeLabel" Text="0 MB" VerticalAlignment="Center"/>
-            </StackPanel>
-        </Grid>
+        <!-- Status and indeterminate scan progress. File discovery has no cheap
+             total, so the live counters provide the meaningful progress state. -->
+        <StackPanel Grid.Row="2" Spacing="5" Margin="0,5,0,0">
+            <ProgressBar x:Name="ScanProgressBar"
+                         Height="8"
+                         IsIndeterminate="True"
+                         IsVisible="False"/>
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock x:Name="StatusLabel" Text="Loading..." VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
+                    <TextBlock x:Name="CountLabel" Text="0 files" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TotalSizeLabel" Text="0 MB" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
         
         <!-- Button panel -->
         <Grid Grid.Row="3" ColumnDefinitions="Auto,*,Auto">

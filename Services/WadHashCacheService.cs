@@ -61,6 +61,24 @@ public sealed class WadHashCacheService
     }
 
     /// <summary>
+    /// Returns whether the cache has ever recorded this canonical path. This
+    /// is deliberately only a cheap hint for UI scans; callers must still use
+    /// <see cref="TryGetCachedHash"/> before treating the entry as valid.
+    /// </summary>
+    public bool HasCachedEntryForPath(string? filePath)
+    {
+        if (!IsEnabled)
+            return false;
+
+        var normalizedPath = NormalizePath(filePath);
+        if (normalizedPath == null)
+            return false;
+
+        lock (_entriesLock)
+            return _entries.ContainsKey(normalizedPath);
+    }
+
+    /// <summary>
     /// Gets a full MD5 for a file, reusing an unchanged cached value when safe.
     /// New calculations are recorded automatically when the cache is enabled.
     /// </summary>

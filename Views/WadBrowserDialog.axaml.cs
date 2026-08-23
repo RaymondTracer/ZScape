@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -66,10 +67,13 @@ public class WadFileEntry : INotifyPropertyChanged
 public partial class WadBrowserDialog : Window
 {
     private readonly SettingsService _settings;
+    private readonly LoggingService _logger = LoggingService.Instance;
     private readonly List<WadFileEntry> _allWads = new();
     private ObservableCollection<WadFileEntry> _filteredWads = new();
     private bool _isScanning;
     private bool _isRefreshingSelectedHash;
+    private bool _isClosing;
+    private CancellationTokenSource? _scanCancellation;
     private MenuItem? _locateFileMenuItem;
     private MenuItem? _refreshHashCacheMenuItem;
 
@@ -148,6 +152,11 @@ public partial class WadBrowserDialog : Window
 
         // Handle Escape key
         KeyDown += OnDialogKeyDown;
+        Closing += (_, _) =>
+        {
+            _isClosing = true;
+            _scanCancellation?.Cancel();
+        };
 
         Loaded += async (_, _) => await ScanWadsAsync();
         UpdateActionAvailability();
@@ -168,11 +177,23 @@ public partial class WadBrowserDialog : Window
     {
         if (_isScanning) return;
         _isScanning = true;
+        _isClosing = false;
 
-        StatusLabel.Text = "Scanning WAD folders...";
-        _allWads.Clear();
-        _filteredWads.Clear();
+        using var scanCancellation = new CancellationTokenSource();
+        _scanCancellation = scanCancellation;
+        var scanProgress = new Progress<WadFileScanProgress>(UpdateScanProgress);
+        var wadPaths = WadManager.Instance.GetSearchRootsInPriorityOrder().ToArray();
+
         WadListView.ClearSelection();
+        ScanProgressBar.IsVisible = true;
+        ScanProgressBar.IsIndeterminate = true;
+        CancelScanButton.IsEnabled = true;
+        StatusLabel.Text = wadPaths.Length == 0
+            ? "No valid WAD folders are configured."
+            : $"Preparing to scan {wadPaths.Length} WAD folder(s)...";
+        ToolTip.SetTip(StatusLabel, wadPaths.Length == 0
+            ? "Configure WAD Paths in Settings to browse local WAD files."
+            : string.Join(Environment.NewLine, wadPaths));
         RefreshButton.IsEnabled = false;
         CacheAllHashesButton.IsEnabled = false;
         RefreshSelectedHashButton.IsEnabled = false;
@@ -181,66 +202,186 @@ public partial class WadBrowserDialog : Window
 
         try
         {
-            var scannedWads = await Task.Run(() =>
+            if (wadPaths.Length == 0)
             {
-                var entries = new List<WadFileEntry>();
-                var wadPaths = WadManager.Instance.GetSearchRootsInPriorityOrder();
-                var hashCache = WadHashCacheService.Instance;
+                UpdateStats();
+                return;
+            }
 
-                foreach (var basePath in wadPaths)
-                {
-                    try
-                    {
-                        foreach (var file in Directory.EnumerateFiles(basePath, "*.*", SearchOption.AllDirectories))
-                        {
-                            var ext = Path.GetExtension(file);
-                            if (!WadExtensions.IsSupportedExtension(ext))
-                                continue;
+            var scannedWads = await Task.Run(
+                () => ScanWadFiles(wadPaths, scanProgress, scanCancellation.Token),
+                scanCancellation.Token);
 
-                            try
-                            {
-                                var fileInfo = new FileInfo(file);
-                                var entry = new WadFileEntry
-                                {
-                                    Name = Path.GetFileNameWithoutExtension(file),
-                                    Extension = ext.ToLowerInvariant(),
-                                    FullPath = file,
-                                    Size = fileInfo.Length,
-                                    Modified = fileInfo.LastWriteTime
-                                };
-                                entry.SetCachedHash(hashCache.TryGetCachedHash(file));
-                                entries.Add(entry);
-                            }
-                            catch
-                            {
-                                // A single inaccessible or transient file should
-                                // not stop the rest of the browser scan.
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // A configured search root may disappear while the
-                        // browser is open. Continue with the remaining roots.
-                    }
-                }
+            if (_isClosing)
+                return;
 
-                return entries;
-            });
-
-            foreach (var entry in scannedWads)
+            _allWads.Clear();
+            foreach (var entry in scannedWads.Entries)
                 _allWads.Add(entry);
 
             ApplyFilterAndSort();
             UpdateStats();
-            StatusLabel.Text = "Ready";
+            StatusLabel.Text = BuildScanCompleteStatus(scannedWads);
+            ToolTip.SetTip(StatusLabel, BuildScanDiagnosticsToolTip(scannedWads));
+
+            if (scannedWads.ScanResult.Issues.Count > 0)
+            {
+                foreach (var issue in scannedWads.ScanResult.Issues.Take(5))
+                    _logger.Warning($"WAD Browser skipped {issue.Path}: {issue.Message}");
+            }
+        }
+        catch (OperationCanceledException) when (scanCancellation.IsCancellationRequested)
+        {
+            if (!_isClosing)
+            {
+                StatusLabel.Text = _allWads.Count == 0
+                    ? "WAD scan cancelled before any results were loaded."
+                    : "WAD scan cancelled; previous results are still shown.";
+                ToolTip.SetTip(StatusLabel, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"WAD Browser scan failed: {ex.Message}");
+            if (!_isClosing)
+            {
+                StatusLabel.Text = $"WAD scan failed: {ex.Message}";
+                ToolTip.SetTip(StatusLabel, ex.ToString());
+            }
         }
         finally
         {
             _isScanning = false;
-            UpdateActionAvailability();
+            if (ReferenceEquals(_scanCancellation, scanCancellation))
+                _scanCancellation = null;
+
+            if (!_isClosing)
+            {
+                ScanProgressBar.IsVisible = false;
+                CancelScanButton.IsEnabled = false;
+                UpdateActionAvailability();
+            }
         }
     }
+
+    private static WadBrowserScanResult ScanWadFiles(
+        IReadOnlyList<string> wadPaths,
+        IProgress<WadFileScanProgress> progress,
+        CancellationToken cancellationToken)
+    {
+        var entries = new List<WadFileEntry>();
+        var skippedEntries = 0;
+        var hashCache = WadHashCacheService.Instance;
+
+        var scanResult = WadFileScanner.Scan(
+            wadPaths,
+            filePath =>
+            {
+                try
+                {
+                    var fileInfo = new FileInfo(filePath);
+                    var entry = new WadFileEntry
+                    {
+                        Name = Path.GetFileNameWithoutExtension(filePath),
+                        Extension = Path.GetExtension(filePath).ToLowerInvariant(),
+                        FullPath = filePath,
+                        Size = fileInfo.Length,
+                        Modified = fileInfo.LastWriteTime
+                    };
+
+                    // Most WADs have never been cached. Avoid an unnecessary
+                    // Windows file-identity handle open for each of those paths;
+                    // TryGetCachedHash still performs the full snapshot proof for
+                    // every path that may have a cache entry.
+                    if (hashCache.HasCachedEntryForPath(filePath))
+                        entry.SetCachedHash(hashCache.TryGetCachedHash(filePath));
+
+                    entries.Add(entry);
+                }
+                catch
+                {
+                    // A file may vanish or become inaccessible after the scanner
+                    // yields it. Count it for diagnostics without abandoning the
+                    // rest of the WAD folders.
+                    skippedEntries++;
+                }
+            },
+            progress,
+            cancellationToken);
+
+        return new WadBrowserScanResult(entries, scanResult, skippedEntries);
+    }
+
+    private void UpdateScanProgress(WadFileScanProgress progress)
+    {
+        if (!_isScanning || _isClosing)
+            return;
+
+        var rootName = GetFolderDisplayName(progress.CurrentRoot);
+        StatusLabel.Text = $"Scanning WAD folder {progress.RootIndex + 1}/{progress.RootCount}: {rootName} "
+            + $"· {progress.FilesExamined:N0} files checked · {progress.SupportedFilesFound:N0} WADs found";
+        ToolTip.SetTip(
+            StatusLabel,
+            $"Current root: {progress.CurrentRoot}{Environment.NewLine}"
+            + $"Current folder: {progress.CurrentDirectory}{Environment.NewLine}"
+            + $"{progress.DirectoriesVisited:N0} folders visited; "
+            + $"{progress.SkippedDirectories:N0} inaccessible folder(s) skipped; "
+            + $"{progress.SkippedReparsePoints:N0} reparse-point folder(s) skipped.");
+    }
+
+    private static string BuildScanCompleteStatus(WadBrowserScanResult scan)
+    {
+        var elapsed = scan.ScanResult.Elapsed;
+        var elapsedText = elapsed.TotalSeconds < 1
+            ? "under 1 second"
+            : $"{elapsed.TotalSeconds:N1} seconds";
+        var status = $"Scan complete: {scan.Entries.Count:N0} WAD file(s) found in {elapsedText}.";
+
+        var skipped = scan.ScanResult.SkippedDirectories + scan.SkippedEntries;
+        if (skipped > 0 || scan.ScanResult.SkippedReparsePoints > 0)
+        {
+            status += $" Skipped {skipped:N0} inaccessible/changed path(s) and "
+                + $"{scan.ScanResult.SkippedReparsePoints:N0} reparse-point folder(s).";
+        }
+
+        return status;
+    }
+
+    private static string? BuildScanDiagnosticsToolTip(WadBrowserScanResult scan)
+    {
+        if (scan.ScanResult.Issues.Count == 0 && scan.SkippedEntries == 0)
+            return null;
+
+        var lines = new List<string>();
+        if (scan.SkippedEntries > 0)
+            lines.Add($"{scan.SkippedEntries:N0} file(s) changed or became inaccessible while being listed.");
+        lines.AddRange(scan.ScanResult.Issues.Take(5).Select(issue => $"{issue.Path}: {issue.Message}"));
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string GetFolderDisplayName(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "unknown folder";
+
+        var trimmedPath = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return Path.GetFileName(trimmedPath) is { Length: > 0 } name ? name : trimmedPath;
+    }
+
+    private void CancelScanButton_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_scanCancellation == null || _scanCancellation.IsCancellationRequested)
+            return;
+
+        _scanCancellation.Cancel();
+        CancelScanButton.IsEnabled = false;
+        StatusLabel.Text = "Cancelling WAD folder scan...";
+    }
+
+    private sealed record WadBrowserScanResult(
+        IReadOnlyList<WadFileEntry> Entries,
+        WadFileScanResult ScanResult,
+        int SkippedEntries);
 
     #endregion
 
@@ -501,6 +642,8 @@ public partial class WadBrowserDialog : Window
             _locateFileMenuItem.IsEnabled = !isBusy && hasSingleSelection;
         if (_refreshHashCacheMenuItem != null)
             _refreshHashCacheMenuItem.IsEnabled = !isBusy && hashCachingEnabled && hasSingleSelection;
+        CancelScanButton.IsEnabled = _isScanning
+            && _scanCancellation is { IsCancellationRequested: false };
     }
 
     private void SearchTextBox_TextChanged(object? sender, TextChangedEventArgs e)

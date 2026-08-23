@@ -230,28 +230,30 @@ public class WadManager
     
     private void ScanDirectory(string path)
     {
-        try
+        var scanResult = WadFileScanner.Scan(
+            [path],
+            supportedFileFound: null,
+            progress: null,
+            CancellationToken.None);
+
+        var count = 0;
+        foreach (var file in scanResult.Files)
         {
-            int count = 0;
-            foreach (var file in Directory.EnumerateFiles(path, "*.*", SearchOption.AllDirectories))
+            var fileName = Path.GetFileName(file);
+            // Don't overwrite if already found (first path wins)
+            if (_wadCache.TryAdd(fileName, file))
             {
-                var ext = Path.GetExtension(file);
-                if (WadExtensions.IsSupportedExtension(ext))
-                {
-                    var fileName = Path.GetFileName(file);
-                    // Don't overwrite if already found (first path wins)
-                    if (_wadCache.TryAdd(fileName, file))
-                    {
-                        _fileNameIndex.TryAdd(fileName, file);
-                        count++;
-                    }
-                }
+                _fileNameIndex.TryAdd(fileName, file);
+                count++;
             }
-            _logger.Verbose($"  Scanned {path}: found {count} WAD files");
         }
-        catch (Exception ex)
+
+        _logger.Verbose(
+            $"  Scanned {path}: found {count} WAD files after checking {scanResult.FilesExamined} files in {scanResult.DirectoriesVisited} folders");
+        if (scanResult.SkippedDirectories > 0 || scanResult.SkippedReparsePoints > 0)
         {
-            _logger.Warning($"Error scanning directory {path}: {ex.Message}");
+            _logger.Warning(
+                $"WAD scan skipped {scanResult.SkippedDirectories} inaccessible folder(s) and {scanResult.SkippedReparsePoints} reparse-point folder(s) under {path}.");
         }
     }
     
