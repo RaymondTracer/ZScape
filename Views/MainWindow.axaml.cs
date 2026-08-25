@@ -9,7 +9,6 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -67,15 +66,7 @@ public partial class MainWindow : Window
     private DateTime? _lastRefreshTime;
 
     private ServerInfo? _selectedServer;
-    // A context menu belongs to a specific server row.  Keeping this bit of
-    // pointer context prevents a stale selection from making a right-click on
-    // the empty list canvas look like it applies to that old server.
-    private bool? _serverContextMenuTargetIsRow;
-    // The server-details WAD pane has its own short-lived row target so a
-    // right-click always acts on the WAD beneath the pointer, never on a WAD
-    // left selected by an earlier server.
-    private bool? _wadContextMenuTargetIsRow;
-    private WadViewModel? _wadContextMenuTarget;
+    private bool _isUpdatingWadHashCacheExclusion;
     private readonly List<ListViewSortDescriptor> _sortDescriptors =
     [
         new(2, PlayersColumnKey, false),
@@ -106,6 +97,7 @@ public partial class MainWindow : Window
     private MenuItem? OpenServerUrlMenuItem;
     private MenuItem? CopyServerUrlMenuItem;
     private MenuItem? LocateWadFileMenuItem;
+    private MenuItem? ToggleWadHashCachingMenuItem;
 
     // Observable collections for data binding
     public ObservableCollection<ServerViewModel> Servers { get; private set; } = [];
@@ -260,15 +252,9 @@ public partial class MainWindow : Window
         });
 
         WadsListControl.Build(ListViewOverflowMode.Fill);
-        WadsListControl.RowPressed += WadsListControl_RowPressed;
 
         var contextMenu = new ContextMenu();
         contextMenu.Opening += WadsListContextMenu_Opening;
-        contextMenu.Closed += (_, _) =>
-        {
-            _wadContextMenuTarget = null;
-            _wadContextMenuTargetIsRow = null;
-        };
 
         LocateWadFileMenuItem = new MenuItem { Header = "_Locate File" };
         LocateWadFileMenuItem.Click += LocateWadFileMenuItem_Click;
@@ -277,6 +263,12 @@ public partial class MainWindow : Window
         var copyFileNameMenuItem = new MenuItem { Header = "Copy File _Name" };
         copyFileNameMenuItem.Click += CopyWadFileNameMenuItem_Click;
         contextMenu.Items.Add(copyFileNameMenuItem);
+
+        contextMenu.Items.Add(new Separator());
+
+        ToggleWadHashCachingMenuItem = new MenuItem();
+        ToggleWadHashCachingMenuItem.Click += ToggleWadHashCachingMenuItem_Click;
+        contextMenu.Items.Add(ToggleWadHashCachingMenuItem);
 
         WadsListControl.ContextMenu = contextMenu;
     }
@@ -293,45 +285,38 @@ public partial class MainWindow : Window
         return text;
     }
 
-    private void WadsListControl_RowPressed(object? sender, ListViewRowPointerEventArgs e)
-    {
-        if (!e.PointerArgs.GetCurrentPoint(e.RowBorder).Properties.IsRightButtonPressed)
-            return;
-
-        _wadContextMenuTarget = e.DataContext as WadViewModel;
-        _wadContextMenuTargetIsRow = _wadContextMenuTarget != null;
-    }
-
     private void WadsListContextMenu_Opening(
         object? sender,
         System.ComponentModel.CancelEventArgs e)
     {
-        var target = _wadContextMenuTargetIsRow == true
-            ? _wadContextMenuTarget
-            : null;
-        _wadContextMenuTargetIsRow = null;
-
-        // A menu opened from the blank canvas must not silently act on a WAD
-        // selected for an earlier server. Row presses set the target before
-        // ResizableListView opens the menu directly from the generated row.
+        var target = GetWadContextMenuTarget();
         if (target == null || !Wads.Contains(target))
         {
-            _wadContextMenuTarget = null;
             e.Cancel = true;
             return;
         }
 
         var localPath = _wadManager.FindWad(target.Name);
+        var hasLocalFile = !string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath);
         if (LocateWadFileMenuItem != null)
-            LocateWadFileMenuItem.IsEnabled = !string.IsNullOrWhiteSpace(localPath)
-                && File.Exists(localPath);
+            LocateWadFileMenuItem.IsEnabled = hasLocalFile;
+        if (ToggleWadHashCachingMenuItem != null)
+        {
+            var isExcluded = hasLocalFile && WadHashCacheService.Instance.IsHashCachingExcluded(localPath);
+            ToggleWadHashCachingMenuItem.IsEnabled = hasLocalFile && !_isUpdatingWadHashCacheExclusion;
+            ToggleWadHashCachingMenuItem.Header = isExcluded
+                ? "Allow Hash _Caching"
+                : "_Don't Cache Hash";
+            ToolTip.SetTip(
+                ToggleWadHashCachingMenuItem,
+                isExcluded
+                    ? "Allow this file to receive a fresh cached MD5 on a later verification or cache pass."
+                    : "Do not reuse or store a cached MD5 for this file. Server hash verification still runs normally.");
+        }
     }
 
     private WadViewModel? GetWadContextMenuTarget()
     {
-        if (_wadContextMenuTarget != null && Wads.Contains(_wadContextMenuTarget))
-            return _wadContextMenuTarget;
-
         var selectedWads = WadsListControl.SelectedItems.OfType<WadViewModel>().ToList();
         return selectedWads.Count == 1 ? selectedWads[0] : null;
     }
@@ -375,12 +360,60 @@ public partial class MainWindow : Window
         _logger.Info($"Copied server WAD file name to clipboard: {wad.Name}");
     }
 
+    private async void ToggleWadHashCachingMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var wad = GetWadContextMenuTarget();
+        if (wad == null || _isUpdatingWadHashCacheExclusion)
+            return;
+
+        var filePath = _wadManager.FindWad(wad.Name);
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            StatusLabel.Text = $"{wad.Name} is not available locally.";
+            return;
+        }
+
+        var hashCache = WadHashCacheService.Instance;
+        var shouldExclude = !hashCache.IsHashCachingExcluded(filePath);
+        _isUpdatingWadHashCacheExclusion = true;
+        StatusLabel.Text = shouldExclude
+            ? $"Excluding {wad.Name} from hash caching..."
+            : $"Allowing {wad.Name} to be hash-cached...";
+
+        try
+        {
+            await hashCache.SetHashCachingExcludedAsync([filePath], shouldExclude);
+
+            // Rebuild the short status list from the current server so a
+            // previously [CACHED] row immediately becomes [FOUND] when its
+            // cached MD5 is excluded.
+            if (_selectedServer != null)
+                DisplayWadList(_selectedServer);
+
+            StatusLabel.Text = shouldExclude
+                ? $"{wad.Name} will not be hash-cached. Server hash verification remains enabled."
+                : $"{wad.Name} can be hash-cached again on the next verification or cache pass.";
+            _logger.Info(
+                $"{(shouldExclude ? "Excluded" : "Allowed")} server WAD {wad.Name} "
+                + $"{(shouldExclude ? "from" : "for")} hash caching.");
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Could not update WAD hash-cache preference: {ex.Message}";
+            _logger.Warning($"Could not update WAD hash-cache preference for {wad.Name}: {ex.Message}");
+        }
+        finally
+        {
+            _isUpdatingWadHashCacheExclusion = false;
+        }
+    }
+
     private void SetupServerListView()
     {
         ConfigureServerListColumns(ServerListView, bigUi: false);
         ServerListView.ItemsSource = Servers;
 
-        // Set up context menu on the scroll viewer
+        // Set up row-specific context menu actions.
         var contextMenu = new ContextMenu();
         contextMenu.Opening += ServerContextMenu_Opening;
 
@@ -438,10 +471,6 @@ public partial class MainWindow : Window
         ServerListView.RowPressed += OnServerRowPressed;
         ServerListView.RowDoubleTapped += OnServerRowDoubleTapped;
         ServerListView.SelectionChanged += OnServerSelectionChanged;
-
-        // The scroll viewer owns blank-canvas deselection and context-menu
-        // targeting. Row-specific actions use the list control's row events.
-        ServerListView.ScrollViewer.PointerPressed += ServerScrollViewer_PointerPressed;
     }
 
     private void SetupPlayerListView()
@@ -2130,8 +2159,6 @@ public partial class MainWindow : Window
             ServerWebsiteRow.IsVisible = false;
 
         WadsListControl.ClearSelection();
-        _wadContextMenuTarget = null;
-        _wadContextMenuTargetIsRow = null;
         Wads.Clear();
         Players.Clear();
 
@@ -2163,8 +2190,6 @@ public partial class MainWindow : Window
     private void DisplayWadList(ServerInfo server)
     {
         WadsListControl.ClearSelection();
-        _wadContextMenuTarget = null;
-        _wadContextMenuTargetIsRow = null;
         Wads.Clear();
 
         if (server.IsRefreshPending)
@@ -3225,34 +3250,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Handles blank-canvas selection clearing and tracks whether a context
-    /// menu was opened over a real server row.
-    /// </summary>
-    private void ServerScrollViewer_PointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        var point = e.GetCurrentPoint(ServerListView.ScrollViewer);
-
-        var isServerRow = IsPointerOverServerRow(e.Source);
-        if (point.Properties.IsRightButtonPressed)
-        {
-            _serverContextMenuTargetIsRow = isServerRow;
-        }
-
-        if (!isServerRow)
-        {
-            // Empty-canvas clicks behave like a normal desktop list: left and
-            // right clicks both deselect the current row and therefore clear
-            // its details.  A blank-area right-click is recorded above so
-            // Opening below can still suppress the server-specific menu.
-            if (point.Properties.IsLeftButtonPressed || point.Properties.IsRightButtonPressed)
-                ClearServerSelectionAndDetails();
-
-            return;
-        }
-
-    }
-
     private async Task RefreshOneServerAsync(ServerInfo server, string action)
     {
         if (server.IsRefreshPending)
@@ -3274,18 +3271,6 @@ public partial class MainWindow : Window
         {
             UpdateServerList();
         }
-    }
-
-    private static bool IsPointerOverServerRow(object? source)
-    {
-        if (source is not Visual visual)
-            return false;
-
-        return visual
-            .GetVisualAncestors()
-            .Prepend(visual)
-            .OfType<Border>()
-            .Any(border => border.DataContext is ServerViewModel);
     }
 
     private void ServerListView_SortRequested(
@@ -3407,10 +3392,7 @@ public partial class MainWindow : Window
 
     private void ServerContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        var openedOnEmptySpace = _serverContextMenuTargetIsRow == false;
-        _serverContextMenuTargetIsRow = null;
-        if (openedOnEmptySpace
-            || _selectedServer == null
+        if (_selectedServer == null
             || _selectedServer.IsRefreshPending
             || ServerListView.SelectedItem is not ServerViewModel)
         {

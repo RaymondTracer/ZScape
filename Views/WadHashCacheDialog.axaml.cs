@@ -154,7 +154,8 @@ public partial class WadHashCacheDialog : Window
                 _cancellation.Token);
 
             SummaryText.Text = $"Cached {summary.NewlyCachedCount} file{(summary.NewlyCachedCount == 1 ? string.Empty : "s")}; "
-                + $"{summary.AlreadyCachedCount} already valid; {summary.FailedCount} failed.";
+                + $"{summary.AlreadyCachedCount} already valid; {summary.ExcludedCount} excluded; "
+                + $"{summary.FailedCount} failed.";
             OverallProgressBar.Value = 100;
             Complete(summary.FailedCount == 0
                 ? "Hash cache is up to date."
@@ -183,6 +184,7 @@ public partial class WadHashCacheDialog : Window
             WadHashCacheProgressStage.Hashing => ("Hashing", Brushes.DodgerBlue),
             WadHashCacheProgressStage.Cached => ("Cached", Brushes.LightGreen),
             WadHashCacheProgressStage.AlreadyCached => ("Already cached", Brushes.LightGreen),
+            WadHashCacheProgressStage.Excluded => ("Excluded", Brushes.Gray),
             WadHashCacheProgressStage.Failed => ("Failed", Brushes.Tomato),
             _ => ("Queued", Brushes.Gray)
         };

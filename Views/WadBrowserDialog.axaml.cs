@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -23,6 +24,7 @@ namespace ZScape.Views;
 public class WadFileEntry : INotifyPropertyChanged
 {
     private string? _cachedHash;
+    private bool _isHashCachingExcluded;
 
     public string Name { get; set; } = "";
     public string Extension { get; set; } = "";
@@ -35,7 +37,9 @@ public class WadFileEntry : INotifyPropertyChanged
     public string SizeDisplay => FormatSize(Size);
     public string ModifiedDisplay => Modified.ToString("yyyy-MM-dd HH:mm");
     public bool IsHashCached => !string.IsNullOrWhiteSpace(CachedHash);
-    public string CachedMarker => IsHashCached ? "✓" : string.Empty;
+    public bool IsHashCachingExcluded => _isHashCachingExcluded;
+    public string CachedMarker => IsHashCachingExcluded ? "Skip" : IsHashCached ? "✓" : string.Empty;
+    public IBrush CachedMarkerColor => IsHashCachingExcluded ? Brushes.Gray : Brushes.LightGreen;
     public string? CachedHash
     {
         get => _cachedHash;
@@ -55,6 +59,17 @@ public class WadFileEntry : INotifyPropertyChanged
 
     public void SetCachedHash(string? hash) => CachedHash = hash;
 
+    public void SetHashCachingExcluded(bool isExcluded)
+    {
+        if (_isHashCachingExcluded == isExcluded)
+            return;
+
+        _isHashCachingExcluded = isExcluded;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsHashCachingExcluded)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CachedMarker)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CachedMarkerColor)));
+    }
+
     private static string FormatSize(long bytes)
     {
         if (bytes < 1024) return $"{bytes} B";
@@ -72,10 +87,13 @@ public partial class WadBrowserDialog : Window
     private ObservableCollection<WadFileEntry> _filteredWads = new();
     private bool _isScanning;
     private bool _isRefreshingSelectedHash;
+    private bool _isUpdatingHashCacheExclusions;
     private bool _isClosing;
     private CancellationTokenSource? _scanCancellation;
     private MenuItem? _locateFileMenuItem;
     private MenuItem? _refreshHashCacheMenuItem;
+    private MenuItem? _toggleHashCachingMenuItem;
+    private MenuItem? _deleteSelectedMenuItem;
 
     private readonly List<ListViewSortDescriptor> _sortDescriptors =
     [
@@ -103,12 +121,10 @@ public partial class WadBrowserDialog : Window
         });
         WadListView.AddColumn(new ListViewColumn
         {
-            Key = "cached", Header = "Cached", Width = 62, MinWidth = 10,
-            BindingPath = nameof(WadFileEntry.CachedMarker),
-            Foreground = Brushes.LightGreen,
-            ContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            Key = "cached", Header = "Cached", Width = 70, MinWidth = 10,
+            CellContentFactory = CreateCachedStatusCell,
             CanSort = true,
-            HeaderToolTip = "A check mark means a valid local full MD5 is cached for this unchanged file."
+            HeaderToolTip = "A check mark means a valid local full MD5 is cached for this unchanged file. Skip means this file is explicitly excluded from hash caching."
         });
         WadListView.AddColumn(new ListViewColumn
         {
@@ -196,9 +212,6 @@ public partial class WadBrowserDialog : Window
             : string.Join(Environment.NewLine, wadPaths));
         RefreshButton.IsEnabled = false;
         CacheAllHashesButton.IsEnabled = false;
-        RefreshSelectedHashButton.IsEnabled = false;
-        LocateFileButton.IsEnabled = false;
-        DeleteSelectedButton.IsEnabled = false;
 
         try
         {
@@ -289,11 +302,13 @@ public partial class WadBrowserDialog : Window
                         Modified = fileInfo.LastWriteTime
                     };
 
+                    entry.SetHashCachingExcluded(hashCache.IsHashCachingExcluded(filePath));
+
                     // Most WADs have never been cached. Avoid an unnecessary
                     // Windows file-identity handle open for each of those paths;
                     // TryGetCachedHash still performs the full snapshot proof for
                     // every path that may have a cache entry.
-                    if (hashCache.HasCachedEntryForPath(filePath))
+                    if (!entry.IsHashCachingExcluded && hashCache.HasCachedEntryForPath(filePath))
                         entry.SetCachedHash(hashCache.TryGetCachedHash(filePath));
 
                     entries.Add(entry);
@@ -513,23 +528,26 @@ public partial class WadBrowserDialog : Window
 
         var hashCache = WadHashCacheService.Instance;
         foreach (var wad in _allWads)
+        {
+            wad.SetHashCachingExcluded(hashCache.IsHashCachingExcluded(wad.FullPath));
             wad.SetCachedHash(hashCache.TryGetCachedHash(wad.FullPath));
+        }
 
         ApplyFilterAndSort();
         UpdateStats();
         UpdateActionAvailability();
     }
 
-    private async void RefreshSelectedHashButton_Click(object? sender, RoutedEventArgs e)
+    private static Control CreateCachedStatusCell()
     {
-        await RefreshSelectedHashAsync();
-    }
-
-    private async void LocateFileButton_Click(object? sender, RoutedEventArgs e)
-    {
-        var selected = GetSingleSelectedWad();
-        if (selected != null)
-            await LocateWadFileAsync(selected);
+        var text = new TextBlock
+        {
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+        };
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(WadFileEntry.CachedMarker)));
+        text.Bind(TextBlock.ForegroundProperty, new Binding(nameof(WadFileEntry.CachedMarkerColor)));
+        return text;
     }
 
     private async void LocateFileMenuItem_Click(object? sender, RoutedEventArgs e)
@@ -544,6 +562,11 @@ public partial class WadBrowserDialog : Window
         await RefreshSelectedHashAsync();
     }
 
+    private async void ToggleHashCachingMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        await ToggleSelectedHashCachingAsync();
+    }
+
     private async Task RefreshSelectedHashAsync()
     {
         var selected = GetSingleSelectedWad();
@@ -554,6 +577,12 @@ public partial class WadBrowserDialog : Window
         if (!hashCache.IsEnabled)
         {
             StatusLabel.Text = "Enable WAD hash caching in Preferences before refreshing a file hash.";
+            return;
+        }
+
+        if (hashCache.IsHashCachingExcluded(selected.FullPath))
+        {
+            StatusLabel.Text = $"{selected.NameWithExtension} is excluded from hash caching. Allow caching first to refresh its cache entry.";
             return;
         }
 
@@ -612,36 +641,121 @@ public partial class WadBrowserDialog : Window
         _locateFileMenuItem.Click += LocateFileMenuItem_Click;
         contextMenu.Items.Add(_locateFileMenuItem);
 
+        contextMenu.Items.Add(new Separator());
+
         _refreshHashCacheMenuItem = new MenuItem { Header = "Refresh _Hash Cache" };
         _refreshHashCacheMenuItem.Click += RefreshHashCacheMenuItem_Click;
         contextMenu.Items.Add(_refreshHashCacheMenuItem);
+
+        _toggleHashCachingMenuItem = new MenuItem();
+        _toggleHashCachingMenuItem.Click += ToggleHashCachingMenuItem_Click;
+        contextMenu.Items.Add(_toggleHashCachingMenuItem);
+
+        contextMenu.Items.Add(new Separator());
+
+        _deleteSelectedMenuItem = new MenuItem { Header = "_Delete Selected" };
+        _deleteSelectedMenuItem.Click += DeleteSelected_Click;
+        contextMenu.Items.Add(_deleteSelectedMenuItem);
 
         WadListView.ContextMenu = contextMenu;
     }
 
     private WadFileEntry? GetSingleSelectedWad()
     {
-        var selected = WadListView.SelectedItems.OfType<WadFileEntry>().ToList();
+        var selected = GetSelectedWads();
         return selected.Count == 1 ? selected[0] : null;
+    }
+
+    private List<WadFileEntry> GetSelectedWads() =>
+        WadListView.SelectedItems.OfType<WadFileEntry>().ToList();
+
+    private async Task ToggleSelectedHashCachingAsync()
+    {
+        var selected = GetSelectedWads();
+        if (_isScanning || _isRefreshingSelectedHash || _isUpdatingHashCacheExclusions || selected.Count == 0)
+            return;
+
+        var hashCache = WadHashCacheService.Instance;
+        var shouldExclude = selected.Any(wad => !hashCache.IsHashCachingExcluded(wad.FullPath));
+        _isUpdatingHashCacheExclusions = true;
+        StatusLabel.Text = shouldExclude
+            ? "Updating per-file hash cache preference..."
+            : "Allowing selected files to be cached...";
+        UpdateActionAvailability();
+
+        try
+        {
+            await hashCache.SetHashCachingExcludedAsync(
+                selected.Select(wad => wad.FullPath),
+                shouldExclude);
+
+            foreach (var wad in selected)
+            {
+                wad.SetHashCachingExcluded(hashCache.IsHashCachingExcluded(wad.FullPath));
+                wad.SetCachedHash(hashCache.TryGetCachedHash(wad.FullPath));
+            }
+
+            ApplyFilterAndSort();
+            UpdateStats();
+            var fileDescription = selected.Count == 1
+                ? selected[0].NameWithExtension
+                : $"{selected.Count} selected WAD files";
+            StatusLabel.Text = shouldExclude
+                ? $"{fileDescription} will not be hash-cached. Server hash verification remains enabled."
+                : $"{fileDescription} can be hash-cached again on the next verification or cache pass.";
+            _logger.Info(
+                $"{(shouldExclude ? "Excluded" : "Allowed")} {selected.Count} WAD file(s) "
+                + $"{(shouldExclude ? "from" : "for")} hash caching.");
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Could not update WAD hash-cache preference: {ex.Message}";
+            _logger.Warning($"Could not update WAD hash-cache preference: {ex.Message}");
+        }
+        finally
+        {
+            _isUpdatingHashCacheExclusions = false;
+            UpdateActionAvailability();
+        }
     }
 
     private void UpdateActionAvailability()
     {
-        var selectedCount = WadListView.SelectedItems.OfType<WadFileEntry>().Count();
+        var selected = GetSelectedWads();
+        var selectedCount = selected.Count;
         var hasSingleSelection = selectedCount == 1;
         var hasSelection = selectedCount > 0;
-        var isBusy = _isScanning || _isRefreshingSelectedHash;
-        var hashCachingEnabled = WadHashCacheService.Instance.IsEnabled;
+        var isBusy = _isScanning || _isRefreshingSelectedHash || _isUpdatingHashCacheExclusions;
+        var hashCache = WadHashCacheService.Instance;
+        var hashCachingEnabled = hashCache.IsEnabled;
+        var selectedFileIsExcluded = hasSingleSelection
+            && hashCache.IsHashCachingExcluded(selected[0].FullPath);
+        var allSelectedFilesAreExcluded = hasSelection
+            && selected.All(wad => hashCache.IsHashCachingExcluded(wad.FullPath));
 
         RefreshButton.IsEnabled = !isBusy;
         CacheAllHashesButton.IsEnabled = !isBusy && hashCachingEnabled && _allWads.Count > 0;
-        RefreshSelectedHashButton.IsEnabled = !isBusy && hashCachingEnabled && hasSingleSelection;
-        LocateFileButton.IsEnabled = !isBusy && hasSingleSelection;
-        DeleteSelectedButton.IsEnabled = !isBusy && hasSelection;
         if (_locateFileMenuItem != null)
             _locateFileMenuItem.IsEnabled = !isBusy && hasSingleSelection;
         if (_refreshHashCacheMenuItem != null)
-            _refreshHashCacheMenuItem.IsEnabled = !isBusy && hashCachingEnabled && hasSingleSelection;
+            _refreshHashCacheMenuItem.IsEnabled = !isBusy
+                && hashCachingEnabled
+                && hasSingleSelection
+                && !selectedFileIsExcluded;
+        if (_toggleHashCachingMenuItem != null)
+        {
+            _toggleHashCachingMenuItem.IsEnabled = !isBusy && hasSelection;
+            _toggleHashCachingMenuItem.Header = allSelectedFilesAreExcluded
+                ? hasSingleSelection ? "Allow Hash _Caching" : "Allow Hash Caching for _Selected Files"
+                : hasSingleSelection ? "_Don't Cache Hash" : "_Don't Cache Selected Hashes";
+            ToolTip.SetTip(
+                _toggleHashCachingMenuItem,
+                allSelectedFilesAreExcluded
+                    ? "Allow these files to receive a fresh cached MD5 on a later verification or cache pass."
+                    : "Do not reuse or store cached MD5 values for these files. Server hash verification still runs normally.");
+        }
+        if (_deleteSelectedMenuItem != null)
+            _deleteSelectedMenuItem.IsEnabled = !isBusy && hasSelection;
         CancelScanButton.IsEnabled = _isScanning
             && _scanCancellation is { IsCancellationRequested: false };
     }

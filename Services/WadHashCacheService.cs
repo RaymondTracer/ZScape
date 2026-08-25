@@ -24,6 +24,10 @@ public sealed class WadHashCacheService
     private readonly object _entriesLock = new();
     private readonly SemaphoreSlim _persistenceGate = new(1, 1);
     private readonly Dictionary<string, WadHashCacheEntry> _entries;
+    // Per-file opt-outs are deliberately stored with the cache metadata rather
+    // than in general settings. They are canonical-path rules and only affect
+    // this performance cache; they never suppress a server hash check.
+    private readonly HashSet<string> _excludedPaths;
     private readonly string _cachePath;
     private readonly LoggingService _logger = LoggingService.Instance;
     private bool _isDirty;
@@ -36,7 +40,8 @@ public sealed class WadHashCacheService
     /// <summary>
     /// Indicates whether cached MD5 values may be reused or newly recorded.
     /// Disabling this setting leaves the cache file untouched and forces normal
-    /// file hashing during verification.
+    /// file hashing during verification. Individually excluded files behave the
+    /// same way without changing the global preference.
     /// </summary>
     public bool IsEnabled => SettingsService.Instance.Settings.EnableWadHashCache;
 
@@ -44,7 +49,67 @@ public sealed class WadHashCacheService
     {
         _cachePath = Path.Combine(AppContext.BaseDirectory, "wad-hash-cache.json");
         _entries = new Dictionary<string, WadHashCacheEntry>(GetPathComparer());
+        _excludedPaths = new HashSet<string>(GetPathComparer());
         LoadCache();
+    }
+
+    /// <summary>
+    /// Returns whether this exact local file has been explicitly excluded from
+    /// hash caching. An exclusion is path-specific and does not skip normal
+    /// hash verification when joining a server.
+    /// </summary>
+    public bool IsHashCachingExcluded(string? filePath)
+    {
+        var normalizedPath = NormalizePath(filePath);
+        if (normalizedPath == null)
+            return false;
+
+        lock (_entriesLock)
+            return _excludedPaths.Contains(normalizedPath);
+    }
+
+    /// <summary>
+    /// Persists per-file cache exclusions. Excluding a file immediately removes
+    /// its existing MD5 entry so it cannot be reused later. Allowing caching
+    /// again does not fabricate a hash; the next verification or cache pass
+    /// calculates a fresh one.
+    /// </summary>
+    public async Task SetHashCachingExcludedAsync(
+        IEnumerable<string> filePaths,
+        bool isExcluded)
+    {
+        var paths = filePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(NormalizePath)
+            .Where(path => path != null)
+            .Cast<string>()
+            .Distinct(GetPathComparer())
+            .ToList();
+        if (paths.Count == 0)
+            return;
+
+        var changed = false;
+        lock (_entriesLock)
+        {
+            foreach (var path in paths)
+            {
+                if (isExcluded)
+                {
+                    changed |= _excludedPaths.Add(path);
+                    changed |= _entries.Remove(path);
+                }
+                else
+                {
+                    changed |= _excludedPaths.Remove(path);
+                }
+            }
+
+            if (changed)
+                _isDirty = true;
+        }
+
+        if (changed)
+            await PersistIfDirtyAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -75,7 +140,8 @@ public sealed class WadHashCacheService
             return false;
 
         lock (_entriesLock)
-            return _entries.ContainsKey(normalizedPath);
+            return !_excludedPaths.Contains(normalizedPath)
+                && _entries.ContainsKey(normalizedPath);
     }
 
     /// <summary>
@@ -127,7 +193,10 @@ public sealed class WadHashCacheService
                 ErrorMessage: "The file no longer exists or could not be inspected.");
         }
 
-        if (!forceRefresh && IsEnabled && TryGetCachedHash(initialSnapshot) is { } cachedHash)
+        if (!forceRefresh
+            && IsEnabled
+            && !IsHashCachingExcluded(initialSnapshot.Path)
+            && TryGetCachedHash(initialSnapshot) is { } cachedHash)
         {
             progress?.Invoke(initialSnapshot.Length);
             return new WadHashResult(cachedHash, FromCache: true, initialSnapshot.Length, ErrorMessage: null);
@@ -144,12 +213,13 @@ public sealed class WadHashCacheService
         }
 
         var finalSnapshot = TryCreateSnapshot(filePath);
-        if (IsEnabled && finalSnapshot != null && initialSnapshot.Matches(finalSnapshot))
+        var canCacheResult = IsEnabled && !IsHashCachingExcluded(initialSnapshot.Path);
+        if (canCacheResult && finalSnapshot != null && initialSnapshot.Matches(finalSnapshot))
         {
             StoreHash(finalSnapshot, computedHash);
             await PersistIfDirtyAsync().ConfigureAwait(false);
         }
-        else if (IsEnabled)
+        else if (canCacheResult)
         {
             _logger.Warning(
                 $"Skipped hash-cache entry for {Path.GetFileName(filePath)} because the file changed while it was hashed.");
@@ -205,6 +275,7 @@ public sealed class WadHashCacheService
         var cachedCount = 0;
         var alreadyCachedCount = 0;
         var failedCount = 0;
+        var excludedCount = 0;
         var totalFiles = files.Count;
 
         for (var index = 0; index < files.Count; index++)
@@ -214,6 +285,26 @@ public sealed class WadHashCacheService
             var filePath = files[index];
             var fileName = Path.GetFileName(filePath);
             var fileSize = TryGetFileLength(filePath);
+
+            // Exclusions are checked before any cache snapshot or MD5 work.
+            // They remain visible in the progress dialog as an intentional
+            // user choice rather than looking like a stalled queued item.
+            if (IsHashCachingExcluded(filePath))
+            {
+                excludedCount++;
+                progress?.Report(new WadHashCacheProgress(
+                    filePath,
+                    fileName,
+                    index + 1,
+                    totalFiles,
+                    fileSize,
+                    fileSize,
+                    WadHashCacheProgressStage.Excluded,
+                    Hash: null,
+                    ErrorMessage: null));
+                continue;
+            }
+
             var lastProgressReport = DateTime.MinValue;
 
             void ReportHashProgress(long bytesProcessed)
@@ -289,14 +380,21 @@ public sealed class WadHashCacheService
         }
 
         await PersistIfDirtyAsync().ConfigureAwait(false);
-        return new WadHashCacheSummary(totalFiles, cachedCount, alreadyCachedCount, failedCount);
+        return new WadHashCacheSummary(
+            totalFiles,
+            cachedCount,
+            alreadyCachedCount,
+            failedCount,
+            excludedCount);
     }
 
     private string? TryGetCachedHash(WadHashFileSnapshot snapshot)
     {
         lock (_entriesLock)
         {
-            return _entries.TryGetValue(snapshot.Path, out var entry) && entry.Matches(snapshot)
+            return !_excludedPaths.Contains(snapshot.Path)
+                && _entries.TryGetValue(snapshot.Path, out var entry)
+                && entry.Matches(snapshot)
                 ? entry.Md5
                 : null;
         }
@@ -309,6 +407,9 @@ public sealed class WadHashCacheService
 
         lock (_entriesLock)
         {
+            if (_excludedPaths.Contains(snapshot.Path))
+                return;
+
             _entries[snapshot.Path] = WadHashCacheEntry.FromSnapshot(snapshot, hash);
             _isDirty = true;
         }
@@ -330,6 +431,9 @@ public sealed class WadHashCacheService
                     SchemaVersion = CurrentSchemaVersion,
                     Entries = _entries.Values
                         .OrderBy(entry => entry.FilePath, GetPathComparer())
+                        .ToList(),
+                    ExcludedPaths = _excludedPaths
+                        .OrderBy(path => path, GetPathComparer())
                         .ToList()
                 };
                 _isDirty = false;
@@ -374,10 +478,17 @@ public sealed class WadHashCacheService
 
             lock (_entriesLock)
             {
-                foreach (var entry in cacheFile.Entries)
+                foreach (var excludedPath in cacheFile.ExcludedPaths ?? [])
+                {
+                    var path = NormalizePath(excludedPath);
+                    if (path != null)
+                        _excludedPaths.Add(path);
+                }
+
+                foreach (var entry in cacheFile.Entries ?? [])
                 {
                     var path = NormalizePath(entry.FilePath);
-                    if (path == null || !IsValidMd5(entry.Md5))
+                    if (path == null || _excludedPaths.Contains(path) || !IsValidMd5(entry.Md5))
                         continue;
 
                     entry.FilePath = path;
@@ -542,6 +653,7 @@ internal sealed class WadHashCacheFile
 {
     public int SchemaVersion { get; set; } = 1;
     public List<WadHashCacheEntry> Entries { get; set; } = [];
+    public List<string> ExcludedPaths { get; set; } = [];
 }
 
 /// <summary>One full-path, full-MD5 WAD hash-cache record.</summary>
@@ -607,6 +719,7 @@ public enum WadHashCacheProgressStage
     Hashing,
     Cached,
     AlreadyCached,
+    Excluded,
     Failed
 }
 
@@ -627,4 +740,5 @@ public sealed record WadHashCacheSummary(
     int TotalFiles,
     int NewlyCachedCount,
     int AlreadyCachedCount,
-    int FailedCount);
+    int FailedCount,
+    int ExcludedCount);
