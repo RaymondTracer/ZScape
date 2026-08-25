@@ -71,6 +71,11 @@ public partial class MainWindow : Window
     // pointer context prevents a stale selection from making a right-click on
     // the empty list canvas look like it applies to that old server.
     private bool? _serverContextMenuTargetIsRow;
+    // The server-details WAD pane has its own short-lived row target so a
+    // right-click always acts on the WAD beneath the pointer, never on a WAD
+    // left selected by an earlier server.
+    private bool? _wadContextMenuTargetIsRow;
+    private WadViewModel? _wadContextMenuTarget;
     private readonly List<ListViewSortDescriptor> _sortDescriptors =
     [
         new(2, PlayersColumnKey, false),
@@ -100,6 +105,7 @@ public partial class MainWindow : Window
     private MenuItem? ToggleNameFavoriteMenuItem;
     private MenuItem? OpenServerUrlMenuItem;
     private MenuItem? CopyServerUrlMenuItem;
+    private MenuItem? LocateWadFileMenuItem;
 
     // Observable collections for data binding
     public ObservableCollection<ServerViewModel> Servers { get; private set; } = [];
@@ -225,7 +231,7 @@ public partial class MainWindow : Window
 
     private void SetupWadListView()
     {
-        WadsListControl.SelectionMode = ListViewSelectionMode.None;
+        WadsListControl.SelectionMode = ListViewSelectionMode.Single;
         WadsListControl.RowHeight = 22;
         WadsListControl.SuppressHandCursor = true;
         WadsListControl.FillLastVisibleColumn = true;
@@ -254,6 +260,25 @@ public partial class MainWindow : Window
         });
 
         WadsListControl.Build(ListViewOverflowMode.Fill);
+        WadsListControl.RowPressed += WadsListControl_RowPressed;
+
+        var contextMenu = new ContextMenu();
+        contextMenu.Opening += WadsListContextMenu_Opening;
+        contextMenu.Closed += (_, _) =>
+        {
+            _wadContextMenuTarget = null;
+            _wadContextMenuTargetIsRow = null;
+        };
+
+        LocateWadFileMenuItem = new MenuItem { Header = "_Locate File" };
+        LocateWadFileMenuItem.Click += LocateWadFileMenuItem_Click;
+        contextMenu.Items.Add(LocateWadFileMenuItem);
+
+        var copyFileNameMenuItem = new MenuItem { Header = "Copy File _Name" };
+        copyFileNameMenuItem.Click += CopyWadFileNameMenuItem_Click;
+        contextMenu.Items.Add(copyFileNameMenuItem);
+
+        WadsListControl.ContextMenu = contextMenu;
     }
 
     private static Control CreateWadStatusCell()
@@ -266,6 +291,88 @@ public partial class MainWindow : Window
         text.Bind(TextBlock.TextProperty, new Binding(nameof(WadViewModel.Status)));
         text.Bind(TextBlock.ForegroundProperty, new Binding(nameof(WadViewModel.StatusColor)));
         return text;
+    }
+
+    private void WadsListControl_RowPressed(object? sender, ListViewRowPointerEventArgs e)
+    {
+        if (!e.PointerArgs.GetCurrentPoint(e.RowBorder).Properties.IsRightButtonPressed)
+            return;
+
+        _wadContextMenuTarget = e.DataContext as WadViewModel;
+        _wadContextMenuTargetIsRow = _wadContextMenuTarget != null;
+    }
+
+    private void WadsListContextMenu_Opening(
+        object? sender,
+        System.ComponentModel.CancelEventArgs e)
+    {
+        var target = _wadContextMenuTargetIsRow == true
+            ? _wadContextMenuTarget
+            : null;
+        _wadContextMenuTargetIsRow = null;
+
+        // A menu opened from the blank canvas must not silently act on a WAD
+        // selected for an earlier server. Row presses set the target before
+        // ResizableListView opens the menu directly from the generated row.
+        if (target == null || !Wads.Contains(target))
+        {
+            _wadContextMenuTarget = null;
+            e.Cancel = true;
+            return;
+        }
+
+        var localPath = _wadManager.FindWad(target.Name);
+        if (LocateWadFileMenuItem != null)
+            LocateWadFileMenuItem.IsEnabled = !string.IsNullOrWhiteSpace(localPath)
+                && File.Exists(localPath);
+    }
+
+    private WadViewModel? GetWadContextMenuTarget()
+    {
+        if (_wadContextMenuTarget != null && Wads.Contains(_wadContextMenuTarget))
+            return _wadContextMenuTarget;
+
+        var selectedWads = WadsListControl.SelectedItems.OfType<WadViewModel>().ToList();
+        return selectedWads.Count == 1 ? selectedWads[0] : null;
+    }
+
+    private async void LocateWadFileMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var wad = GetWadContextMenuTarget();
+        if (wad == null)
+            return;
+
+        var filePath = _wadManager.FindWad(wad.Name);
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            StatusLabel.Text = $"{wad.Name} is not available locally.";
+            _logger.Warning($"Could not locate server WAD because it is unavailable: {wad.Name}");
+            return;
+        }
+
+        var result = await FileManagerService.LocateFileAsync(filePath);
+        StatusLabel.Text = result.Succeeded
+            ? $"Located {Path.GetFileName(filePath)}."
+            : $"Could not locate {Path.GetFileName(filePath)}: {result.ErrorMessage ?? "unknown error"}";
+
+        if (result.Succeeded)
+            _logger.Info($"Located server WAD in file manager: {filePath}");
+        else
+            _logger.Warning($"Could not locate server WAD {filePath}: {result.ErrorMessage ?? "unknown error"}");
+    }
+
+    private async void CopyWadFileNameMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var wad = GetWadContextMenuTarget();
+        if (wad == null)
+            return;
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard == null)
+            return;
+
+        await clipboard.SetTextAsync(wad.Name);
+        _logger.Info($"Copied server WAD file name to clipboard: {wad.Name}");
     }
 
     private void SetupServerListView()
@@ -2022,6 +2129,9 @@ public partial class MainWindow : Window
         if (ServerWebsiteRow != null)
             ServerWebsiteRow.IsVisible = false;
 
+        WadsListControl.ClearSelection();
+        _wadContextMenuTarget = null;
+        _wadContextMenuTargetIsRow = null;
         Wads.Clear();
         Players.Clear();
 
@@ -2052,6 +2162,9 @@ public partial class MainWindow : Window
 
     private void DisplayWadList(ServerInfo server)
     {
+        WadsListControl.ClearSelection();
+        _wadContextMenuTarget = null;
+        _wadContextMenuTargetIsRow = null;
         Wads.Clear();
 
         if (server.IsRefreshPending)
