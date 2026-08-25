@@ -196,6 +196,8 @@ public class ResizableListView : UserControl
     private readonly Border _headerBorder;
     private readonly Grid _headerGrid;
     private readonly ScrollViewer _scrollViewer;
+    private ContextMenu? _rowContextMenu;
+    private bool? _contextMenuTargetIsRow;
     private ScrollViewer? _horizontalScrollViewer;
     private readonly ItemsControl _itemsControl;
     private readonly List<ListViewColumn> _columns = [];
@@ -377,14 +379,28 @@ public class ResizableListView : UserControl
     public IReadOnlyList<ListViewSortDescriptor> SortDescriptors => _sortDescriptors;
 
     /// <summary>
-    /// Context menu for the list canvas and its rows. Right-clicking a row
-    /// opens this menu directly from that row so it is reliable across
-    /// Avalonia backends.
+    /// Context menu for list rows. Right-clicking a row opens this menu directly
+    /// from that row so it is reliable across Avalonia backends. The control
+    /// centrally cancels an invocation from blank canvas space, preventing row
+    /// actions from targeting a stale selection in every consuming view.
     /// </summary>
     public new ContextMenu? ContextMenu
     {
-        get => _scrollViewer.ContextMenu;
-        set => _scrollViewer.ContextMenu = value;
+        get => _rowContextMenu;
+        set
+        {
+            if (ReferenceEquals(_rowContextMenu, value))
+                return;
+
+            if (_rowContextMenu != null)
+                _rowContextMenu.Opening -= RowContextMenu_Opening;
+
+            _rowContextMenu = value;
+            _scrollViewer.ContextMenu = value;
+
+            if (_rowContextMenu != null)
+                _rowContextMenu.Opening += RowContextMenu_Opening;
+        }
     }
 
     public ResizableListView()
@@ -399,6 +415,11 @@ public class ResizableListView : UserControl
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
+        _scrollViewer.AddHandler(
+            PointerPressedEvent,
+            HandleListCanvasPointerPressed,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         _itemsControl = new ItemsControl();
 
         _root = new DockPanel { ClipToBounds = true };
@@ -1499,6 +1520,7 @@ public class ResizableListView : UserControl
                 Cursor = suppressHandCursor ? null : new Cursor(StandardCursorType.Hand),
                 ClipToBounds = true
             };
+            border.Classes.Add("resizableListViewRow");
 
             // Row height
             if (rowHeightPath != null)
@@ -1546,6 +1568,7 @@ public class ResizableListView : UserControl
                     && e.GetCurrentPoint(b).Properties.IsRightButtonPressed
                     && ContextMenu is { } contextMenu)
                 {
+                    _contextMenuTargetIsRow = true;
                     contextMenu.Open(b);
                     e.Handled = true;
                 }
@@ -1721,6 +1744,52 @@ public class ResizableListView : UserControl
             border.Child = grid;
             return border;
         });
+    }
+
+    /// <summary>
+    /// Gives every list the normal desktop selection contract: a primary or
+    /// secondary click in blank canvas space clears an existing selection. The
+    /// pointer is marked before a context menu can open, allowing one shared
+    /// menu-opening handler to reject blank-canvas invocations.
+    /// </summary>
+    private void HandleListCanvasPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var isOverRow = IsPointerOverGeneratedRow(e.Source);
+        var point = e.GetCurrentPoint(_scrollViewer);
+        if (point.Properties.IsRightButtonPressed)
+            _contextMenuTargetIsRow = isOverRow;
+
+        if (_selectionMode == ListViewSelectionMode.None || isOverRow)
+            return;
+
+        if (e.Source is Visual sourceVisual
+            && sourceVisual.GetVisualAncestors().Prepend(sourceVisual).OfType<ScrollBar>().Any())
+        {
+            return;
+        }
+
+        if (point.Properties.IsLeftButtonPressed || point.Properties.IsRightButtonPressed)
+            ClearSelection();
+    }
+
+    private void RowContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        var openedOnRow = _contextMenuTargetIsRow == true;
+        _contextMenuTargetIsRow = null;
+        if (!openedOnRow)
+            e.Cancel = true;
+    }
+
+    private static bool IsPointerOverGeneratedRow(object? source)
+    {
+        if (source is not Visual visual)
+            return false;
+
+        return visual
+            .GetVisualAncestors()
+            .Prepend(visual)
+            .OfType<Border>()
+            .Any(border => border.Classes.Contains("resizableListViewRow"));
     }
 
     /// <summary>
