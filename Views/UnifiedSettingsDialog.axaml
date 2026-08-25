@@ -72,6 +72,13 @@
                                                VerticalAlignment="Center" Foreground="Gray"/>
                                 </StackPanel>
                             </StackPanel>
+
+                            <CheckBox x:Name="VerifyWadHashesCheckBox"
+                                      Content="Verify WAD hashes before connecting"
+                                      ToolTip.Tip="Compare local WAD MD5 values to the server before joining. Disabling this skips ZScape's preflight check; the game or server may still reject mismatched content."/>
+                            <CheckBox x:Name="WadHashCacheCheckBox"
+                                      Content="Cache verified WAD hashes"
+                                      ToolTip.Tip="Reuse a verified local MD5 only while the file still has the same identity, size, and timestamps."/>
                             
                             <Separator Margin="0,10"/>
                             

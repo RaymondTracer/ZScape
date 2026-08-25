@@ -111,6 +111,11 @@ public static class SettingsRegistry
             MinValue = 0, MaxValue = 32,
             Help = "0 = unlimited, 1 = sequential, N = max N concurrent hash checks."
         });
+        zandronum.Fields.Add(new(SettingFieldType.Toggle, "EnableWadHashVerification",
+            "Verify WAD hashes before connecting")
+        {
+            Help = "Compare local WAD MD5 values to the server before joining. Disabling this skips ZScape's preflight check; the game or server may still reject mismatched content."
+        });
         zandronum.Fields.Add(new(SettingFieldType.Toggle, "EnableWadHashCache",
             "Cache verified WAD hashes")
         {
@@ -413,6 +418,7 @@ public static class SettingsFieldAccessor
         "ZandronumPath" => s.ZandronumPath,
         "ZandronumTestingPath" => s.ZandronumTestingPath,
         "HashConcurrency" => s.HashVerificationConcurrency,
+        "EnableWadHashVerification" => s.EnableWadHashVerification,
         "EnableWadHashCache" => s.EnableWadHashCache,
         "ColorizePlayerNames" => s.ColorizePlayerNames,
         "ServerListRowHeight" => s.ServerListRowHeight,
@@ -470,6 +476,7 @@ public static class SettingsFieldAccessor
             case "ZandronumPath": s.ZandronumPath = (string?)value ?? ""; break;
             case "ZandronumTestingPath": s.ZandronumTestingPath = (string?)value ?? ""; break;
             case "HashConcurrency": s.HashVerificationConcurrency = (int)(value ?? 0); break;
+            case "EnableWadHashVerification": s.EnableWadHashVerification = (bool)(value ?? true); break;
             case "EnableWadHashCache": s.EnableWadHashCache = (bool)(value ?? true); break;
             case "ColorizePlayerNames": s.ColorizePlayerNames = (bool)(value ?? true); break;
             case "ServerListRowHeight": s.ServerListRowHeight = (int)(value ?? 26); break;

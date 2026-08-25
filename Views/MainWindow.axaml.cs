@@ -3550,7 +3550,8 @@ public partial class MainWindow : Window
         }
 
         var hasHashedPwads = server.PWADs.Any(p => !string.IsNullOrEmpty(p.Hash));
-        if (hasHashedPwads)
+        var hashVerificationEnabled = _settings.Settings.EnableWadHashVerification;
+        if (hasHashedPwads && hashVerificationEnabled)
         {
             var hashVerification = await VerifyWadHashesWithDialogAsync(server);
             if (hashVerification.Action == HashVerificationDialogAction.Cancelled)
@@ -3581,6 +3582,11 @@ public partial class MainWindow : Window
             {
                 AddOptionalCandidateWads(optionalHashMismatches.Select(mismatch => new WadInfo(mismatch.WadName, mismatch.ExpectedHash)));
             }
+        }
+        else if (hasHashedPwads)
+        {
+            _logger.Info(
+                $"WAD hash verification is disabled; joining {server.Address}:{server.Port} without local MD5 checks.");
         }
 
         if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
@@ -3715,7 +3721,7 @@ public partial class MainWindow : Window
             }
         }
 
-        if (hasOptionalServerHashes && optionalHashStateChanged)
+        if (hashVerificationEnabled && hasOptionalServerHashes && optionalHashStateChanged)
         {
             var optionalHashVerification = await VerifyOptionalWadHashesWithDialogAsync(server);
             if (optionalHashVerification.Action == HashVerificationDialogAction.Cancelled)

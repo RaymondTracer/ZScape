@@ -561,6 +561,13 @@ public class AppSettings
     public int HashVerificationConcurrency { get; set; } = 0; // Default: unlimited
 
     /// <summary>
+    /// Controls whether ZScape performs local WAD MD5 verification before
+    /// connecting to a server. Disabling this skips ZScape's preflight check;
+    /// the game or server may still reject mismatched content.
+    /// </summary>
+    public bool EnableWadHashVerification { get; set; } = true;
+
+    /// <summary>
     /// Reuses completed local WAD MD5 calculations when the file still has the
     /// same path, identity, size, and timestamps. The cached MD5 is always
     /// compared to the server's full expected hash before joining.

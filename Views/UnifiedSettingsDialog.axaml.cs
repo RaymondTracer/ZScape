@@ -232,6 +232,8 @@ public partial class UnifiedSettingsDialog : Window
         ZandronumPathTextBox.Text = Settings.ZandronumPath;
         ZandronumTestingPathTextBox.Text = Settings.ZandronumTestingPath;
         HashConcurrencyNumeric.Value = Settings.HashVerificationConcurrency;
+        VerifyWadHashesCheckBox.IsChecked = Settings.EnableWadHashVerification;
+        WadHashCacheCheckBox.IsChecked = Settings.EnableWadHashCache;
         ColorizePlayerNamesCheckBox.IsChecked = Settings.ColorizePlayerNames;
         RowHeightNumeric.Value = Settings.ServerListRowHeight;
         ScreenshotMonitorCheckBox.IsChecked = Settings.EnableScreenshotMonitoring;
@@ -597,6 +599,8 @@ public partial class UnifiedSettingsDialog : Window
         Settings.ZandronumPath = ZandronumPathTextBox.Text ?? "";
         Settings.ZandronumTestingPath = ZandronumTestingPathTextBox.Text ?? "";
         Settings.HashVerificationConcurrency = HashConcurrencyNumeric.Value;
+        Settings.EnableWadHashVerification = VerifyWadHashesCheckBox.IsChecked ?? true;
+        Settings.EnableWadHashCache = WadHashCacheCheckBox.IsChecked ?? true;
         Settings.ColorizePlayerNames = ColorizePlayerNamesCheckBox.IsChecked ?? true;
         Settings.ServerListRowHeight = RowHeightNumeric.Value;
         Settings.EnableScreenshotMonitoring = ScreenshotMonitorCheckBox.IsChecked ?? false;
