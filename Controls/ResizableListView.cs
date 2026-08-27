@@ -380,9 +380,11 @@ public class ResizableListView : UserControl
 
     /// <summary>
     /// Context menu for list rows. Right-clicking a row opens this menu directly
-    /// from that row so it is reliable across Avalonia backends. The control
-    /// centrally cancels an invocation from blank canvas space, preventing row
-    /// actions from targeting a stale selection in every consuming view.
+    /// from that row so it is reliable across Avalonia backends. It must not be
+    /// attached to the internal scroll canvas: Avalonia rejects opening an
+    /// attached menu against a different control. The control centrally rejects
+    /// blank-canvas invocations, preventing row actions from targeting a stale
+    /// selection in every consuming view.
     /// </summary>
     public new ContextMenu? ContextMenu
     {
@@ -396,7 +398,11 @@ public class ResizableListView : UserControl
                 _rowContextMenu.Opening -= RowContextMenu_Opening;
 
             _rowContextMenu = value;
-            _scrollViewer.ContextMenu = value;
+
+            // The menu is deliberately unowned until a generated row opens it.
+            // See the property documentation: attaching it to _scrollViewer and
+            // then calling ContextMenu.Open(rowBorder) throws in Avalonia.
+            _scrollViewer.ContextMenu = null;
 
             if (_rowContextMenu != null)
                 _rowContextMenu.Opening += RowContextMenu_Opening;
