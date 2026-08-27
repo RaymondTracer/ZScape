@@ -660,9 +660,33 @@ public class ResizableListView : UserControl
     private void BuildHeaderContextMenu()
     {
         var menu = new ContextMenu();
-        menu.Opening += (_, _) => PopulateHeaderContextMenu(menu);
+        menu.Opening += (_, _) =>
+        {
+            CloseCompetingContextMenu(menu);
+            PopulateHeaderContextMenu(menu);
+        };
         PopulateHeaderContextMenu(menu);
         _headerBorder.ContextMenu = menu;
+    }
+
+    /// <summary>
+    /// Keeps a list's header and row context menus mutually exclusive. The row
+    /// menu is opened manually because it is intentionally unattached; Avalonia
+    /// therefore does not automatically dismiss an attached header menu first.
+    /// </summary>
+    private void CloseCompetingContextMenu(ContextMenu menuToKeep)
+    {
+        if (_headerBorder.ContextMenu is { IsOpen: true } headerMenu
+            && !ReferenceEquals(headerMenu, menuToKeep))
+        {
+            headerMenu.Close();
+        }
+
+        if (_rowContextMenu is { IsOpen: true } rowMenu
+            && !ReferenceEquals(rowMenu, menuToKeep))
+        {
+            rowMenu.Close();
+        }
     }
 
     private void PopulateHeaderContextMenu(ContextMenu menu)
@@ -1574,6 +1598,7 @@ public class ResizableListView : UserControl
                     && e.GetCurrentPoint(b).Properties.IsRightButtonPressed
                     && ContextMenu is { } contextMenu)
                 {
+                    CloseCompetingContextMenu(contextMenu);
                     _contextMenuTargetIsRow = true;
                     contextMenu.Open(b);
                     e.Handled = true;
