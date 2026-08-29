@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -44,11 +45,16 @@ public partial class ConnectionHistoryDialog : Window
         // Configure the list as a compact version of the main server browser.
         HistoryListView.AlternatingRowColors = true;
         HistoryListView.RowBaseBackgroundPath = "RowBackground";
+        // History uses semantic row tints (online, refreshing, offline), so
+        // give its selection a dedicated accent rather than borrowing the
+        // generic browser-blue selected-row brush.
+        HistoryListView.SelectedRowBrush = ThemeService.GetBrush(
+            "HistorySelectedRowBrush",
+            "#3F3474");
         HistoryListView.AddColumn(new ListViewColumn
         {
             Key = "status", Header = "Status", Width = 80, MinWidth = 10,
-            BindingPath = "StatusDisplay",
-            Foreground = Brushes.Gray,
+            CellContentFactory = CreateHistoryStatusCell,
             CanSort = true
         });
         HistoryListView.AddColumn(new ListViewColumn
@@ -143,6 +149,18 @@ public partial class ConnectionHistoryDialog : Window
         };
         
         Closed += OnDialogClosed;
+    }
+
+    private static Control CreateHistoryStatusCell()
+    {
+        var text = new TextBlock
+        {
+            Padding = new Thickness(6, 0),
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+        };
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(HistoryEntryViewModel.StatusDisplay)));
+        text.Bind(TextBlock.ForegroundProperty, new Binding(nameof(HistoryEntryViewModel.StatusColor)));
+        return text;
     }
     
     /// <summary>
@@ -641,6 +659,13 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
         HistoryLiveStatus.Offline => "Offline",
         _ => "Unknown"
     };
+    public IBrush StatusColor => _liveStatus switch
+    {
+        HistoryLiveStatus.Online => ThemeService.GetBrush("SuccessBrush", "#32CD32"),
+        HistoryLiveStatus.Refreshing => ThemeService.GetBrush("WarningBrush", "#FFA500"),
+        HistoryLiveStatus.Offline => ThemeService.GetBrush("ErrorBrush", "#C50F1F"),
+        _ => ThemeService.GetBrush("TextSecondaryBrush", "#999999")
+    };
     public int StatusSortOrder => _liveStatus switch
     {
         HistoryLiveStatus.Online => 0,
@@ -677,7 +702,7 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
     {
         HistoryLiveStatus.Online => ThemeService.GetBrush("HistoryOnlineRowBrush", "#183A2A"),
         HistoryLiveStatus.Refreshing => ThemeService.GetBrush("RowPasswordedBrush", "#3C3728"),
-        HistoryLiveStatus.Offline => ThemeService.GetBrush("RowEmptyBrush", "#2D2D32"),
+        HistoryLiveStatus.Offline => ThemeService.GetBrush("HistoryOfflineRowBrush", "#3B2328"),
         _ => Brushes.Transparent
     };
     
@@ -763,6 +788,7 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
             return;
         _liveStatus = status;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusDisplay)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusColor)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusSortOrder)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsOnline)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowBackground)));
