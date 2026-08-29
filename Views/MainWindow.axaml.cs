@@ -66,6 +66,7 @@ public partial class MainWindow : Window
     private DateTime? _lastRefreshTime;
 
     private ServerInfo? _selectedServer;
+    private bool _isCalculatingWadHash;
     private bool _isUpdatingWadHashCacheExclusion;
     private readonly List<ListViewSortDescriptor> _sortDescriptors =
     [
@@ -97,6 +98,7 @@ public partial class MainWindow : Window
     private MenuItem? OpenServerUrlMenuItem;
     private MenuItem? CopyServerUrlMenuItem;
     private MenuItem? LocateWadFileMenuItem;
+    private MenuItem? CalculateWadHashMenuItem;
     private MenuItem? ToggleWadHashCachingMenuItem;
 
     // Observable collections for data binding
@@ -266,6 +268,17 @@ public partial class MainWindow : Window
 
         contextMenu.Items.Add(new Separator());
 
+        // This action deliberately distinguishes an initial cache calculation
+        // from a forced refresh, so the menu tells the user whether the file
+        // already has a valid cached MD5.
+        CalculateWadHashMenuItem = new MenuItem
+        {
+            Header = "Calculate _Hash",
+            IsEnabled = false
+        };
+        CalculateWadHashMenuItem.Click += CalculateWadHashMenuItem_Click;
+        contextMenu.Items.Add(CalculateWadHashMenuItem);
+
         // The shared list control prepares this dynamic label immediately
         // before opening the row menu. Keep a readable disabled default so a
         // future preparation failure never creates a blank menu item.
@@ -305,12 +318,42 @@ public partial class MainWindow : Window
 
         var localPath = _wadManager.FindWad(target.Name);
         var hasLocalFile = !string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath);
+        var hashCache = WadHashCacheService.Instance;
+        var isExcluded = hasLocalFile && hashCache.IsHashCachingExcluded(localPath);
+        var hasCachedHash = hasLocalFile
+            && !isExcluded
+            && !string.IsNullOrWhiteSpace(hashCache.TryGetCachedHash(localPath));
         if (LocateWadFileMenuItem != null)
             LocateWadFileMenuItem.IsEnabled = hasLocalFile;
+        if (CalculateWadHashMenuItem != null)
+        {
+            CalculateWadHashMenuItem.IsEnabled = hasLocalFile
+                && hashCache.IsEnabled
+                && !isExcluded
+                && !_isCalculatingWadHash
+                && !_isUpdatingWadHashCacheExclusion;
+            CalculateWadHashMenuItem.Header = hasCachedHash
+                ? "_Recalculate Hash"
+                : "Calculate _Hash";
+            ToolTip.SetTip(
+                CalculateWadHashMenuItem,
+                !hasLocalFile
+                    ? "This WAD is not available locally."
+                    : !hashCache.IsEnabled
+                        ? "Enable WAD hash caching in Preferences before calculating a cached MD5."
+                        : isExcluded
+                            ? "Allow hash caching for this file before calculating a cached MD5."
+                            : hasCachedHash
+                                ? "Calculate this file's MD5 again and replace its cached value."
+                                : "Calculate this file's MD5 and save it in the local hash cache.");
+        }
         if (ToggleWadHashCachingMenuItem != null)
         {
-            var isExcluded = hasLocalFile && WadHashCacheService.Instance.IsHashCachingExcluded(localPath);
-            ToggleWadHashCachingMenuItem.IsEnabled = hasLocalFile && !_isUpdatingWadHashCacheExclusion;
+            // Excluding a file always remains available, even when global cache
+            // reuse is disabled, because it clears a previous persisted entry.
+            ToggleWadHashCachingMenuItem.IsEnabled = hasLocalFile
+                && !_isCalculatingWadHash
+                && !_isUpdatingWadHashCacheExclusion;
             ToggleWadHashCachingMenuItem.Header = isExcluded
                 ? "Allow Hash _Caching"
                 : "_Don't Cache Hash";
@@ -370,7 +413,7 @@ public partial class MainWindow : Window
     private async void ToggleWadHashCachingMenuItem_Click(object? sender, RoutedEventArgs e)
     {
         var wad = GetWadContextMenuTarget();
-        if (wad == null || _isUpdatingWadHashCacheExclusion)
+        if (wad == null || _isCalculatingWadHash || _isUpdatingWadHashCacheExclusion)
             return;
 
         var filePath = _wadManager.FindWad(wad.Name);
@@ -412,6 +455,78 @@ public partial class MainWindow : Window
         finally
         {
             _isUpdatingWadHashCacheExclusion = false;
+        }
+    }
+
+    private async void CalculateWadHashMenuItem_Click(object? sender, RoutedEventArgs e)
+    {
+        var wad = GetWadContextMenuTarget();
+        if (wad == null || _isCalculatingWadHash || _isUpdatingWadHashCacheExclusion)
+            return;
+
+        var filePath = _wadManager.FindWad(wad.Name);
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            StatusLabel.Text = $"{wad.Name} is not available locally.";
+            return;
+        }
+
+        var hashCache = WadHashCacheService.Instance;
+        if (!hashCache.IsEnabled)
+        {
+            StatusLabel.Text = "Enable WAD hash caching in Preferences before calculating a cached MD5.";
+            return;
+        }
+
+        if (hashCache.IsHashCachingExcluded(filePath))
+        {
+            StatusLabel.Text = $"{wad.Name} is excluded from hash caching. Allow caching first to calculate its MD5.";
+            return;
+        }
+
+        // A valid entry means the explicit action is a true recalculation;
+        // otherwise GetHashAsync performs the first calculation and records it.
+        var isRecalculation = !string.IsNullOrWhiteSpace(hashCache.TryGetCachedHash(filePath));
+        _isCalculatingWadHash = true;
+        StatusLabel.Text = isRecalculation
+            ? $"Recalculating cached MD5 for {wad.Name}..."
+            : $"Calculating MD5 for {wad.Name}...";
+
+        try
+        {
+            var result = isRecalculation
+                ? await hashCache.RefreshHashAsync(filePath, progress: null, CancellationToken.None)
+                : await hashCache.GetHashAsync(filePath, progress: null, CancellationToken.None);
+            var cachedHash = hashCache.TryGetCachedHash(filePath);
+
+            if (!result.IsSuccess)
+            {
+                StatusLabel.Text = $"Could not calculate {wad.Name}: "
+                    + (result.ErrorMessage ?? "unknown read error");
+                return;
+            }
+
+            // Rebuild from the selected server so [FOUND], [CACHED], and
+            // MISMATCH reflect the new cache result immediately.
+            if (_selectedServer != null)
+                DisplayWadList(_selectedServer);
+
+            StatusLabel.Text = cachedHash == null
+                ? $"{wad.Name} changed while its MD5 was calculated; no cache entry was saved."
+                : isRecalculation
+                    ? $"Recalculated cached MD5 for {wad.Name}."
+                    : $"Calculated and cached MD5 for {wad.Name}.";
+            _logger.Info(
+                $"{(isRecalculation ? "Recalculated" : "Calculated")} cached MD5 for server WAD {wad.Name}.");
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Could not calculate {wad.Name}: {ex.Message}";
+            _logger.Warning($"Could not calculate cached MD5 for server WAD {wad.Name}: {ex.Message}");
+        }
+        finally
+        {
+            _isCalculatingWadHash = false;
         }
     }
 
