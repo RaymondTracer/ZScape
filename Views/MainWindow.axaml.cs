@@ -254,7 +254,7 @@ public partial class MainWindow : Window
         WadsListControl.Build(ListViewOverflowMode.Fill);
 
         var contextMenu = new ContextMenu();
-        contextMenu.Opening += WadsListContextMenu_Opening;
+        WadsListControl.RowContextMenuOpening += WadsListContextMenu_Opening;
 
         LocateWadFileMenuItem = new MenuItem { Header = "_Locate File" };
         LocateWadFileMenuItem.Click += LocateWadFileMenuItem_Click;
@@ -266,7 +266,14 @@ public partial class MainWindow : Window
 
         contextMenu.Items.Add(new Separator());
 
-        ToggleWadHashCachingMenuItem = new MenuItem();
+        // The shared list control prepares this dynamic label immediately
+        // before opening the row menu. Keep a readable disabled default so a
+        // future preparation failure never creates a blank menu item.
+        ToggleWadHashCachingMenuItem = new MenuItem
+        {
+            Header = "_Don't Cache Hash",
+            IsEnabled = false
+        };
         ToggleWadHashCachingMenuItem.Click += ToggleWadHashCachingMenuItem_Click;
         contextMenu.Items.Add(ToggleWadHashCachingMenuItem);
 
@@ -415,7 +422,7 @@ public partial class MainWindow : Window
 
         // Set up row-specific context menu actions.
         var contextMenu = new ContextMenu();
-        contextMenu.Opening += ServerContextMenu_Opening;
+        ServerListView.RowContextMenuOpening += ServerContextMenu_Opening;
 
         var connectItem = new MenuItem { Header = "_Connect", FontWeight = FontWeight.Bold };
         connectItem.Click += ConnectMenuItem_Click;
@@ -3269,7 +3276,10 @@ public partial class MainWindow : Window
         }
         finally
         {
-            UpdateServerList();
+            // Let the batched UI path apply the result. It deliberately waits
+            // for any open list context menu so a WAD action is not removed
+            // from beneath the pointer while this one server refreshes.
+            _serverListNeedsUpdate = true;
         }
     }
 
@@ -4853,8 +4863,10 @@ public partial class MainWindow : Window
     {
         if (!_serverListNeedsUpdate) return;
 
-        // Defer updates while the context menu is open to avoid closing it
-        if (ServerListView.ContextMenu is ContextMenu ctx && ctx.IsOpen)
+        // A refreshed selected server rebuilds the details, WADs, and players
+        // collections. Defer that replacement while the user has a row or
+        // header context menu open in any related shared list.
+        if (IsServerBrowserContextMenuOpen())
             return;
 
         _serverListNeedsUpdate = false;
@@ -4862,6 +4874,12 @@ public partial class MainWindow : Window
         UpdateServerList();
         RefreshSelectedServerDetails();
     }
+
+    private bool IsServerBrowserContextMenuOpen() =>
+        ServerListView.IsContextMenuOpen
+        || WadsListControl.IsContextMenuOpen
+        || PlayersListControl.IsContextMenuOpen
+        || (_bigUIShell?.ServerListView.IsContextMenuOpen ?? false);
 
     /// <summary>
     /// Refreshes the detail panels (Server Details, WADs, Players) for the currently selected server.

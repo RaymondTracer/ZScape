@@ -635,7 +635,7 @@ public partial class WadBrowserDialog : Window
     private void ConfigureWadContextMenu()
     {
         var contextMenu = new ContextMenu();
-        contextMenu.Opening += (_, _) => UpdateActionAvailability();
+        WadListView.RowContextMenuOpening += (_, _) => UpdateActionAvailability();
 
         _locateFileMenuItem = new MenuItem { Header = "_Locate File" };
         _locateFileMenuItem.Click += LocateFileMenuItem_Click;
@@ -647,7 +647,11 @@ public partial class WadBrowserDialog : Window
         _refreshHashCacheMenuItem.Click += RefreshHashCacheMenuItem_Click;
         contextMenu.Items.Add(_refreshHashCacheMenuItem);
 
-        _toggleHashCachingMenuItem = new MenuItem();
+        _toggleHashCachingMenuItem = new MenuItem
+        {
+            Header = "_Don't Cache Hash",
+            IsEnabled = false
+        };
         _toggleHashCachingMenuItem.Click += ToggleHashCachingMenuItem_Click;
         contextMenu.Items.Add(_toggleHashCachingMenuItem);
 

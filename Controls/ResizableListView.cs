@@ -197,7 +197,6 @@ public class ResizableListView : UserControl
     private readonly Grid _headerGrid;
     private readonly ScrollViewer _scrollViewer;
     private ContextMenu? _rowContextMenu;
-    private bool? _contextMenuTargetIsRow;
     private ScrollViewer? _horizontalScrollViewer;
     private readonly ItemsControl _itemsControl;
     private readonly List<ListViewColumn> _columns = [];
@@ -247,6 +246,15 @@ public class ResizableListView : UserControl
     public event EventHandler<ListViewRowEventArgs>? RowPointerEntered;
     public event EventHandler<ListViewRowEventArgs>? RowPointerExited;
     public event EventHandler<ListViewRowEventArgs>? RowGotFocus;
+
+    /// <summary>
+    /// Raised immediately before this control opens its row context menu. This
+    /// is the reliable preparation hook for menus opened with
+    /// <see cref="ContextMenu.Open(Control)"/>: Avalonia's manual open path
+    /// does not raise <see cref="ContextMenu.Opening"/>. Handlers can update
+    /// dynamic item state or cancel the menu for the selected row.
+    /// </summary>
+    public event EventHandler<System.ComponentModel.CancelEventArgs>? RowContextMenuOpening;
 
     /// <summary>
     /// Fired when a sortable column header is clicked. Provides the column index
@@ -382,9 +390,9 @@ public class ResizableListView : UserControl
     /// Context menu for list rows. Right-clicking a row opens this menu directly
     /// from that row so it is reliable across Avalonia backends. It must not be
     /// attached to the internal scroll canvas: Avalonia rejects opening an
-    /// attached menu against a different control. The control centrally rejects
-    /// blank-canvas invocations, preventing row actions from targeting a stale
-    /// selection in every consuming view.
+    /// attached menu against a different control. Because the control opens it
+    /// only from a generated row, blank-canvas clicks cannot target stale row
+    /// actions in any consuming view.
     /// </summary>
     public new ContextMenu? ContextMenu
     {
@@ -394,9 +402,6 @@ public class ResizableListView : UserControl
             if (ReferenceEquals(_rowContextMenu, value))
                 return;
 
-            if (_rowContextMenu != null)
-                _rowContextMenu.Opening -= RowContextMenu_Opening;
-
             _rowContextMenu = value;
 
             // The menu is deliberately unowned until a generated row opens it.
@@ -404,10 +409,16 @@ public class ResizableListView : UserControl
             // then calling ContextMenu.Open(rowBorder) throws in Avalonia.
             _scrollViewer.ContextMenu = null;
 
-            if (_rowContextMenu != null)
-                _rowContextMenu.Opening += RowContextMenu_Opening;
         }
     }
+
+    /// <summary>
+    /// Gets whether the control currently displays either its built-in header
+    /// menu or its consumer-supplied row menu. Owners that batch data updates
+    /// can use this to avoid replacing the selected row mid-interaction.
+    /// </summary>
+    public bool IsContextMenuOpen => _headerBorder.ContextMenu?.IsOpen == true
+        || _rowContextMenu?.IsOpen == true;
 
     public ResizableListView()
     {
@@ -1599,8 +1610,10 @@ public class ResizableListView : UserControl
                     && ContextMenu is { } contextMenu)
                 {
                     CloseCompetingContextMenu(contextMenu);
-                    _contextMenuTargetIsRow = true;
-                    contextMenu.Open(b);
+                    var openingArgs = new System.ComponentModel.CancelEventArgs();
+                    RowContextMenuOpening?.Invoke(this, openingArgs);
+                    if (!openingArgs.Cancel)
+                        contextMenu.Open(b);
                     e.Handled = true;
                 }
             };
@@ -1779,16 +1792,14 @@ public class ResizableListView : UserControl
 
     /// <summary>
     /// Gives every list the normal desktop selection contract: a primary or
-    /// secondary click in blank canvas space clears an existing selection. The
-    /// pointer is marked before a context menu can open, allowing one shared
-    /// menu-opening handler to reject blank-canvas invocations.
+    /// secondary click in blank canvas space clears an existing selection.
+    /// Row menus are only opened explicitly from a generated row, so blank
+    /// canvas clicks never produce a stale row-action menu.
     /// </summary>
     private void HandleListCanvasPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         var isOverRow = IsPointerOverGeneratedRow(e.Source);
         var point = e.GetCurrentPoint(_scrollViewer);
-        if (point.Properties.IsRightButtonPressed)
-            _contextMenuTargetIsRow = isOverRow;
 
         if (_selectionMode == ListViewSelectionMode.None || isOverRow)
             return;
@@ -1801,14 +1812,6 @@ public class ResizableListView : UserControl
 
         if (point.Properties.IsLeftButtonPressed || point.Properties.IsRightButtonPressed)
             ClearSelection();
-    }
-
-    private void RowContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
-    {
-        var openedOnRow = _contextMenuTargetIsRow == true;
-        _contextMenuTargetIsRow = null;
-        if (!openedOnRow)
-            e.Cancel = true;
     }
 
     private static bool IsPointerOverGeneratedRow(object? source)
