@@ -527,6 +527,7 @@ public class AppSettings
     public bool ShowLogPanel { get; set; }
     public bool VerboseLogging { get; set; }
     public bool ColorizePlayerNames { get; set; } = true;
+    public PlayerColumnDetails PlayerColumnDetails { get; set; } = new();
 
     // Behavior options
     public bool RefreshOnLaunch { get; set; } = true;

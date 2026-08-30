@@ -162,11 +162,9 @@ public class ServerInfo : INotifyPropertyChanged
     public bool HasSeparateClientLimit => MaxPlayers != MaxClients;
 
     /// <summary>
-    /// Compact capacity display shared by every server list. When both limits
-    /// are equal, this preserves the familiar player/bot/spectator breakdown.
-    /// When they differ, the first fraction is the playing count/limit (p)
-    /// and the parenthetical is the connected-client capacity (c). The
-    /// connected count is included when it differs from the playing count.
+    /// Detailed player/client breakdown used in server details and diagnostic
+    /// text. Server-list rows use <see cref="GetPlayerColumnDisplay"/> so
+    /// their default capacity remains concise.
     /// </summary>
     public string PlayerCountDisplay
     {
@@ -192,6 +190,103 @@ public class ServerInfo : INotifyPropertyChanged
 
             return $"{playingBreakdown}/{MaxPlayers}";
         }
+    }
+
+    /// <summary>
+    /// Formats the player column for a server or connection-history row.
+    /// With every detail disabled, the display is occupied client slots /
+    /// maximum client slots. Each enabled detail exposes only its existing
+    /// part of the original display; the remaining values stay folded into
+    /// the unlabelled count on the same side of the fraction.
+    /// </summary>
+    public string GetPlayerColumnDisplay(PlayerColumnDetails? details)
+    {
+        details ??= new PlayerColumnDetails();
+
+        if (!details.ShowClientCapacityMarker &&
+            !details.ShowPlayingCapacity &&
+            !details.ShowBots &&
+            !details.ShowSpectators)
+        {
+            return $"{CurrentPlayers}/{MaxClients}";
+        }
+
+        // This is the exact legacy row format. Keep it as the all-details
+        // result so existing users can recover precisely what they had before.
+        if (details.ShowClientCapacityMarker &&
+            details.ShowPlayingCapacity &&
+            details.ShowBots &&
+            details.ShowSpectators)
+        {
+            return PlayerCountDisplay;
+        }
+
+        var activeBots = Players.Count(player => player.IsBot && !player.IsSpectator);
+        var spectators = Players.Count(player => player.IsSpectator);
+
+        if (HasSeparateClientLimit && details.ShowPlayingCapacity)
+        {
+            var playingDisplay = FormatCountWithOptionalBreakdown(
+                PlayingCount,
+                activeBots,
+                spectators: 0,
+                details.ShowBots,
+                showSpectators: false);
+            var display = $"{playingDisplay}/{MaxPlayers}p";
+
+            if (details.ShowClientCapacityMarker)
+            {
+                var connectedDisplay = CurrentPlayers == PlayingCount
+                    ? $"{MaxClients}c"
+                    : $"{CurrentPlayers}/{MaxClients}c";
+                display = $"{display} ({connectedDisplay})";
+            }
+
+            return display;
+        }
+
+        var clientDisplay = FormatCountWithOptionalBreakdown(
+            CurrentPlayers,
+            activeBots,
+            spectators,
+            details.ShowBots,
+            details.ShowSpectators);
+
+        return details.ShowClientCapacityMarker && HasSeparateClientLimit
+            ? $"{clientDisplay}/{MaxClients}c"
+            : $"{clientDisplay}/{MaxClients}";
+    }
+
+    /// <summary>
+    /// Splits a total into optional bot and spectator markers. Every disabled
+    /// marker remains part of the ordinary numeric count, preserving the total.
+    /// </summary>
+    private static string FormatCountWithOptionalBreakdown(
+        int total,
+        int botCount,
+        int spectators,
+        bool showBots,
+        bool showSpectators)
+    {
+        var collapsedCount = total;
+        var markers = new List<string>();
+
+        if (showBots && botCount > 0)
+        {
+            collapsedCount -= botCount;
+            markers.Add($"{botCount}b");
+        }
+
+        if (showSpectators && spectators > 0)
+        {
+            collapsedCount -= spectators;
+            markers.Add($"{spectators}s");
+        }
+
+        collapsedCount = Math.Max(0, collapsedCount);
+        return markers.Count == 0
+            ? collapsedCount.ToString()
+            : $"{collapsedCount}+{string.Join("+", markers)}";
     }
     
     public string PingDisplay => Ping >= 0 ? $"{Ping} ms" : "N/A";

@@ -235,6 +235,11 @@ public partial class UnifiedSettingsDialog : Window
         VerifyWadHashesCheckBox.IsChecked = Settings.EnableWadHashVerification;
         WadHashCacheCheckBox.IsChecked = Settings.EnableWadHashCache;
         ColorizePlayerNamesCheckBox.IsChecked = Settings.ColorizePlayerNames;
+        var playerColumnDetails = GetPlayerColumnDetails();
+        ShowPlayerClientCapacityMarkerCheckBox.IsChecked = playerColumnDetails.ShowClientCapacityMarker;
+        ShowPlayerPlayingCapacityCheckBox.IsChecked = playerColumnDetails.ShowPlayingCapacity;
+        ShowPlayerBotsCheckBox.IsChecked = playerColumnDetails.ShowBots;
+        ShowPlayerSpectatorsCheckBox.IsChecked = playerColumnDetails.ShowSpectators;
         RowHeightNumeric.Value = Settings.ServerListRowHeight;
         ScreenshotMonitorCheckBox.IsChecked = Settings.EnableScreenshotMonitoring;
         ScreenshotPathTextBox.Text = Settings.ScreenshotConsolidationPath;
@@ -325,6 +330,15 @@ public partial class UnifiedSettingsDialog : Window
         
         // Update watermarks to show resolved default paths
         UpdatePathWatermarks();
+    }
+
+    /// <summary>
+    /// Keeps older or manually edited settings files from leaving the optional
+    /// player-column detail preferences unset.
+    /// </summary>
+    private PlayerColumnDetails GetPlayerColumnDetails()
+    {
+        return Settings.PlayerColumnDetails ??= new PlayerColumnDetails();
     }
     
     private void PopulateDownloadBehaviorComboBox()
@@ -602,6 +616,11 @@ public partial class UnifiedSettingsDialog : Window
         Settings.EnableWadHashVerification = VerifyWadHashesCheckBox.IsChecked ?? true;
         Settings.EnableWadHashCache = WadHashCacheCheckBox.IsChecked ?? true;
         Settings.ColorizePlayerNames = ColorizePlayerNamesCheckBox.IsChecked ?? true;
+        var playerColumnDetails = GetPlayerColumnDetails();
+        playerColumnDetails.ShowClientCapacityMarker = ShowPlayerClientCapacityMarkerCheckBox.IsChecked ?? false;
+        playerColumnDetails.ShowPlayingCapacity = ShowPlayerPlayingCapacityCheckBox.IsChecked ?? false;
+        playerColumnDetails.ShowBots = ShowPlayerBotsCheckBox.IsChecked ?? false;
+        playerColumnDetails.ShowSpectators = ShowPlayerSpectatorsCheckBox.IsChecked ?? false;
         Settings.ServerListRowHeight = RowHeightNumeric.Value;
         Settings.EnableScreenshotMonitoring = ScreenshotMonitorCheckBox.IsChecked ?? false;
         Settings.ScreenshotConsolidationPath = ScreenshotPathTextBox.Text ?? "";

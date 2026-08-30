@@ -85,6 +85,36 @@
                             <TextBlock Text="Display Options" FontWeight="Bold"/>
                             <CheckBox x:Name="ColorizePlayerNamesCheckBox" 
                                       Content="Colourize player names"/>
+
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Text="Player Column Details" FontWeight="Bold"/>
+                                    <TextBlock Text="By default the server and history lists show occupied client slots / maximum client slots, for example 4/32. A disabled item stays included in its normal count; enabling it only reveals that part of the existing format."
+                                               Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                                    <CheckBox x:Name="ShowPlayerClientCapacityMarkerCheckBox"
+                                              Content="Show client-capacity field (c)"
+                                              ToolTip.Tip="c means connected client slots: every player, bot, or spectator using a client connection / the server's maximum client capacity. On servers with separate limits it remains in parentheses after p, for example 1/20p (32c)."/>
+                                    <TextBlock Text="c = every occupied client connection / the maximum client capacity. On separate-limit servers it stays in parentheses after p."
+                                               Margin="25,0,0,0" Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                                    <CheckBox x:Name="ShowPlayerPlayingCapacityCheckBox"
+                                              Content="Show playing count and game-slot limit (p)"
+                                              ToolTip.Tip="p means actively playing humans and bots / the server's gameplay player limit. It stays first in the existing layout and can differ from c when spectators use client slots."/>
+                                    <TextBlock Text="p = active humans and bots in the game / the gameplay player limit. When hidden, the compact client count remains instead."
+                                               Margin="25,0,0,0" Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                                    <CheckBox x:Name="ShowPlayerBotsCheckBox"
+                                              Content="Show bot count (b)"
+                                              ToolTip.Tip="b means AI-controlled players currently in the game. With p enabled, it keeps the established human+bots p field, for example 0+3b/16p."/>
+                                    <TextBlock Text="b = AI-controlled players. When hidden, bots remain included in the ordinary number on that side of the count."
+                                               Margin="25,0,0,0" Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                                    <CheckBox x:Name="ShowPlayerSpectatorsCheckBox"
+                                              Content="Show spectator count (s)"
+                                              ToolTip.Tip="s means connected spectators. They use a client slot but are not part of the active playing count. The established p (c) form expresses them through the difference between p and c."/>
+                                    <TextBlock Text="s = connected spectators. When hidden, they remain included in the ordinary client count; p (c) already shows their separate capacity."
+                                               Margin="25,0,0,0" Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                                    <TextBlock Text="Example when all options are enabled: 0+3b/16p (4/16c)."
+                                               Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
                             
                             <StackPanel Spacing="3">
                                 <TextBlock Text="Server List Row Height (pixels):"/>

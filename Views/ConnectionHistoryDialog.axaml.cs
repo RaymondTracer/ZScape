@@ -69,7 +69,7 @@ public partial class ConnectionHistoryDialog : Window
         HistoryListView.AddColumn(new ListViewColumn
         {
             Key = "players", Header = "Players", Width = 75, MinWidth = 10,
-            HeaderToolTip = "p = playing count/limit; c = connected-client capacity. A current/max c appears when spectators affect the count.",
+            HeaderToolTip = "Shows occupied client slots / maximum client slots (for example, 4/32). Optional p, c, b, and s details can be enabled in Settings > General > Player Column Details without changing the familiar p (c) layout.",
             BindingPath = "PlayersDisplay",
             CanSort = true,
             DefaultSortDescending = true
@@ -683,7 +683,8 @@ public class HistoryEntryViewModel : INotifyPropertyChanged
             if (_liveServer == null || !IsOnline)
                 return "—";
 
-            return _liveServer.PlayerCountDisplay;
+            return _liveServer.GetPlayerColumnDisplay(
+                SettingsService.Instance.Settings.PlayerColumnDetails);
         }
     }
     public string PingDisplay => _liveServer != null && IsOnline && _liveServer.Ping >= 0

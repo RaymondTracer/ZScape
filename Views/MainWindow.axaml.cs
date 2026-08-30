@@ -725,7 +725,7 @@ public partial class MainWindow : Window
         {
             Key = PlayersColumnKey,
             Header = "Players",
-            HeaderToolTip = "p = playing count/limit; c = connected-client capacity. A current/max c appears when spectators affect the count.",
+            HeaderToolTip = "Shows occupied client slots / maximum client slots (for example, 4/32). Optional p, c, b, and s details can be enabled in Settings > General > Player Column Details without changing the familiar p (c) layout.",
             Width = bigUi ? 140 : 115,
             MinWidth = 10,
             BindingPath = "PlayersDisplay",
@@ -5653,7 +5653,8 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
         : DoomColorCodes.StripColorCodes(_server.Name);
     public string PlayersDisplay => _server.IsRefreshPending
         ? string.Empty
-        : _server.PlayerCountDisplay;
+        : _server.GetPlayerColumnDisplay(
+            SettingsService.Instance.Settings.PlayerColumnDetails);
     public string Ping => _server.IsRefreshPending || _server.Ping < 0
         ? string.Empty
         : _server.Ping.ToString();
