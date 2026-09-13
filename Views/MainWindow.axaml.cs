@@ -86,6 +86,7 @@ public partial class MainWindow : Window
 
     // Throttle for server updates
     private bool _serverListNeedsUpdate = false;
+    private readonly ServerUpdateBatch _pendingServerUpdates = new();
     private bool _wadListNeedsUpdate;
     private string? _wadListServerAddress;
 
@@ -1672,7 +1673,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateServerList()
+    private void UpdateServerList(ISet<string>? changedAddresses = null)
     {
         var allServers = _browserService.Servers.ToList();
         var filtered = ApplyFilters(allServers);
@@ -1709,7 +1710,8 @@ public partial class MainWindow : Window
             if (newServerMap.TryGetValue(vm.AddressDisplay, out var data))
             {
                 // Update existing item in-place
-                vm.UpdateFrom(data.Server, data.FavoriteMatch, data.IsManual, searchText);
+                if (changedAddresses == null || changedAddresses.Contains(vm.AddressDisplay))
+                    vm.UpdateFrom(data.Server, data.FavoriteMatch, data.IsManual, searchText);
                 existingAddresses.Add(vm.AddressDisplay);
             }
             else
@@ -4994,8 +4996,7 @@ public partial class MainWindow : Window
 
     private void BrowserService_ServerUpdated(object? sender, ServerInfo server)
     {
-        // Just mark that an update is needed - the timer will handle it
-        _serverListNeedsUpdate = true;
+        _pendingServerUpdates.Add(ServerRuleUtility.GetServerAddress(server));
     }
 
     private void BrowserService_ServerListChanged(object? sender, EventArgs e)
@@ -5004,7 +5005,7 @@ public partial class MainWindow : Window
         // same UI timer as individual query results. This makes the address
         // placeholders visible as soon as the master list is available without
         // forcing hundreds of immediate layout passes.
-        _serverListNeedsUpdate = true;
+        _pendingServerUpdates.MembershipChanged();
     }
 
     private void ServerListUpdateTimer_Tick(object? sender, EventArgs e)
@@ -5012,16 +5013,22 @@ public partial class MainWindow : Window
         if (_wadListNeedsUpdate && !WadsListControl.IsContextMenuOpen && _selectedServer != null)
             DisplayWadList(_selectedServer);
 
-        if (!_serverListNeedsUpdate) return;
-
         // WAD menus defer only their own pane through DisplayWadList.
         if (IsServerBrowserContextMenuOpen())
             return;
 
+        var batch = _pendingServerUpdates.Take();
+        if (!_serverListNeedsUpdate && !batch.MembershipChanged && batch.Addresses.Count == 0)
+            return;
+
+        var refreshDetails = _serverListNeedsUpdate;
+        var fullUpdate = _serverListNeedsUpdate || batch.MembershipChanged;
         _serverListNeedsUpdate = false;
 
-        UpdateServerList();
-        RefreshSelectedServerDetails();
+        UpdateServerList(fullUpdate ? null : batch.Addresses);
+        if (_selectedServer != null && (refreshDetails ||
+                batch.Addresses.Contains(ServerRuleUtility.GetServerAddress(_selectedServer))))
+            RefreshSelectedServerDetails();
     }
 
     private bool IsServerBrowserContextMenuOpen() =>
