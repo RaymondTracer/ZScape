@@ -1,4 +1,7 @@
 /bin
 /obj
 /publish
+/artifacts/
+/tests/**/bin/
+/tests/**/obj/
 ZScape.csproj.lscache

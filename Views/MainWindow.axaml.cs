@@ -87,8 +87,8 @@ public partial class MainWindow : Window
     // Throttle for server updates
     private bool _serverListNeedsUpdate = false;
     private readonly ServerUpdateBatch _pendingServerUpdates = new();
-    private bool _wadListNeedsUpdate;
     private string? _wadListServerAddress;
+    private string? _playerListServerAddress;
 
     // Throttle for log updates
     private readonly List<LogEntry> _pendingLogEntries = [];
@@ -209,6 +209,7 @@ public partial class MainWindow : Window
 
         PlayersListControl.ItemsSource = Players;
         WadsListControl.ItemsSource = Wads;
+        WadsListControl.RowsUpdated += (_, _) => WadsLabel.Text = $"WADs ({Wads.Count})";
 
         if (_logControl != null)
         {
@@ -2284,11 +2285,10 @@ public partial class MainWindow : Window
         if (ServerWebsiteRow != null)
             ServerWebsiteRow.IsVisible = false;
 
-        WadsListControl.ClearSelection();
-        Wads.Clear();
+        WadsListControl.ResetRows(Wads);
         _wadListServerAddress = null;
-        _wadListNeedsUpdate = false;
-        Players.Clear();
+        _playerListServerAddress = null;
+        PlayersListControl.ResetRows(Players);
 
         if (WadsLabel != null)
             WadsLabel.Text = "WADs";
@@ -2319,21 +2319,14 @@ public partial class MainWindow : Window
     {
         var address = $"{server.Address}:{server.Port}";
         var sameServer = _wadListServerAddress == address;
-        if (sameServer && WadsListControl.IsContextMenuOpen)
-        {
-            _wadListNeedsUpdate = true;
-            return;
-        }
-
-        _wadListNeedsUpdate = false;
-        var selected = sameServer ? WadsListControl.SelectedItem as WadViewModel : null;
+        if (!sameServer)
+            WadsListControl.ResetRows(Wads);
         var updatedWads = new List<WadViewModel>();
         _wadListServerAddress = address;
 
         if (server.IsRefreshPending)
         {
-            WadsListControl.ClearSelection();
-            Wads.Clear();
+            WadsListControl.ResetRows(Wads);
             if (WadsLabel != null)
                 WadsLabel.Text = "WADs";
             return;
@@ -2372,22 +2365,10 @@ public partial class MainWindow : Window
                 expectedHash: pwad.Hash));
         }
 
-        // Unrelated server replies must not replace the selected file's row.
-        if (!sameServer || !Wads.Select(w => (w.Name, w.IsIwad, w.Status))
-                .SequenceEqual(updatedWads.Select(w => (w.Name, w.IsIwad, w.Status))))
-        {
-            WadsListControl.ClearSelection();
-            Wads.Clear();
-            foreach (var wad in updatedWads)
-                Wads.Add(wad);
-            if (selected != null)
-            {
-                var replacement = Wads.FirstOrDefault(w => w.IsIwad == selected.IsIwad
-                    && string.Equals(w.Name, selected.Name, StringComparison.OrdinalIgnoreCase));
-                if (replacement != null)
-                    WadsListControl.SelectItem(replacement);
-            }
-        }
+        WadsListControl.UpdateRows(Wads, updatedWads,
+            wad => (wad.Name.ToUpperInvariant(), wad.IsIwad),
+            (existing, incoming) => existing.Name == incoming.Name && existing.Status == incoming.Status
+                ? existing : incoming);
 
         if (WadsLabel != null)
             WadsLabel.Text = $"WADs ({Wads.Count})";
@@ -2395,10 +2376,15 @@ public partial class MainWindow : Window
 
     private void DisplayPlayerList(ServerInfo server)
     {
-        Players.Clear();
+        var address = ServerRuleUtility.GetServerAddress(server);
+        if (_playerListServerAddress != address)
+            PlayersListControl.ResetRows(Players);
+        _playerListServerAddress = address;
+        var updatedPlayers = new List<PlayerViewModel>();
 
         if (server.IsRefreshPending)
         {
+            PlayersListControl.ResetRows(Players);
             PlayersListControl.SetColumnHeader("team", "Team");
             if (PlayersLabel != null)
                 PlayersLabel.Text = "Players";
@@ -2442,7 +2428,7 @@ public partial class MainWindow : Window
                 nameSegments = [.. nameSegments, new ColoredTextSegment { Text = " [BOT]", ColorHex = "#FFA500" }];
             }
 
-            Players.Add(new PlayerViewModel
+            updatedPlayers.Add(new PlayerViewModel
             {
                 Name = DoomColorCodes.StripColorCodes(player.Name ?? "Unknown"),
                 NameSegments = nameSegments,
@@ -2469,7 +2455,7 @@ public partial class MainWindow : Window
                 nameSegments = [.. nameSegments, new ColoredTextSegment { Text = " [BOT]", ColorHex = "#FFA500" }];
             }
 
-            Players.Add(new PlayerViewModel
+            updatedPlayers.Add(new PlayerViewModel
             {
                 Name = DoomColorCodes.StripColorCodes(player.Name ?? "Unknown"),
                 NameSegments = nameSegments,
@@ -2482,6 +2468,11 @@ public partial class MainWindow : Window
                 ShowTeamColumn = true
             });
         }
+
+        // The protocol has no persistent player ID. Names plus occurrence distinguish
+        // duplicate names; a rename is intentionally treated as a different row.
+        PlayersListControl.UpdateRows(Players, updatedPlayers, player => player.Name,
+            (existing, incoming) => existing.HasSamePresentation(incoming) ? existing : incoming);
 
         if (PlayersLabel != null)
             PlayersLabel.Text = $"Players ({server.Players.Count})";
@@ -5010,10 +5001,7 @@ public partial class MainWindow : Window
 
     private void ServerListUpdateTimer_Tick(object? sender, EventArgs e)
     {
-        if (_wadListNeedsUpdate && !WadsListControl.IsContextMenuOpen && _selectedServer != null)
-            DisplayWadList(_selectedServer);
-
-        // WAD menus defer only their own pane through DisplayWadList.
+        // Detail-list menus defer only their own snapshots in the shared control.
         if (IsServerBrowserContextMenuOpen())
             return;
 
@@ -5033,7 +5021,6 @@ public partial class MainWindow : Window
 
     private bool IsServerBrowserContextMenuOpen() =>
         ServerListView.IsContextMenuOpen
-        || PlayersListControl.IsContextMenuOpen
         || (_bigUIShell?.ServerListView.IsContextMenuOpen ?? false);
 
     /// <summary>
@@ -5739,6 +5726,14 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
 /// </summary>
 public class PlayerViewModel
 {
+    public bool HasSamePresentation(PlayerViewModel other) =>
+        Name == other.Name && Score == other.Score && Ping == other.Ping
+        && Team == other.Team && Equals(TeamColor, other.TeamColor)
+        && IsSpectator == other.IsSpectator && ShowTeamColumn == other.ShowTeamColumn
+        && UseColorizedName == other.UseColorizedName
+        && NameSegments.Select(s => (s.Text, s.ColorHex))
+            .SequenceEqual(other.NameSegments.Select(s => (s.Text, s.ColorHex)));
+
     public string Name { get; set; } = "";
     public List<ColoredTextSegment> NameSegments { get; set; } = [];
     public string DisplayName =>

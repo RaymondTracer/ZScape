@@ -179,7 +179,7 @@ public sealed class ListViewColumnOrderChangedEventArgs : EventArgs
 /// <see cref="ListViewColumn.CellContentFactory"/> which is called per-row.
 /// </para>
 /// </summary>
-public class ResizableListView : UserControl
+public partial class ResizableListView : UserControl
 {
     private const double ScrollAlignmentTolerance = 0.5;
 
@@ -402,7 +402,11 @@ public class ResizableListView : UserControl
             if (ReferenceEquals(_rowContextMenu, value))
                 return;
 
+            if (_rowContextMenu != null)
+                _rowContextMenu.Closed -= UpdateMenuClosed;
             _rowContextMenu = value;
+            if (_rowContextMenu != null)
+                _rowContextMenu.Closed += UpdateMenuClosed;
 
             // The menu is deliberately unowned until a generated row opens it.
             // See the property documentation: attaching it to _scrollViewer and
@@ -670,7 +674,10 @@ public class ResizableListView : UserControl
 
     private void BuildHeaderContextMenu()
     {
+        if (_headerBorder.ContextMenu != null)
+            _headerBorder.ContextMenu.Closed -= UpdateMenuClosed;
         var menu = new ContextMenu();
+        menu.Closed += UpdateMenuClosed;
         menu.Opening += (_, _) =>
         {
             CloseCompetingContextMenu(menu);

@@ -123,6 +123,8 @@ public partial class ConnectionHistoryDialog : Window
             DefaultSortDescending = true
         });
         HistoryListView.Build(ListViewOverflowMode.AutoScroll);
+        HistoryListView.ItemsSource = HistoryEntries;
+        HistoryListView.RowsUpdated += (_, _) => UpdateHistorySummary();
         HistoryListView.SetSortDescriptors(_sortDescriptors);
 
         // Wire up row events
@@ -324,7 +326,6 @@ public partial class ConnectionHistoryDialog : Window
 
     private void ApplyHistoryView()
     {
-        var selected = GetSelectedEntry();
         var query = HistorySearchBox?.Text?.Trim() ?? string.Empty;
         IEnumerable<HistoryEntryViewModel> view = _allHistoryEntries;
 
@@ -398,18 +399,13 @@ public partial class ConnectionHistoryDialog : Window
         }
 
         var materialized = (ordered ?? view.OrderBy(_ => 0)).ToList();
-        HistoryEntries.Clear();
-        foreach (var entry in materialized)
-            HistoryEntries.Add(entry);
-        HistoryListView.ItemsSource = HistoryEntries;
+        HistoryListView.UpdateRows(HistoryEntries, materialized, entry => entry.Entry);
+    }
 
-        if (selected != null && HistoryEntries.Contains(selected))
-            HistoryListView.SelectItem(selected);
-        else
-            HistoryListView.ClearSelection();
-
+    private void UpdateHistorySummary()
+    {
         var onlineCount = HistoryEntries.Count(entry => entry.IsOnline);
-        InfoLabel.Text = string.IsNullOrWhiteSpace(query)
+        InfoLabel.Text = string.IsNullOrWhiteSpace(HistorySearchBox.Text)
             ? $"{HistoryEntries.Count} entries · {onlineCount} online · Double-click to reconnect"
             : $"{HistoryEntries.Count} matches · {onlineCount} online";
         UpdateActionState();

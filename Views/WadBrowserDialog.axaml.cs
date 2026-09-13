@@ -161,6 +161,7 @@ public partial class WadBrowserDialog : Window
         WadListView.SortRequested += WadListView_SortRequested;
         WadListView.ItemsSource = _filteredWads;
         WadListView.SelectionChanged += (_, _) => UpdateActionAvailability();
+        WadListView.RowsUpdated += (_, _) => UpdateStats();
         ConfigureWadContextMenu();
 
         // Wire up row events
@@ -439,11 +440,8 @@ public partial class WadBrowserDialog : Window
         if (ordered != null)
             results = ordered;
 
-        _filteredWads.Clear();
-        foreach (var wad in results)
-        {
-            _filteredWads.Add(wad);
-        }
+        WadListView.UpdateRows(_filteredWads, results,
+            wad => OperatingSystem.IsWindows() ? wad.FullPath.ToUpperInvariant() : wad.FullPath);
     }
 
     private static IOrderedEnumerable<WadFileEntry> ApplyWadSort<TKey>(
