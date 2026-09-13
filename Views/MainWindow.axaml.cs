@@ -86,6 +86,8 @@ public partial class MainWindow : Window
 
     // Throttle for server updates
     private bool _serverListNeedsUpdate = false;
+    private bool _wadListNeedsUpdate;
+    private string? _wadListServerAddress;
 
     // Throttle for log updates
     private readonly List<LogEntry> _pendingLogEntries = [];
@@ -2282,6 +2284,8 @@ public partial class MainWindow : Window
 
         WadsListControl.ClearSelection();
         Wads.Clear();
+        _wadListServerAddress = null;
+        _wadListNeedsUpdate = false;
         Players.Clear();
 
         if (WadsLabel != null)
@@ -2311,11 +2315,23 @@ public partial class MainWindow : Window
 
     private void DisplayWadList(ServerInfo server)
     {
-        WadsListControl.ClearSelection();
-        Wads.Clear();
+        var address = $"{server.Address}:{server.Port}";
+        var sameServer = _wadListServerAddress == address;
+        if (sameServer && WadsListControl.IsContextMenuOpen)
+        {
+            _wadListNeedsUpdate = true;
+            return;
+        }
+
+        _wadListNeedsUpdate = false;
+        var selected = sameServer ? WadsListControl.SelectedItem as WadViewModel : null;
+        var updatedWads = new List<WadViewModel>();
+        _wadListServerAddress = address;
 
         if (server.IsRefreshPending)
         {
+            WadsListControl.ClearSelection();
+            Wads.Clear();
             if (WadsLabel != null)
                 WadsLabel.Text = "WADs";
             return;
@@ -2330,7 +2346,7 @@ public partial class MainWindow : Window
             var cachedHash = iwadPath == null
                 ? null
                 : WadHashCacheService.Instance.TryGetCachedHash(iwadPath);
-            Wads.Add(WadViewModel.Create(
+            updatedWads.Add(WadViewModel.Create(
                 server.IWAD,
                 isAvailable,
                 isIwad: true,
@@ -2346,12 +2362,29 @@ public partial class MainWindow : Window
             var cachedHash = wadPath == null
                 ? null
                 : WadHashCacheService.Instance.TryGetCachedHash(wadPath);
-            Wads.Add(WadViewModel.Create(
+            updatedWads.Add(WadViewModel.Create(
                 pwad.Name,
                 isAvailable,
                 isIwad: false,
                 cachedHash: cachedHash,
                 expectedHash: pwad.Hash));
+        }
+
+        // Unrelated server replies must not replace the selected file's row.
+        if (!sameServer || !Wads.Select(w => (w.Name, w.IsIwad, w.Status))
+                .SequenceEqual(updatedWads.Select(w => (w.Name, w.IsIwad, w.Status))))
+        {
+            WadsListControl.ClearSelection();
+            Wads.Clear();
+            foreach (var wad in updatedWads)
+                Wads.Add(wad);
+            if (selected != null)
+            {
+                var replacement = Wads.FirstOrDefault(w => w.IsIwad == selected.IsIwad
+                    && string.Equals(w.Name, selected.Name, StringComparison.OrdinalIgnoreCase));
+                if (replacement != null)
+                    WadsListControl.SelectItem(replacement);
+            }
         }
 
         if (WadsLabel != null)
@@ -4976,11 +5009,12 @@ public partial class MainWindow : Window
 
     private void ServerListUpdateTimer_Tick(object? sender, EventArgs e)
     {
+        if (_wadListNeedsUpdate && !WadsListControl.IsContextMenuOpen && _selectedServer != null)
+            DisplayWadList(_selectedServer);
+
         if (!_serverListNeedsUpdate) return;
 
-        // A refreshed selected server rebuilds the details, WADs, and players
-        // collections. Defer that replacement while the user has a row or
-        // header context menu open in any related shared list.
+        // WAD menus defer only their own pane through DisplayWadList.
         if (IsServerBrowserContextMenuOpen())
             return;
 
@@ -4992,7 +5026,6 @@ public partial class MainWindow : Window
 
     private bool IsServerBrowserContextMenuOpen() =>
         ServerListView.IsContextMenuOpen
-        || WadsListControl.IsContextMenuOpen
         || PlayersListControl.IsContextMenuOpen
         || (_bigUIShell?.ServerListView.IsContextMenuOpen ?? false);
 
