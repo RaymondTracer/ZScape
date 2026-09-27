@@ -2080,6 +2080,8 @@ public partial class ResizableListView : UserControl
     private void HandleRowSelection(Border border, KeyModifiers modifiers)
     {
         var item = border.DataContext;
+        var previousSelectedItems = _selectedItems.ToHashSet(ReferenceEqualityComparer.Instance);
+        var previousSelectedItem = _selectedItem;
 
         if (_selectionMode == ListViewSelectionMode.Multi && modifiers.HasFlag(KeyModifiers.Control))
         {
@@ -2124,7 +2126,11 @@ public partial class ResizableListView : UserControl
             UpdateSelectionVisuals();
         }
 
-        SelectionChanged?.Invoke(this, EventArgs.Empty);
+        if (!previousSelectedItems.SetEquals(_selectedItems)
+            || !ReferenceEquals(previousSelectedItem, _selectedItem))
+        {
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
 
         // Ensure the control has keyboard focus
         Focus();

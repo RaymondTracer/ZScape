@@ -24,6 +24,7 @@ public class WadManager
     
     private readonly ConcurrentDictionary<string, string> _wadCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _fileNameIndex = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _searchPathsLock = new();
     private readonly HashSet<string> _searchPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _executableFolders = new(StringComparer.OrdinalIgnoreCase);
     private string _downloadPath = string.Empty;
@@ -51,20 +52,42 @@ public class WadManager
     /// <summary>
     /// Gets or sets the list of paths to search for WAD files.
     /// </summary>
-    public IReadOnlyCollection<string> SearchPaths => _searchPaths;
+    public IReadOnlyCollection<string> SearchPaths
+    {
+        get
+        {
+            lock (_searchPathsLock)
+                return _searchPaths.ToArray();
+        }
+    }
     
     /// <summary>
     /// Gets the list of Zandronum executable folders (highest priority for WAD search).
     /// </summary>
-    public IReadOnlyCollection<string> ExecutableFolders => _executableFolders;
+    public IReadOnlyCollection<string> ExecutableFolders
+    {
+        get
+        {
+            lock (_searchPathsLock)
+                return _executableFolders.ToArray();
+        }
+    }
     
     /// <summary>
     /// Gets or sets the default path for downloading WAD files.
     /// </summary>
     public string DownloadPath
     {
-        get => _downloadPath;
-        set => _downloadPath = value;
+        get
+        {
+            lock (_searchPathsLock)
+                return _downloadPath;
+        }
+        set
+        {
+            lock (_searchPathsLock)
+                _downloadPath = value;
+        }
     }
     
     private WadManager() { }
@@ -76,7 +99,8 @@ public class WadManager
     {
         if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
         {
-            _searchPaths.Add(path);
+            lock (_searchPathsLock)
+                _searchPaths.Add(path);
         }
     }
     
@@ -85,7 +109,8 @@ public class WadManager
     /// </summary>
     public void RemoveSearchPath(string path)
     {
-        _searchPaths.Remove(path);
+        lock (_searchPathsLock)
+            _searchPaths.Remove(path);
     }
     
     /// <summary>
@@ -93,7 +118,8 @@ public class WadManager
     /// </summary>
     public void ClearSearchPaths()
     {
-        _searchPaths.Clear();
+        lock (_searchPathsLock)
+            _searchPaths.Clear();
     }
     
     /// <summary>
@@ -101,10 +127,14 @@ public class WadManager
     /// </summary>
     public void SetSearchPaths(IEnumerable<string> paths)
     {
-        _searchPaths.Clear();
-        foreach (var path in paths.Where(p => !string.IsNullOrWhiteSpace(p) && Directory.Exists(p)))
+        var validatedPaths = paths
+            .Where(p => !string.IsNullOrWhiteSpace(p) && Directory.Exists(p))
+            .ToArray();
+
+        lock (_searchPathsLock)
         {
-            _searchPaths.Add(path);
+            _searchPaths.Clear();
+            _searchPaths.UnionWith(validatedPaths);
         }
     }
     
@@ -115,8 +145,8 @@ public class WadManager
     /// <param name="exePaths">Zandronum executable paths (not folders). The parent directories will be used.</param>
     public void SetExecutableFolders(IEnumerable<string> exePaths)
     {
-        _executableFolders.Clear();
         var pathList = exePaths.ToList();
+        var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var exePath in pathList)
         {
             if (string.IsNullOrWhiteSpace(exePath))
@@ -129,9 +159,15 @@ public class WadManager
             var folder = Path.GetDirectoryName(exePath);
             if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
             {
-                _executableFolders.Add(folder);
+                folders.Add(folder);
                 _logger.Verbose($"Added WAD search folder: {folder}");
             }
+        }
+
+        lock (_searchPathsLock)
+        {
+            _executableFolders.Clear();
+            _executableFolders.UnionWith(folders);
         }
     }
     
@@ -142,7 +178,8 @@ public class WadManager
     {
         if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
         {
-            _executableFolders.Add(folder);
+            lock (_searchPathsLock)
+                _executableFolders.Add(folder);
         }
     }
     
@@ -155,16 +192,19 @@ public class WadManager
         _wadCache.Clear();
         _fileNameIndex.Clear();
         var searchRoots = GetSearchRootsInPriorityOrder();
+        var executableFolders = ExecutableFolders;
+        var searchPaths = SearchPaths;
+        var downloadPath = DownloadPath;
         
         // Log configured paths for debugging
-        _logger.Info($"WAD search: {_executableFolders.Count} exe folders, download={!string.IsNullOrEmpty(_downloadPath)}, {_searchPaths.Count} search paths");
-        if (_executableFolders.Count == 0)
+        _logger.Info($"WAD search: {executableFolders.Count} exe folders, download={!string.IsNullOrEmpty(downloadPath)}, {searchPaths.Count} search paths");
+        if (executableFolders.Count == 0)
         {
             _logger.Warning("No executable folders configured - WADs in Zandronum folder won't be found. Configure Zandronum path in Settings.");
         }
-        _logger.Verbose($"  Executable folders: {string.Join(", ", _executableFolders)}");
-        _logger.Verbose($"  Download path: {_downloadPath}");
-        _logger.Verbose($"  Search paths: {string.Join(", ", _searchPaths)}");
+        _logger.Verbose($"  Executable folders: {string.Join(", ", executableFolders)}");
+        _logger.Verbose($"  Download path: {downloadPath}");
+        _logger.Verbose($"  Search paths: {string.Join(", ", searchPaths)}");
 
         foreach (var searchPath in searchRoots)
         {
@@ -182,6 +222,16 @@ public class WadManager
     /// </summary>
     public IReadOnlyList<string> GetSearchRootsInPriorityOrder()
     {
+        string[] executableFolders;
+        string[] searchPaths;
+        string downloadPath;
+        lock (_searchPathsLock)
+        {
+            executableFolders = _executableFolders.ToArray();
+            searchPaths = _searchPaths.ToArray();
+            downloadPath = _downloadPath;
+        }
+
         var orderedPaths = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -199,14 +249,14 @@ public class WadManager
             }
         }
 
-        foreach (var exeFolder in _executableFolders)
+        foreach (var exeFolder in executableFolders)
         {
             AddPath(exeFolder);
         }
 
-        AddPath(_downloadPath);
+        AddPath(downloadPath);
 
-        foreach (var searchPath in _searchPaths)
+        foreach (var searchPath in searchPaths)
         {
             AddPath(searchPath);
         }

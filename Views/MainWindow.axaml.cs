@@ -89,6 +89,9 @@ public partial class MainWindow : Window
     private readonly ServerUpdateBatch _pendingServerUpdates = new();
     private string? _wadListServerAddress;
     private string? _playerListServerAddress;
+    private List<WadListRequirement>? _displayedWadRequirements;
+    private CancellationTokenSource? _wadListLookupCancellation;
+    private readonly SemaphoreSlim _wadListLookupGate = new(1, 1);
 
     // Throttle for log updates
     private readonly List<LogEntry> _pendingLogEntries = [];
@@ -320,13 +323,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        var localPath = _wadManager.FindWad(target.Name);
-        var hasLocalFile = !string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath);
+        var localPath = target.LocalPath;
+        var hasLocalFile = !string.IsNullOrWhiteSpace(localPath);
         var hashCache = WadHashCacheService.Instance;
         var isExcluded = hasLocalFile && hashCache.IsHashCachingExcluded(localPath);
-        var hasCachedHash = hasLocalFile
-            && !isExcluded
-            && !string.IsNullOrWhiteSpace(hashCache.TryGetCachedHash(localPath));
+        var hasCachedHash = hasLocalFile && !isExcluded && target.HasCachedHash;
         if (LocateWadFileMenuItem != null)
             LocateWadFileMenuItem.IsEnabled = hasLocalFile;
         if (CalculateWadHashMenuItem != null)
@@ -381,8 +382,8 @@ public partial class MainWindow : Window
         if (wad == null)
             return;
 
-        var filePath = _wadManager.FindWad(wad.Name);
-        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        var filePath = wad.LocalPath;
+        if (string.IsNullOrWhiteSpace(filePath))
         {
             StatusLabel.Text = $"{wad.Name} is not available locally.";
             _logger.Warning($"Could not locate server WAD because it is unavailable: {wad.Name}");
@@ -420,8 +421,8 @@ public partial class MainWindow : Window
         if (wad == null || _isCalculatingWadHash || _isUpdatingWadHashCacheExclusion)
             return;
 
-        var filePath = _wadManager.FindWad(wad.Name);
-        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        var filePath = wad.LocalPath;
+        if (string.IsNullOrWhiteSpace(filePath))
         {
             StatusLabel.Text = $"{wad.Name} is not available locally.";
             return;
@@ -442,7 +443,7 @@ public partial class MainWindow : Window
             // previously [CACHED] row immediately becomes [FOUND] when its
             // cached MD5 is excluded.
             if (_selectedServer != null)
-                DisplayWadList(_selectedServer);
+                DisplayWadList(_selectedServer, forceRefresh: true);
 
             StatusLabel.Text = shouldExclude
                 ? $"{wad.Name} will not be hash-cached. Server hash verification remains enabled."
@@ -468,8 +469,8 @@ public partial class MainWindow : Window
         if (wad == null || _isCalculatingWadHash || _isUpdatingWadHashCacheExclusion)
             return;
 
-        var filePath = _wadManager.FindWad(wad.Name);
-        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        var filePath = wad.LocalPath;
+        if (string.IsNullOrWhiteSpace(filePath))
         {
             StatusLabel.Text = $"{wad.Name} is not available locally.";
             return;
@@ -490,7 +491,7 @@ public partial class MainWindow : Window
 
         // A valid entry means the explicit action is a true recalculation;
         // otherwise GetHashAsync performs the first calculation and records it.
-        var isRecalculation = !string.IsNullOrWhiteSpace(hashCache.TryGetCachedHash(filePath));
+        var isRecalculation = wad.HasCachedHash;
         _isCalculatingWadHash = true;
         StatusLabel.Text = isRecalculation
             ? $"Recalculating cached MD5 for {wad.Name}..."
@@ -501,7 +502,7 @@ public partial class MainWindow : Window
             var result = isRecalculation
                 ? await hashCache.RefreshHashAsync(filePath, progress: null, CancellationToken.None)
                 : await hashCache.GetHashAsync(filePath, progress: null, CancellationToken.None);
-            var cachedHash = hashCache.TryGetCachedHash(filePath);
+            var cachedHash = await Task.Run(() => hashCache.TryGetCachedHash(filePath));
 
             if (!result.IsSuccess)
             {
@@ -513,7 +514,7 @@ public partial class MainWindow : Window
             // Rebuild from the selected server so [FOUND], [CACHED], and
             // MISMATCH reflect the new cache result immediately.
             if (_selectedServer != null)
-                DisplayWadList(_selectedServer);
+                DisplayWadList(_selectedServer, forceRefresh: true);
 
             StatusLabel.Text = cachedHash == null
                 ? $"{wad.Name} changed while its MD5 was calculated; no cache entry was saved."
@@ -2285,6 +2286,8 @@ public partial class MainWindow : Window
         if (ServerWebsiteRow != null)
             ServerWebsiteRow.IsVisible = false;
 
+        CancelWadListLookup();
+        _displayedWadRequirements = null;
         WadsListControl.ResetRows(Wads);
         _wadListServerAddress = null;
         _playerListServerAddress = null;
@@ -2315,63 +2318,156 @@ public partial class MainWindow : Window
             ClearSelectedServerDetails();
     }
 
-    private void DisplayWadList(ServerInfo server)
+    private void DisplayWadList(ServerInfo server, bool forceRefresh = false)
     {
         var address = $"{server.Address}:{server.Port}";
         var sameServer = _wadListServerAddress == address;
         if (!sameServer)
+        {
+            CancelWadListLookup();
+            _displayedWadRequirements = null;
             WadsListControl.ResetRows(Wads);
-        var updatedWads = new List<WadViewModel>();
+            if (WadsLabel != null)
+                WadsLabel.Text = "WADs (checking files...)";
+        }
         _wadListServerAddress = address;
 
         if (server.IsRefreshPending)
         {
+            CancelWadListLookup();
+            _displayedWadRequirements = null;
             WadsListControl.ResetRows(Wads);
             if (WadsLabel != null)
                 WadsLabel.Text = "WADs";
             return;
         }
 
-        // Add IWAD with status
+        // Snapshot the server's required filenames before handing any filesystem
+        // work to a worker. ServerInfo itself may be updated while a lookup runs.
+        var requirements = new List<WadListRequirement>();
         if (!string.IsNullOrEmpty(server.IWAD))
         {
-            var iwadPath = _wadManager.FindWad(server.IWAD);
-            var isAvailable = iwadPath != null;
-            var isForbidden = WadManager.IsForbiddenWad(server.IWAD);
-            var cachedHash = iwadPath == null
-                ? null
-                : WadHashCacheService.Instance.TryGetCachedHash(iwadPath);
-            updatedWads.Add(WadViewModel.Create(
+            requirements.Add(new WadListRequirement(
                 server.IWAD,
-                isAvailable,
-                isIwad: true,
-                isForbiddenIwad: isForbidden && !isAvailable,
-                cachedHash: cachedHash));
+                IsIwad: true,
+                IsForbiddenIwad: WadManager.IsForbiddenWad(server.IWAD),
+                ExpectedHash: null));
         }
 
-        // Add PWADs
         foreach (var pwad in server.PWADs)
-        {
-            var wadPath = _wadManager.FindWad(pwad.Name);
-            var isAvailable = wadPath != null;
-            var cachedHash = wadPath == null
-                ? null
-                : WadHashCacheService.Instance.TryGetCachedHash(wadPath);
-            updatedWads.Add(WadViewModel.Create(
+            requirements.Add(new WadListRequirement(
                 pwad.Name,
-                isAvailable,
-                isIwad: false,
-                cachedHash: cachedHash,
-                expectedHash: pwad.Hash));
+                IsIwad: false,
+                IsForbiddenIwad: false,
+                ExpectedHash: pwad.Hash));
+
+        if (!forceRefresh && sameServer
+            && _displayedWadRequirements?.SequenceEqual(requirements) == true)
+        {
+            return;
         }
 
-        WadsListControl.UpdateRows(Wads, updatedWads,
-            wad => (wad.Name.ToUpperInvariant(), wad.IsIwad),
-            (existing, incoming) => existing.Name == incoming.Name && existing.Status == incoming.Status
-                ? existing : incoming);
+        _displayedWadRequirements = requirements;
+        CancelWadListLookup();
+        var cancellation = new CancellationTokenSource();
+        _wadListLookupCancellation = cancellation;
+        _ = ResolveWadListAsync(address, requirements, cancellation);
+    }
 
-        if (WadsLabel != null)
-            WadsLabel.Text = $"WADs ({Wads.Count})";
+    private void CancelWadListLookup()
+    {
+        var cancellation = _wadListLookupCancellation;
+        _wadListLookupCancellation = null;
+        cancellation?.Cancel();
+    }
+
+    private async Task ResolveWadListAsync(
+        string address,
+        IReadOnlyList<WadListRequirement> requirements,
+        CancellationTokenSource cancellation)
+    {
+        var token = cancellation.Token;
+        var gateEntered = false;
+        try
+        {
+            // A slow filesystem call cannot be interrupted once in the OS, so
+            // serialize lookups and cancel obsolete queued selections.
+            await _wadListLookupGate.WaitAsync(token);
+            gateEntered = true;
+            var resolved = await Task.Run(() =>
+            {
+                var hashCache = WadHashCacheService.Instance;
+                var results = new List<ResolvedWad>(requirements.Count);
+                foreach (var requirement in requirements)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var path = _wadManager.FindWad(requirement.Name);
+                    var cachedHash = path == null ? null : hashCache.TryGetCachedHash(path);
+                    results.Add(new ResolvedWad(requirement, path, cachedHash));
+                }
+                return results;
+            }, token);
+
+            _wadListLookupGate.Release();
+            gateEntered = false;
+
+            if (token.IsCancellationRequested
+                || !ReferenceEquals(_wadListLookupCancellation, cancellation)
+                || _wadListServerAddress != address
+                || _selectedServer == null
+                || ServerRuleUtility.GetServerAddress(_selectedServer) != address)
+            {
+                return;
+            }
+
+            // Create Avalonia brushes and reconcile bound rows on the UI thread.
+            var updatedWads = resolved.Select(result => WadViewModel.Create(
+                result.Requirement.Name,
+                result.IsAvailable,
+                result.Requirement.IsIwad,
+                isForbiddenIwad: result.Requirement.IsForbiddenIwad && !result.IsAvailable,
+                cachedHash: result.CachedHash,
+                expectedHash: result.Requirement.ExpectedHash,
+                localPath: result.LocalPath)).ToList();
+
+            WadsListControl.UpdateRows(Wads, updatedWads,
+                wad => (wad.Name.ToUpperInvariant(), wad.IsIwad),
+                (existing, incoming) => existing.Name == incoming.Name && existing.Status == incoming.Status
+                    ? existing : incoming);
+
+            if (WadsLabel != null)
+                WadsLabel.Text = $"WADs ({Wads.Count})";
+        }
+        catch (OperationCanceledException)
+        {
+            // A different selected server superseded this filesystem lookup.
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Could not resolve local WADs for {address}: {ex.Message}");
+        }
+        finally
+        {
+            if (gateEntered)
+                _wadListLookupGate.Release();
+            if (ReferenceEquals(_wadListLookupCancellation, cancellation))
+                _wadListLookupCancellation = null;
+            cancellation.Dispose();
+        }
+    }
+
+    private sealed record WadListRequirement(
+        string Name,
+        bool IsIwad,
+        bool IsForbiddenIwad,
+        string? ExpectedHash);
+
+    private sealed record ResolvedWad(
+        WadListRequirement Requirement,
+        string? LocalPath,
+        string? CachedHash)
+    {
+        public bool IsAvailable => LocalPath != null;
     }
 
     private void DisplayPlayerList(ServerInfo server)
@@ -2830,7 +2926,7 @@ public partial class MainWindow : Window
         await dialog.ShowDialog(this);
 
         if (_selectedServer != null)
-            DisplayWadList(_selectedServer);
+            DisplayWadList(_selectedServer, forceRefresh: true);
     }
 
     private async void TestingVersionsMenuItem_Click(object? sender, RoutedEventArgs e)
@@ -5105,6 +5201,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(WindowClosingEventArgs e)
     {
+        CancelWadListLookup();
         SaveSettings();
         _serverListUpdateTimer.Stop();
         _logFlushTimer.Stop();
@@ -5785,6 +5882,8 @@ public class ColoredSegmentViewModel
 public class WadViewModel
 {
     public string Name { get; set; } = "";
+    public string? LocalPath { get; set; }
+    public bool HasCachedHash { get; set; }
     public string Status { get; set; } = "";
     public string DisplayText { get; set; } = "";
     public IBrush StatusColor { get; set; } = Brushes.White;
@@ -5796,7 +5895,8 @@ public class WadViewModel
         bool isIwad,
         bool isForbiddenIwad = false,
         string? cachedHash = null,
-        string? expectedHash = null)
+        string? expectedHash = null,
+        string? localPath = null)
     {
         string status;
         IBrush color;
@@ -5838,6 +5938,8 @@ public class WadViewModel
         return new WadViewModel
         {
             Name = wadName,
+            LocalPath = localPath,
+            HasCachedHash = !string.IsNullOrWhiteSpace(cachedHash),
             Status = status,
             DisplayText = $"{status} {wadName}",
             StatusColor = color,
