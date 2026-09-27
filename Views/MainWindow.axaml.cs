@@ -10,11 +10,13 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ZScape.Controls;
@@ -212,7 +214,11 @@ public partial class MainWindow : Window
 
         PlayersListControl.ItemsSource = Players;
         WadsListControl.ItemsSource = Wads;
-        WadsListControl.RowsUpdated += (_, _) => WadsLabel.Text = $"WADs ({Wads.Count})";
+        WadsListControl.RowsUpdated += (_, _) =>
+        {
+            if (_wadListLookupCancellation == null)
+                WadsLabel.Text = $"WADs ({Wads.Count})";
+        };
 
         if (_logControl != null)
         {
@@ -2327,8 +2333,6 @@ public partial class MainWindow : Window
             CancelWadListLookup();
             _displayedWadRequirements = null;
             WadsListControl.ResetRows(Wads);
-            if (WadsLabel != null)
-                WadsLabel.Text = "WADs (checking files...)";
         }
         _wadListServerAddress = address;
 
@@ -2369,9 +2373,33 @@ public partial class MainWindow : Window
 
         _displayedWadRequirements = requirements;
         CancelWadListLookup();
+
+        if (requirements.Count == 0)
+        {
+            WadsListControl.UpdateRows(Wads, Array.Empty<WadViewModel>(),
+                wad => (wad.Name.ToUpperInvariant(), wad.IsIwad));
+            if (WadsLabel != null)
+                WadsLabel.Text = "WADs (0)";
+            return;
+        }
+
+        var checkingWads = requirements
+            .Select(requirement => WadViewModel.CreateChecking(
+                requirement.Name,
+                requirement.IsIwad,
+                isChecking: false))
+            .ToList();
         var cancellation = new CancellationTokenSource();
         _wadListLookupCancellation = cancellation;
-        _ = ResolveWadListAsync(address, requirements, cancellation);
+
+        // Publish filenames and per-row queued/checking states before probing
+        // the filesystem so the pane never appears empty during a slow lookup.
+        WadsListControl.UpdateRows(Wads, checkingWads,
+            wad => (wad.Name.ToUpperInvariant(), wad.IsIwad));
+        if (WadsLabel != null)
+            WadsLabel.Text = $"WADs (queued 0/{requirements.Count})";
+
+        _ = ResolveWadListAsync(address, requirements, checkingWads, cancellation);
     }
 
     private void CancelWadListLookup()
@@ -2384,6 +2412,7 @@ public partial class MainWindow : Window
     private async Task ResolveWadListAsync(
         string address,
         IReadOnlyList<WadListRequirement> requirements,
+        IReadOnlyList<WadViewModel> checkingWads,
         CancellationTokenSource cancellation)
     {
         var token = cancellation.Token;
@@ -2394,49 +2423,74 @@ public partial class MainWindow : Window
             // serialize lookups and cancel obsolete queued selections.
             await _wadListLookupGate.WaitAsync(token);
             gateEntered = true;
-            var resolved = await Task.Run(() =>
+
+            var firstCheckStarted = await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                var hashCache = WadHashCacheService.Instance;
-                var results = new List<ResolvedWad>(requirements.Count);
-                foreach (var requirement in requirements)
+                if (!IsCurrentWadListLookup(address, cancellation))
+                    return false;
+
+                checkingWads[0].SetCheckStatus(isChecking: true);
+                if (WadsLabel != null)
+                    WadsLabel.Text = $"WADs (checking 1/{requirements.Count})";
+                return true;
+            });
+            if (!firstCheckStarted)
+                return;
+
+            for (var index = 0; index < requirements.Count; index++)
+            {
+                token.ThrowIfCancellationRequested();
+                if (index > 0)
+                {
+                    var checkStarted = await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        if (!IsCurrentWadListLookup(address, cancellation))
+                            return false;
+
+                        checkingWads[index].SetCheckStatus(isChecking: true);
+                        if (WadsLabel != null)
+                            WadsLabel.Text = $"WADs (checking {index + 1}/{requirements.Count})";
+                        return true;
+                    });
+                    if (!checkStarted)
+                        return;
+                }
+
+                var requirement = requirements[index];
+                var resolved = await Task.Run(() =>
                 {
                     token.ThrowIfCancellationRequested();
+                    var hashCache = WadHashCacheService.Instance;
                     var path = _wadManager.FindWad(requirement.Name);
                     var cachedHash = path == null ? null : hashCache.TryGetCachedHash(path);
-                    results.Add(new ResolvedWad(requirement, path, cachedHash));
-                }
-                return results;
-            }, token);
+                    return new ResolvedWad(requirement, path, cachedHash);
+                }, token);
 
-            _wadListLookupGate.Release();
-            gateEntered = false;
+                var resultApplied = await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (!IsCurrentWadListLookup(address, cancellation))
+                        return false;
 
-            if (token.IsCancellationRequested
-                || !ReferenceEquals(_wadListLookupCancellation, cancellation)
-                || _wadListServerAddress != address
-                || _selectedServer == null
-                || ServerRuleUtility.GetServerAddress(_selectedServer) != address)
-            {
-                return;
+                    var result = WadViewModel.Create(
+                        resolved.Requirement.Name,
+                        resolved.IsAvailable,
+                        resolved.Requirement.IsIwad,
+                        isForbiddenIwad: resolved.Requirement.IsForbiddenIwad && !resolved.IsAvailable,
+                        cachedHash: resolved.CachedHash,
+                        expectedHash: resolved.Requirement.ExpectedHash,
+                        localPath: resolved.LocalPath);
+                    checkingWads[index].UpdateFrom(result);
+                    return true;
+                });
+                if (!resultApplied)
+                    return;
             }
 
-            // Create Avalonia brushes and reconcile bound rows on the UI thread.
-            var updatedWads = resolved.Select(result => WadViewModel.Create(
-                result.Requirement.Name,
-                result.IsAvailable,
-                result.Requirement.IsIwad,
-                isForbiddenIwad: result.Requirement.IsForbiddenIwad && !result.IsAvailable,
-                cachedHash: result.CachedHash,
-                expectedHash: result.Requirement.ExpectedHash,
-                localPath: result.LocalPath)).ToList();
-
-            WadsListControl.UpdateRows(Wads, updatedWads,
-                wad => (wad.Name.ToUpperInvariant(), wad.IsIwad),
-                (existing, incoming) => existing.Name == incoming.Name && existing.Status == incoming.Status
-                    ? existing : incoming);
-
-            if (WadsLabel != null)
-                WadsLabel.Text = $"WADs ({Wads.Count})";
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (IsCurrentWadListLookup(address, cancellation) && WadsLabel != null)
+                    WadsLabel.Text = $"WADs ({requirements.Count})";
+            });
         }
         catch (OperationCanceledException)
         {
@@ -2445,6 +2499,20 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _logger.Warning($"Could not resolve local WADs for {address}: {ex.Message}");
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!IsCurrentWadListLookup(address, cancellation))
+                    return;
+
+                foreach (var wad in checkingWads)
+                {
+                    if (wad.Status is "[CHECKING]" or "[QUEUED]")
+                        wad.SetCheckStatus(isChecking: false, failed: true);
+                }
+
+                if (WadsLabel != null)
+                    WadsLabel.Text = "WADs (check failed)";
+            });
         }
         finally
         {
@@ -2455,6 +2523,13 @@ public partial class MainWindow : Window
             cancellation.Dispose();
         }
     }
+
+    private bool IsCurrentWadListLookup(string address, CancellationTokenSource cancellation) =>
+        !cancellation.IsCancellationRequested
+        && ReferenceEquals(_wadListLookupCancellation, cancellation)
+        && _wadListServerAddress == address
+        && _selectedServer != null
+        && ServerRuleUtility.GetServerAddress(_selectedServer) == address;
 
     private sealed record WadListRequirement(
         string Name,
@@ -5879,15 +5954,69 @@ public class ColoredSegmentViewModel
 /// <summary>
 /// View model for WAD list with status coloring.
 /// </summary>
-public class WadViewModel
+public class WadViewModel : INotifyPropertyChanged
 {
-    public string Name { get; set; } = "";
-    public string? LocalPath { get; set; }
-    public bool HasCachedHash { get; set; }
-    public string Status { get; set; } = "";
-    public string DisplayText { get; set; } = "";
-    public IBrush StatusColor { get; set; } = Brushes.White;
-    public bool IsIwad { get; set; }
+    private string _name = "";
+    private string? _localPath;
+    private bool _hasCachedHash;
+    private string _status = "";
+    private string _displayText = "";
+    private IBrush _statusColor = Brushes.White;
+    private bool _isIwad;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string Name { get => _name; set => SetField(ref _name, value); }
+    public string? LocalPath { get => _localPath; set => SetField(ref _localPath, value); }
+    public bool HasCachedHash { get => _hasCachedHash; set => SetField(ref _hasCachedHash, value); }
+    public string Status { get => _status; set => SetField(ref _status, value); }
+    public string DisplayText { get => _displayText; set => SetField(ref _displayText, value); }
+    public IBrush StatusColor { get => _statusColor; set => SetField(ref _statusColor, value); }
+    public bool IsIwad { get => _isIwad; set => SetField(ref _isIwad, value); }
+
+    private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+            return;
+
+        field = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    public void SetCheckStatus(bool isChecking, bool failed = false)
+    {
+        Status = failed ? "[CHECK FAILED]" : isChecking ? "[CHECKING]" : "[QUEUED]";
+        DisplayText = $"{Status} {Name}";
+        StatusColor = failed
+            ? new SolidColorBrush(Color.FromRgb(255, 99, 71))
+            : isChecking
+                ? new SolidColorBrush(Color.FromRgb(245, 197, 66))
+                : new SolidColorBrush(Color.FromRgb(160, 160, 160));
+        LocalPath = null;
+        HasCachedHash = false;
+    }
+
+    public void UpdateFrom(WadViewModel source)
+    {
+        Name = source.Name;
+        LocalPath = source.LocalPath;
+        HasCachedHash = source.HasCachedHash;
+        Status = source.Status;
+        DisplayText = source.DisplayText;
+        StatusColor = source.StatusColor;
+        IsIwad = source.IsIwad;
+    }
+
+    public static WadViewModel CreateChecking(string wadName, bool isIwad, bool isChecking)
+    {
+        var wad = new WadViewModel
+        {
+            Name = wadName,
+            IsIwad = isIwad
+        };
+        wad.SetCheckStatus(isChecking);
+        return wad;
+    }
 
     public static WadViewModel Create(
         string wadName,
