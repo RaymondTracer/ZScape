@@ -23,7 +23,8 @@ public class WadManager
     };
     
     private readonly ConcurrentDictionary<string, string> _wadCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, string> _fileNameIndex = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _rootFileNameIndex =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly object _searchPathsLock = new();
     private readonly HashSet<string> _searchPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _executableFolders = new(StringComparer.OrdinalIgnoreCase);
@@ -184,13 +185,13 @@ public class WadManager
     }
     
     /// <summary>
-    /// Rebuilds the WAD cache by scanning all search paths.
+    /// Rebuilds the WAD cache from files directly inside each configured root.
     /// Priority order: 1) Executable folders, 2) Download path, 3) Search paths
     /// </summary>
     public void RefreshCache()
     {
         _wadCache.Clear();
-        _fileNameIndex.Clear();
+        _rootFileNameIndex.Clear();
         var searchRoots = GetSearchRootsInPriorityOrder();
         var executableFolders = ExecutableFolders;
         var searchPaths = SearchPaths;
@@ -220,7 +221,10 @@ public class WadManager
     /// for launch and hash-mismatch resolution: executable folders, download
     /// folder, then user search folders.
     /// </summary>
-    public IReadOnlyList<string> GetSearchRootsInPriorityOrder()
+    public IReadOnlyList<string> GetSearchRootsInPriorityOrder() =>
+        GetSearchRootsInPriorityOrder(requireExistingDirectories: true);
+
+    private IReadOnlyList<string> GetSearchRootsInPriorityOrder(bool requireExistingDirectories)
     {
         string[] executableFolders;
         string[] searchPaths;
@@ -237,7 +241,8 @@ public class WadManager
 
         void AddPath(string? path)
         {
-            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            if (string.IsNullOrWhiteSpace(path)
+                || (requireExistingDirectories && !Directory.Exists(path)))
             {
                 return;
             }
@@ -284,22 +289,27 @@ public class WadManager
             [path],
             supportedFileFound: null,
             progress: null,
-            CancellationToken.None);
+            CancellationToken.None,
+            recurseSubdirectories: false);
 
         var count = 0;
+        var filesInRoot = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in scanResult.Files)
         {
             var fileName = Path.GetFileName(file);
-            // Don't overwrite if already found (first path wins)
+            filesInRoot.TryAdd(fileName, file);
+
+            // Don't overwrite if already found (first search root wins).
             if (_wadCache.TryAdd(fileName, file))
             {
-                _fileNameIndex.TryAdd(fileName, file);
                 count++;
             }
         }
 
+        _rootFileNameIndex[NormalizePathKey(path)] = filesInRoot;
+
         _logger.Verbose(
-            $"  Scanned {path}: found {count} WAD files after checking {scanResult.FilesExamined} files in {scanResult.DirectoriesVisited} folders");
+            $"  Scanned {path}: found {count} WAD files after checking {scanResult.FilesExamined} top-level files");
         if (scanResult.SkippedDirectories > 0 || scanResult.SkippedReparsePoints > 0)
         {
             _logger.Warning(
@@ -316,79 +326,48 @@ public class WadManager
     {
         if (string.IsNullOrWhiteSpace(wadName))
             return null;
-        
-        // Check cache first (case-insensitive key lookup via dictionary comparer)
-        if (_wadCache.TryGetValue(wadName, out var cachedPath))
-        {
-            if (File.Exists(cachedPath))
-                return cachedPath;
-            // File was deleted, remove from cache
-            _wadCache.TryRemove(wadName, out _);
-        }
-        
-        // Build list of paths to search in priority order:
-        // 1) Executable folders (where Zandronum.exe lives)
-        // 2) Download path (recently downloaded files)
-        // 3) Configured search paths
-        var pathsToSearch = GetSearchRootsInPriorityOrder();
-        
-        // Search all paths (case-insensitive file matching)
-        foreach (var searchPath in pathsToSearch)
-        {
-            // First try direct path (case-insensitive on Windows, but we handle it explicitly)
-            // Check the filename index first (case-insensitive, includes subdirectories)
-            if (_fileNameIndex.TryGetValue(wadName, out var indexedPath) && File.Exists(indexedPath))
-            {
-                _wadCache[wadName] = indexedPath;
-                return indexedPath;
-            }
 
-            // Fall back to direct lookup and slow enumeration if index misses
-            var match = FindFileIgnoreCase(searchPath, wadName);
-            if (match != null)
-            {
-                _wadCache[wadName] = match;
-                return match;
-            }
-            
-            // Try subdirectories
-            try
-            {
-                foreach (var file in Directory.EnumerateFiles(searchPath, "*", SearchOption.AllDirectories))
-                {
-                    if (Path.GetFileName(file).Equals(wadName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _wadCache[wadName] = file;
-                        return file;
-                    }
-                }
-            }
-            catch { /* Ignore access errors */ }
-        }
-        
-        return null;
-    }
-
-    /// <summary>
-    /// Finds a file in a directory with case-insensitive name matching.
-    /// </summary>
-    private static string? FindFileIgnoreCase(string directory, string fileName)
-    {
-        if (!Directory.Exists(directory))
+        // Server requirements are filenames, not relative paths. Keep all
+        // lookups bounded to the top level of each configured WAD directory.
+        var fileName = Path.GetFileName(wadName);
+        if (string.IsNullOrWhiteSpace(fileName))
             return null;
-        
-        try
+
+        foreach (var searchRoot in GetSearchRootsInPriorityOrder(requireExistingDirectories: false))
         {
-            foreach (var file in Directory.EnumerateFiles(directory))
+            var rootKey = NormalizePathKey(searchRoot);
+            var directPath = Path.Combine(searchRoot, fileName);
+
+            // The root index uses OrdinalIgnoreCase, so differently-cased
+            // filenames work on case-sensitive filesystems too. The index is
+            // top-level only and File.Exists invalidates stale entries.
+            if (_rootFileNameIndex.TryGetValue(rootKey, out var filesInRoot)
+                && filesInRoot.TryGetValue(fileName, out var indexedPath))
             {
-                if (Path.GetFileName(file).Equals(fileName, StringComparison.OrdinalIgnoreCase))
+                if (File.Exists(indexedPath))
                 {
-                    return file;
+                    _wadCache[fileName] = indexedPath;
+                    return indexedPath;
                 }
+
+                filesInRoot.TryRemove(fileName, out _);
+            }
+
+            // Check for a newly-added exact-name file that arrived since the
+            // last cache refresh. Missing names cost one direct probe per root;
+            // we never recursively enumerate folders while resolving a WAD.
+            if (File.Exists(directPath))
+            {
+                var rootIndex = _rootFileNameIndex.GetOrAdd(
+                    rootKey,
+                    _ => new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                rootIndex[fileName] = directPath;
+                _wadCache[fileName] = directPath;
+                return directPath;
             }
         }
-        catch { /* Ignore access errors */ }
-        
+
+        _wadCache.TryRemove(fileName, out _);
         return null;
     }
     
@@ -718,7 +697,14 @@ public class WadManager
             File.Move(archivedPath, newPath);
             _logger.Info($"Activated WAD: {Path.GetFileName(archivedPath)} -> {standardName}");
             
-            // Update cache
+            // Update both the priority cache and that root's case-insensitive
+            // top-level filename index.
+            var rootIndex = _rootFileNameIndex.GetOrAdd(
+                NormalizePathKey(directory),
+                _ => new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            rootIndex.TryRemove(Path.GetFileName(archivedPath), out _);
+            rootIndex[standardName] = newPath;
+            _wadCache.TryRemove(Path.GetFileName(archivedPath), out _);
             _wadCache[standardName] = newPath;
             
             return newPath;

@@ -34,7 +34,8 @@ public static class WadFileScanner
         IReadOnlyList<string> roots,
         Action<string>? supportedFileFound,
         IProgress<WadFileScanProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool recurseSubdirectories = true)
     {
         var files = new List<string>();
         var issues = new List<WadFileScanIssue>();
@@ -118,6 +119,12 @@ public static class WadFileScanner
                 {
                     skippedDirectories++;
                     issues.Add(new WadFileScanIssue(currentDirectory, ex.Message));
+                    ReportProgress(rootIndex, force: true);
+                    continue;
+                }
+
+                if (!recurseSubdirectories)
+                {
                     ReportProgress(rootIndex, force: true);
                     continue;
                 }
