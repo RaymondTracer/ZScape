@@ -25,6 +25,7 @@ public partial class UnifiedSettingsDialog : Window
     private const string DownloadFolderPrefix = "[Download Folder] ";
     
     private readonly SettingsService _settingsService;
+    private readonly DomainThreadConfig _domainThreadConfig;
     private AppSettings Settings => _settingsService.Settings;
     private ObservableCollection<string> _favorites = new();
     private ObservableCollection<TextMatchRule> _favoriteNameRules = new();
@@ -43,10 +44,13 @@ public partial class UnifiedSettingsDialog : Window
     public bool SettingsChanged { get; private set; }
     public event EventHandler<int>? RowHeightPreviewChanged;
 
-    public UnifiedSettingsDialog()
+    public UnifiedSettingsDialog() : this(SettingsService.Instance, DomainThreadConfig.Instance) { }
+
+    internal UnifiedSettingsDialog(SettingsService settingsService, DomainThreadConfig domainThreadConfig)
     {
+        _settingsService = settingsService;
+        _domainThreadConfig = domainThreadConfig;
         InitializeComponent();
-        _settingsService = SettingsService.Instance;
         _ = new WadPathListPresenter(this, WadPathsListBox, displayedPath =>
         {
             var path = displayedPath.StartsWith(DownloadFolderPrefix, StringComparison.Ordinal)
@@ -403,7 +407,7 @@ public partial class UnifiedSettingsDialog : Window
     private void LoadDomainConfigs()
     {
         _domainConfigs.Clear();
-        _originalDomainSettings = DomainThreadConfig.Instance.GetAllSettings();
+        _originalDomainSettings = _domainThreadConfig.GetAllSettings();
         foreach (var config in _originalDomainSettings.OrderBy(k => k.Key))
         {
             var display = new DomainThreadDisplay();
@@ -724,7 +728,7 @@ public partial class UnifiedSettingsDialog : Window
                 MinSegmentSizeKb = item.MinSegmentSizeKb,
                 AdaptiveLearning = item.AdaptiveLearning
             }));
-        DomainThreadConfig.Instance.ApplyConfiguredChanges(editedSettings, _originalDomainSettings);
+        _domainThreadConfig.ApplyConfiguredChanges(editedSettings, _originalDomainSettings);
     }
 
     private void SaveUpdateInterval()

@@ -52,6 +52,8 @@ public partial class MainWindow : Window
     private readonly ServerBrowserService _browserService = new();
     private readonly LoggingService _logger = LoggingService.Instance;
     private readonly SettingsService _settings = SettingsService.Instance;
+    private readonly ServerRowHeightPresentation _rowHeightPresentation =
+        new(() => SettingsService.Instance.Settings.ServerListRowHeight);
     private readonly WadManager _wadManager = WadManager.Instance;
     private readonly NotificationService _notificationService = NotificationService.Instance;
     private readonly ScreenshotMonitorService _screenshotMonitor = ScreenshotMonitorService.Instance;
@@ -1315,6 +1317,7 @@ public partial class MainWindow : Window
 
         // Apply verbose logging to logger
         _logger.VerboseMode = settings.VerboseLogging;
+        UpdateRowHeights();
 
         // Auto-refresh timers
         UpdateAutoRefreshTimers();
@@ -1745,7 +1748,8 @@ public partial class MainWindow : Window
                     data.Server,
                     data.FavoriteMatch,
                     data.IsManual,
-                    searchText);
+                    searchText,
+                    () => _rowHeightPresentation.RowHeight);
                 Servers.Add(vm);
             }
         }
@@ -2927,10 +2931,13 @@ public partial class MainWindow : Window
 
     private void UpdateRowHeights()
     {
-        foreach (var serverVm in Servers)
-        {
-            serverVm.NotifyRowHeightChanged();
-        }
+        _rowHeightPresentation.Apply(ServerListView, Servers);
+    }
+
+    private async Task ShowSettingsDialogAsync(UnifiedSettingsDialog dialog)
+    {
+        using (_rowHeightPresentation.Bind(dialog, UpdateRowHeights))
+            await dialog.ShowDialog(this);
     }
 
     private void UpdateFavoritesColumnVisibility(bool visible)
@@ -2998,31 +3005,15 @@ public partial class MainWindow : Window
 
     private async void PreferencesMenuItem_Click(object? sender, RoutedEventArgs e)
     {
-        var previousRowHeight = _settings.Settings.ServerListRowHeight;
         var dialog = new UnifiedSettingsDialog();
-
-        // Live preview for row height changes
-        dialog.RowHeightPreviewChanged += (_, newHeight) =>
-        {
-            _settings.Settings.ServerListRowHeight = newHeight;
-            UpdateRowHeights();
-        };
-
-        await dialog.ShowDialog(this);
+        await ShowSettingsDialogAsync(dialog);
 
         // Reload settings after dialog closes (skip window layout restoration)
         if (dialog.SettingsChanged)
         {
             LoadSettings(restoreWindowLayout: false);
             _wadManager.RefreshCache();
-            UpdateRowHeights();
             UpdateServerList();
-        }
-        else
-        {
-            // Revert live preview if user cancelled
-            _settings.Settings.ServerListRowHeight = previousRowHeight;
-            UpdateRowHeights();
         }
     }
 
@@ -3791,7 +3782,7 @@ public partial class MainWindow : Window
                 if (openSettings)
                 {
                     var settingsDialog = new UnifiedSettingsDialog();
-                    await settingsDialog.ShowDialog(this);
+                    await ShowSettingsDialogAsync(settingsDialog);
                     if (settingsDialog.SettingsChanged)
                     {
                         LoadSettings(restoreWindowLayout: false, loadWadSettings: false);
@@ -5790,6 +5781,7 @@ internal class ServerAlertState
 public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
 {
     private ServerInfo _server;
+    private readonly Func<int> _getRowHeight;
     private FavoriteMatchResult _favoriteMatch;
     private bool _isManual;
     private string _searchText;
@@ -5800,12 +5792,14 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
         ServerInfo server,
         FavoriteMatchResult favoriteMatch,
         bool isManual = false,
-        string searchText = "")
+        string searchText = "",
+        Func<int>? getRowHeight = null)
     {
         _server = server;
         _favoriteMatch = favoriteMatch;
         _isManual = isManual;
         _searchText = searchText;
+        _getRowHeight = getRowHeight ?? (() => SettingsService.Instance.Settings.ServerListRowHeight);
     }
 
     /// <summary>
@@ -5874,7 +5868,7 @@ public class ServerViewModel : System.ComponentModel.INotifyPropertyChanged
     };
     public bool ShowFavoritesColumn => SettingsService.Instance.Settings.ShowFavoritesColumn;
     public bool IsPassworded => _server.IsPassworded;
-    public int RowHeight => SettingsService.Instance.Settings.ServerListRowHeight;
+    public int RowHeight => _getRowHeight();
 
     public void NotifyFavoritesColumnChanged()
     {
