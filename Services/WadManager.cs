@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using ZScape.Models;
 using ZScape.Utilities;
 
@@ -501,23 +500,9 @@ public class WadManager
     /// </summary>
     /// <param name="filePath">Path to the file.</param>
     /// <returns>MD5 hash as lowercase hex string, or null if file doesn't exist.</returns>
-    public static string? ComputeFileHash(string filePath)
-    {
-        if (!File.Exists(filePath))
-            return null;
-        
-        try
-        {
-            using var stream = File.OpenRead(filePath);
-            using var md5 = MD5.Create();
-            var hashBytes = md5.ComputeHash(stream);
-            return Convert.ToHexString(hashBytes).ToLowerInvariant();
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    public static string? ComputeFileHash(string filePath, CancellationToken cancellationToken = default) =>
+        WadHashCacheService.ComputeFileHashAsync(filePath, progress: null, cancellationToken)
+            .GetAwaiter().GetResult();
     
     /// <summary>
     /// Finds a WAD file by its hash, searching in all configured paths.

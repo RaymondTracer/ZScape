@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
-using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using SharpCompress.Archives;
 using SharpCompress.Common;
@@ -3141,10 +3140,9 @@ public partial class WadDownloader : IDisposable
     {
         try
         {
-            using var md5 = MD5.Create();
-            var hashBytes = await md5.ComputeHashAsync(stream, ct);
-            return Convert.ToHexString(hashBytes).ToLowerInvariant();
+            return await WadHashCacheService.ComputeStreamHashAsync(stream, progress: null, ct);
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return null;
@@ -3199,21 +3197,8 @@ public partial class WadDownloader : IDisposable
         }
     }
     
-    private static async Task<string?> ComputeFileHashAsync(string filePath, CancellationToken ct)
-    {
-        if (!File.Exists(filePath))
-            return null;
-        
-        try
-        {
-            await using var stream = File.OpenRead(filePath);
-            return await ComputeStreamHashAsync(stream, ct);
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    private static Task<string?> ComputeFileHashAsync(string filePath, CancellationToken ct) =>
+        WadHashCacheService.ComputeFileHashAsync(filePath, progress: null, ct);
 
     private bool ArchiveExistingFile(string filePath, string operation, out string? archivedPath)
     {

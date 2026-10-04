@@ -29,6 +29,7 @@ public sealed class WadHashCacheService
     // this performance cache; they never suppress a server hash check.
     private readonly HashSet<string> _excludedPaths;
     private readonly string _cachePath;
+    private readonly Func<bool> _isEnabled;
     private readonly LoggingService _logger = LoggingService.Instance;
     private bool _isDirty;
 
@@ -43,13 +44,18 @@ public sealed class WadHashCacheService
     /// file hashing during verification. Individually excluded files behave the
     /// same way without changing the global preference.
     /// </summary>
-    public bool IsEnabled => SettingsService.Instance.Settings.EnableWadHashCache;
+    public bool IsEnabled => _isEnabled();
 
-    private WadHashCacheService()
+    private WadHashCacheService() : this(
+        Path.Combine(AppContext.BaseDirectory, "wad-hash-cache.json"),
+        () => SettingsService.Instance.Settings.EnableWadHashCache) { }
+
+    internal WadHashCacheService(string cachePath, Func<bool> isEnabled)
     {
-        _cachePath = Path.Combine(AppContext.BaseDirectory, "wad-hash-cache.json");
-        _entries = new Dictionary<string, WadHashCacheEntry>(GetPathComparer());
-        _excludedPaths = new HashSet<string>(GetPathComparer());
+        _cachePath = cachePath;
+        _isEnabled = isEnabled;
+        _entries = new Dictionary<string, WadHashCacheEntry>(PathResolver.DirectoryPathComparer);
+        _excludedPaths = new HashSet<string>(PathResolver.DirectoryPathComparer);
         LoadCache();
     }
 
@@ -83,7 +89,7 @@ public sealed class WadHashCacheService
             .Select(NormalizePath)
             .Where(path => path != null)
             .Cast<string>()
-            .Distinct(GetPathComparer())
+            .Distinct(PathResolver.DirectoryPathComparer)
             .ToList();
         if (paths.Count == 0)
             return;
@@ -183,6 +189,7 @@ public sealed class WadHashCacheService
         CancellationToken cancellationToken,
         bool forceRefresh)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var initialSnapshot = TryCreateSnapshot(filePath);
         if (initialSnapshot == null)
         {
@@ -202,7 +209,8 @@ public sealed class WadHashCacheService
             return new WadHashResult(cachedHash, FromCache: true, initialSnapshot.Length, ErrorMessage: null);
         }
 
-        var computedHash = await ComputeFileHashAsync(filePath, progress, cancellationToken).ConfigureAwait(false);
+        var computedHash = await ComputeFileHashAsync(filePath, progress, cancellationToken,
+            FileShare.ReadWrite | FileShare.Delete).ConfigureAwait(false);
         if (computedHash == null)
         {
             return new WadHashResult(
@@ -213,18 +221,18 @@ public sealed class WadHashCacheService
         }
 
         var finalSnapshot = TryCreateSnapshot(filePath);
+        if (finalSnapshot == null || !initialSnapshot.Matches(finalSnapshot))
+        {
+            return new WadHashResult(null, FromCache: false, initialSnapshot.Length,
+                ErrorMessage: "The file changed while its MD5 was being calculated. Try again.");
+        }
+
         var canCacheResult = IsEnabled && !IsHashCachingExcluded(initialSnapshot.Path);
-        if (canCacheResult && finalSnapshot != null && initialSnapshot.Matches(finalSnapshot))
+        if (canCacheResult)
         {
             StoreHash(finalSnapshot, computedHash);
             await PersistIfDirtyAsync().ConfigureAwait(false);
         }
-        else if (canCacheResult)
-        {
-            _logger.Warning(
-                $"Skipped hash-cache entry for {Path.GetFileName(filePath)} because the file changed while it was hashed.");
-        }
-
         return new WadHashResult(computedHash, FromCache: false, initialSnapshot.Length, ErrorMessage: null);
     }
 
@@ -267,9 +275,9 @@ public sealed class WadHashCacheService
             .Select(NormalizePath)
             .Where(path => path != null)
             .Cast<string>()
-            .Distinct(GetPathComparer())
+            .Distinct(PathResolver.DirectoryPathComparer)
             .Where(File.Exists)
-            .OrderBy(path => path, GetPathComparer())
+            .OrderBy(path => path, PathResolver.DirectoryPathComparer)
             .ToList();
 
         var cachedCount = 0;
@@ -430,10 +438,10 @@ public sealed class WadHashCacheService
                 {
                     SchemaVersion = CurrentSchemaVersion,
                     Entries = _entries.Values
-                        .OrderBy(entry => entry.FilePath, GetPathComparer())
+                        .OrderBy(entry => entry.FilePath, PathResolver.DirectoryPathComparer)
                         .ToList(),
                     ExcludedPaths = _excludedPaths
-                        .OrderBy(path => path, GetPathComparer())
+                        .OrderBy(path => path, PathResolver.DirectoryPathComparer)
                         .ToList()
                 };
                 _isDirty = false;
@@ -502,10 +510,12 @@ public sealed class WadHashCacheService
         }
     }
 
-    private static async Task<string?> ComputeFileHashAsync(
+    /// <summary>Fresh full-file hashing; never consults or changes cache policy.</summary>
+    internal static async Task<string?> ComputeFileHashAsync(
         string filePath,
         Action<long>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FileShare fileShare = FileShare.Read)
     {
         try
         {
@@ -513,24 +523,10 @@ public sealed class WadHashCacheService
                 filePath,
                 FileMode.Open,
                 FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
+                fileShare,
                 BufferSize,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
-            using var md5 = MD5.Create();
-
-            var buffer = new byte[BufferSize];
-            long bytesProcessed = 0;
-            int bytesRead;
-
-            while ((bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
-            {
-                md5.TransformBlock(buffer, 0, bytesRead, null, 0);
-                bytesProcessed += bytesRead;
-                progress?.Invoke(bytesProcessed);
-            }
-
-            md5.TransformFinalBlock([], 0, 0);
-            return Convert.ToHexString(md5.Hash!).ToLowerInvariant();
+            return await ComputeStreamHashAsync(stream, progress, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -541,6 +537,30 @@ public sealed class WadHashCacheService
             LoggingService.Instance.Error($"Failed to compute hash for {filePath}: {ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Hashes the supplied content without owning its lifetime. Archive callers
+    /// supply the decompressed payload stream, not the compressed container.
+    /// </summary>
+    internal static async Task<string> ComputeStreamHashAsync(
+        Stream stream, Action<long>? progress, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var md5 = MD5.Create();
+        var buffer = new byte[BufferSize];
+        long bytesProcessed = 0;
+        int bytesRead;
+        while ((bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            md5.TransformBlock(buffer, 0, bytesRead, null, 0);
+            bytesProcessed += bytesRead;
+            progress?.Invoke(bytesProcessed);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        md5.TransformFinalBlock([], 0, 0);
+        return Convert.ToHexString(md5.Hash!).ToLowerInvariant();
     }
 
     private static WadHashFileSnapshot? TryCreateSnapshot(string? filePath)
@@ -594,9 +614,6 @@ public sealed class WadHashCacheService
             return null;
         }
     }
-
-    private static StringComparer GetPathComparer() =>
-        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static bool IsValidMd5(string? hash) =>
         hash is { Length: 32 } && hash.All(Uri.IsHexDigit);
