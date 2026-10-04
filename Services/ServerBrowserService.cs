@@ -598,45 +598,6 @@ public class ServerBrowserService : IDisposable
     }
 
     /// <summary>
-    /// Gets servers filtered by various criteria.
-    /// </summary>
-    public IEnumerable<ServerInfo> GetFilteredServers(
-        bool hideEmpty = false,
-        bool hideFull = false,
-        bool hidePassworded = false,
-        GameModeType? gameMode = null,
-        string? searchText = null,
-        string? iwadFilter = null)
-    {
-        var query = _servers.Values.Where(s => s.IsOnline && s.IsQueried);
-
-        if (hideEmpty)
-            query = query.Where(s => !s.IsEmpty);
-
-        if (hideFull)
-            query = query.Where(s => !s.IsFull);
-
-        if (hidePassworded)
-            query = query.Where(s => !s.IsPassworded);
-
-        if (gameMode.HasValue && gameMode.Value != GameModeType.Unknown)
-            query = query.Where(s => s.GameMode.Type == gameMode.Value);
-
-        if (!string.IsNullOrWhiteSpace(iwadFilter))
-            query = query.Where(s => s.IWAD.Contains(iwadFilter, StringComparison.OrdinalIgnoreCase));
-
-        if (!string.IsNullOrWhiteSpace(searchText))
-        {
-            query = query.Where(s => 
-                s.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
-                s.Map.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
-                s.Address.Contains(searchText, StringComparison.OrdinalIgnoreCase));
-        }
-
-        return query;
-    }
-
-    /// <summary>
     /// Resolves country codes for servers with XIP, XUN, or empty country values using IP geolocation.
     /// </summary>
     private async Task ResolveUnknownCountriesAsync(CancellationToken cancellationToken)

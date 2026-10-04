@@ -1809,26 +1809,15 @@ public partial class MainWindow : Window
                 if (favoritesOnly && !GetFavoriteMatch(s).IsFavorite)
                     return false;
 
-                return string.IsNullOrEmpty(searchText)
-                    || TextMatchUtility.IsLooseSearchMatch(
-                        $"{s.Address}:{s.Port}",
-                        searchText);
+                return ServerFilter.MatchesLooseSearch(s, searchText);
             }
 
             // Hidden name rules apply globally before other filters.
             if (IsServerHiddenByRule(s)) return false;
 
-            // Hide empty
-            if (hideEmpty && s.CurrentPlayers == 0) return false;
-
-            // Hide bot-only (only servers with bots but no humans - not empty servers)
-            if (hideBotOnly && s.CurrentPlayers > 0 && s.CurrentPlayers == s.BotCount) return false;
-
-            // Hide full
-            if (hideFull && s.IsFull) return false;
-
-            // Hide passworded
-            if (hidePassworded && s.IsPassworded) return false;
+            if (!ServerFilter.MatchesBasicVisibility(s, hideEmpty, hideBotOnly, hideFull,
+                    hidePassworded ? FilterMode.Hide : FilterMode.DontCare,
+                    ServerFilter.BotOnlyScope.ConnectedClients)) return false;
 
             // Favorites only
             if (favoritesOnly)
@@ -1845,28 +1834,7 @@ public partial class MainWindow : Window
                     return false;
             }
 
-            // Search filter
-            if (!string.IsNullOrEmpty(searchText))
-            {
-                var searchableFields = new[]
-                {
-                    ServerRuleUtility.GetComparableServerName(s),
-                    s.Map,
-                    $"{s.Address}:{s.Port}",
-                    s.IWAD,
-                    s.GameMode.Name,
-                    s.GameMode.ShortName,
-                    s.Country,
-                    s.GameVersion
-                };
-                var matchesServerField = searchableFields.Any(
-                    field => TextMatchUtility.IsLooseSearchMatch(field, searchText));
-                var matchesWad = s.PWADs.Any(
-                    wad => TextMatchUtility.IsLooseSearchMatch(wad.Name, searchText));
-
-                if (!matchesServerField && !matchesWad)
-                    return false;
-            }
+            if (!ServerFilter.MatchesLooseSearch(s, searchText)) return false;
 
             // Apply advanced filter (WAD filters, country filters, player counts, etc.)
             if (!_settings.Settings.CurrentFilter.Matches(s))

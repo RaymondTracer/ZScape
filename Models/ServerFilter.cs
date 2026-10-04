@@ -153,18 +153,13 @@ public class ServerFilter
     {
         if (!Enabled) return true;
 
-        var displayName = DoomColorCodes.StripColorCodes(server.Name ?? string.Empty);
+        var displayName = ServerRuleUtility.GetComparableServerName(server);
 
         // Basic visibility
-        if (!ShowEmpty && server.IsEmpty) return false;
-        // Treat bot-only servers as empty (separate from ShowEmpty - hides when enabled)
-        if (TreatBotOnlyAsEmpty && server.HumanPlayerCount == 0 && server.CurrentPlayers > 0) return false;
-        if (!ShowFull && server.IsFull) return false;
+        if (!MatchesBasicVisibility(server, hideEmpty: !ShowEmpty, hideBotOnly: TreatBotOnlyAsEmpty,
+                hideFull: !ShowFull, passwordedServers: PasswordedServers,
+                botOnlyScope: BotOnlyScope.PlayingHumans)) return false;
         if (!ShowUnresponsive && !server.IsOnline) return false;
-
-        // Passworded servers
-        if (PasswordedServers == FilterMode.ShowOnly && !server.IsPassworded) return false;
-        if (PasswordedServers == FilterMode.Hide && server.IsPassworded) return false;
 
         // Testing servers
         if (TestingServers == FilterMode.ShowOnly && !server.IsTesting) return false;
@@ -199,12 +194,14 @@ public class ServerFilter
                 return false;
         }
 
+        // Build the same WAD projection once for all three WAD filter policies.
+        var serverWads = RequireWads.Count > 0 || IncludeAnyWads.Count > 0 || ExcludeWads.Count > 0
+            ? server.PWADs.Select(w => w.Name.ToLowerInvariant()).Append(server.IWAD.ToLowerInvariant()).ToArray()
+            : [];
+
         // Required WADs (all must be present)
         if (RequireWads.Count > 0)
         {
-            var serverWads = server.PWADs.Select(w => w.Name.ToLowerInvariant()).ToList();
-            serverWads.Add(server.IWAD.ToLowerInvariant());
-            
             foreach (var required in RequireWads)
             {
                 if (!serverWads.Any(w => w.Contains(required, StringComparison.OrdinalIgnoreCase)))
@@ -215,9 +212,6 @@ public class ServerFilter
         // Include any WADs (at least one must be present)
         if (IncludeAnyWads.Count > 0)
         {
-            var serverWads = server.PWADs.Select(w => w.Name.ToLowerInvariant()).ToList();
-            serverWads.Add(server.IWAD.ToLowerInvariant());
-            
             bool hasAny = false;
             foreach (var include in IncludeAnyWads)
             {
@@ -233,9 +227,6 @@ public class ServerFilter
         // Exclude WADs
         if (ExcludeWads.Count > 0)
         {
-            var serverWads = server.PWADs.Select(w => w.Name.ToLowerInvariant()).ToList();
-            serverWads.Add(server.IWAD.ToLowerInvariant());
-            
             foreach (var exclude in ExcludeWads)
             {
                 if (serverWads.Any(w => w.Contains(exclude, StringComparison.OrdinalIgnoreCase)))
@@ -277,6 +268,66 @@ public class ServerFilter
         }
 
         return true;
+    }
+
+    internal enum BotOnlyScope
+    {
+        // Toolbar: a connected human spectator means this is not bot-only.
+        ConnectedClients,
+        // Advanced filter: no humans are actively playing, even if spectating.
+        PlayingHumans
+    }
+
+    /// <summary>
+    /// Shared basic visibility rules for toolbar toggles and advanced presets.
+    /// The two existing bot-only scopes remain explicit rather than changing
+    /// how either filter treats human spectators.
+    /// </summary>
+    internal static bool MatchesBasicVisibility(
+        ServerInfo server,
+        bool hideEmpty,
+        bool hideBotOnly,
+        bool hideFull,
+        FilterMode passwordedServers,
+        BotOnlyScope botOnlyScope)
+    {
+        if (hideEmpty && server.IsEmpty) return false;
+        if (hideBotOnly && server.CurrentPlayers > 0)
+        {
+            var botOnly = botOnlyScope == BotOnlyScope.ConnectedClients
+                ? server.CurrentPlayers == server.BotCount
+                : server.HumanPlayerCount == 0;
+            if (botOnly) return false;
+        }
+        if (hideFull && server.IsFull) return false;
+        if (passwordedServers == FilterMode.ShowOnly && !server.IsPassworded) return false;
+        if (passwordedServers == FilterMode.Hide && server.IsPassworded) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Toolbar search matches a complete query within any one existing server
+    /// field or WAD name. Pending rows expose only their known endpoint address.
+    /// </summary>
+    internal static bool MatchesLooseSearch(ServerInfo server, string? query)
+    {
+        if (string.IsNullOrEmpty(query)) return true;
+        var address = ServerRuleUtility.GetServerAddress(server);
+        if (server.IsRefreshPending)
+            return TextMatchUtility.IsLooseSearchMatch(address, query);
+
+        var fields = new[]
+        {
+            ServerRuleUtility.GetComparableServerName(server),
+            server.Map,
+            address,
+            server.IWAD,
+            server.GameMode.Name,
+            server.GameMode.ShortName,
+            server.Country,
+            server.GameVersion
+        };
+        return TextMatchUtility.IsAnyLooseSearchMatch(fields.Concat(server.PWADs.Select(wad => wad.Name)), query);
     }
 
     /// <summary>

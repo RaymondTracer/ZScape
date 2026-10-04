@@ -21,15 +21,31 @@ public static class TextMatchUtility
         if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(query))
             return false;
 
-        var normalizedText = NormalizeForSearch(text);
-        var normalizedQuery = NormalizeForSearch(query);
-        if (normalizedQuery.Length == 0)
+        var tokens = NormalizeForSearch(query).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return IsLooseSearchMatch(text, tokens);
+    }
+
+    /// <summary>
+    /// Matches all query tokens within one field, not across different fields.
+    /// Query normalization is shared by every candidate in this comparison.
+    /// </summary>
+    public static bool IsAnyLooseSearchMatch(IEnumerable<string?> texts, string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
             return false;
 
+        var tokens = NormalizeForSearch(query).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return tokens.Length > 0 && texts.Any(text => IsLooseSearchMatch(text, tokens));
+    }
+
+    private static bool IsLooseSearchMatch(string? text, string[] tokens)
+    {
+        if (string.IsNullOrWhiteSpace(text) || tokens.Length == 0)
+            return false;
+
+        var normalizedText = NormalizeForSearch(text);
         var compactText = normalizedText.Replace(" ", string.Empty, StringComparison.Ordinal);
-        return normalizedQuery
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .All(token =>
+        return tokens.All(token =>
                 normalizedText.Contains(token, StringComparison.Ordinal)
                 || compactText.Contains(token, StringComparison.Ordinal));
     }
