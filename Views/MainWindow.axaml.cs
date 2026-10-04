@@ -3943,13 +3943,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var (requiredWadsNeedingDownload, requiredCacheChanged) =
-            launcher.ResolveMissingWadsByHash(missingWads);
-        AddPendingWads(requiredWadsNeedingDownload);
-        if (requiredCacheChanged)
-        {
-            _wadManager.RefreshCache();
-        }
+        AddPendingWads(requiredPreparation.NeedsDownload);
 
         var hasHashedPwads = server.PWADs.Any(p => !string.IsNullOrEmpty(p.Hash));
         var hashVerificationEnabled = _settings.Settings.EnableWadHashVerification;
