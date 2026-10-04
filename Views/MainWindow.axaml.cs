@@ -69,6 +69,7 @@ public partial class MainWindow : Window
 
     private ServerInfo? _selectedServer;
     private bool _isCalculatingWadHash;
+    private bool _isJoiningServer;
     private bool _isUpdatingWadHashCacheExclusion;
     private readonly List<ListViewSortDescriptor> _sortDescriptors =
     [
@@ -1232,7 +1233,7 @@ public partial class MainWindow : Window
     /// window position/size, sorting, filters, search text, and splitter positions
     /// since those reflect the user's current session state, not Preferences changes.
     /// </summary>
-    private void LoadSettings(bool restoreWindowLayout = true)
+    private void LoadSettings(bool restoreWindowLayout = true, bool loadWadSettings = true)
     {
         var settings = _settings.Settings;
 
@@ -1320,6 +1321,13 @@ public partial class MainWindow : Window
 
         UpdateAlertTimerSettings();
 
+        if (loadWadSettings)
+            LoadWadSettings(settings);
+    }
+
+    private void LoadWadSettings(AppSettings settings, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         // WAD settings
         var searchPaths = settings.WadSearchPaths ?? [];
         _wadManager.SetSearchPaths(searchPaths);
@@ -1332,7 +1340,7 @@ public partial class MainWindow : Window
         if (!string.IsNullOrEmpty(settings.ZandronumPath))
             exePaths.Add(settings.ZandronumPath);
         _wadManager.SetExecutableFolders(exePaths);
-        _wadManager.RefreshCache();
+        _wadManager.RefreshCache(cancellationToken);
     }
 
     private void RestoreServerListSorts(AppSettings settings)
@@ -3757,12 +3765,20 @@ public partial class MainWindow : Window
 
     private async Task LaunchServerAsync(ServerInfo server)
     {
+        if (_isJoiningServer)
+            return;
+        _isJoiningServer = true;
+        using var joinCancellation = new CancellationTokenSource();
+        var joinToken = joinCancellation.Token;
+        void CancelJoin(object? sender, WindowClosingEventArgs args) => joinCancellation.Cancel();
+        Closing += CancelJoin;
         try
         {
             var launcher = GameLauncher.Instance;
+            StatusLabel.Text = "Checking game installation...";
 
             // Check if executable is configured
-            if (!launcher.IsExecutableConfigured(server))
+            if (!await Task.Run(() => launcher.IsExecutableConfigured(server), joinToken))
             {
                 var exeType = server.IsTestingServer ? "Testing versions folder" : "Stable executable";
                 _logger.Warning($"Zandronum {exeType} not configured");
@@ -3810,8 +3826,8 @@ public partial class MainWindow : Window
                     await settingsDialog.ShowDialog(this);
                     if (settingsDialog.SettingsChanged)
                     {
-                        LoadSettings(restoreWindowLayout: false);
-                        _wadManager.RefreshCache();
+                        LoadSettings(restoreWindowLayout: false, loadWadSettings: false);
+                        await Task.Run(() => LoadWadSettings(_settings.Settings, joinToken), joinToken);
                         UpdateRowHeights();
                         UpdateServerList();
                     }
@@ -3822,11 +3838,12 @@ public partial class MainWindow : Window
             if (!server.IsTestingServer)
             {
                 var requiredStableVersion = launcher.GetRequiredStableVersion(server);
-                if (!string.IsNullOrEmpty(requiredStableVersion) && !launcher.IsStableVersionInstalled(server))
+                if (!string.IsNullOrEmpty(requiredStableVersion)
+                    && !await Task.Run(() => launcher.IsStableVersionInstalled(server), joinToken))
                 {
-                    var installedStableVersion = _stableReleaseService.TryGetInstalledStableVersion(_settings.Settings.ZandronumPath, out var detectedVersion, out _)
-                        ? detectedVersion
-                        : null;
+                    var installedStableVersion = await Task.Run(() =>
+                        _stableReleaseService.TryGetInstalledStableVersion(_settings.Settings.ZandronumPath, out var detectedVersion, out _)
+                            ? detectedVersion : null, joinToken);
 
                     var stableVersionMessage = string.IsNullOrEmpty(installedStableVersion)
                         ? $"Stable version '{requiredStableVersion}' is not installed.\n\nWould you like to download it now into the separate StableVersions folder?"
@@ -3853,7 +3870,8 @@ public partial class MainWindow : Window
             }
 
             // For testing servers, check if the specific version is installed
-            if (server.IsTestingServer && !launcher.IsTestingVersionInstalled(server))
+            if (server.IsTestingServer
+                && !await Task.Run(() => launcher.IsTestingVersionInstalled(server), joinToken))
             {
                 var hasArchive = !string.IsNullOrEmpty(server.TestingArchive);
 
@@ -3915,7 +3933,7 @@ public partial class MainWindow : Window
             void AddOptionalCandidateWads(IEnumerable<WadInfo> wads) =>
                 AddWadsToDictionary(optionalCandidateWads, wads, isOptional: true);
 
-            void ResolveSelectedOptionalHashMismatches(IEnumerable<WadInfo> selectedOptionalWads)
+            async Task ResolveSelectedOptionalHashMismatchesAsync(IEnumerable<WadInfo> selectedOptionalWads)
             {
                 var selectedOptionalNames = selectedOptionalWads
                     .Select(wad => wad.FileName)
@@ -3930,12 +3948,22 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                AddPendingWads(launcher.ResolveHashMismatches(selectedMismatches), isOptional: true);
-                _wadManager.RefreshCache();
+                var resolved = await RunJoinPreparationWithDialogAsync(
+                    "Resolving optional WAD versions...", (progress, token) =>
+                    {
+                        var wads = launcher.ResolveHashMismatches(selectedMismatches, token, progress);
+                        _wadManager.RefreshCache(token);
+                        return Task.FromResult(wads);
+                    }, joinToken);
+                AddPendingWads(resolved, isOptional: true);
                 optionalHashStateChanged = true;
             }
 
-        var (_, missingWads) = launcher.CheckRequiredWads(server);
+        var requiredPreparation = await RunJoinPreparationWithDialogAsync(
+            "Checking required WADs...",
+            (progress, token) => launcher.PrepareWadsForJoinAsync(server, optional: false, progress, token),
+            joinToken);
+        var missingWads = requiredPreparation.MissingWads;
         var missingRestrictedIwads = missingWads
             .Where(missing => WadManager.IsForbiddenWad(missing.Name))
             .Select(missing => Path.GetFileName(missing.Name))
@@ -3982,8 +4010,14 @@ public partial class MainWindow : Window
             var requiredHashMismatches = hashMismatches.Where(mismatch => !mismatch.IsOptional).ToList();
             if (requiredHashMismatches.Count > 0)
             {
-                AddPendingWads(launcher.ResolveHashMismatches(requiredHashMismatches));
-                _wadManager.RefreshCache();
+                var resolved = await RunJoinPreparationWithDialogAsync(
+                    "Resolving required WAD versions...", (progress, token) =>
+                    {
+                        var wads = launcher.ResolveHashMismatches(requiredHashMismatches, token, progress);
+                        _wadManager.RefreshCache(token);
+                        return Task.FromResult(wads);
+                    }, joinToken);
+                AddPendingWads(resolved);
             }
 
             var optionalHashMismatches = hashMismatches.Where(mismatch => mismatch.IsOptional).ToList();
@@ -4006,13 +4040,11 @@ public partial class MainWindow : Window
 
         if (optionalPwadMode != OptionalPwadDownloadMode.NeverDownload)
         {
-            var (_, missingOptionalWads) = launcher.CheckOptionalWads(server);
-            var (optionalWadsNeedingDownload, optionalCacheChanged) = launcher.ResolveMissingWadsByHash(missingOptionalWads);
-            AddOptionalCandidateWads(optionalWadsNeedingDownload);
-            if (optionalCacheChanged)
-            {
-                _wadManager.RefreshCache();
-            }
+            var optionalPreparation = await RunJoinPreparationWithDialogAsync(
+                "Checking optional WADs...",
+                (progress, token) => launcher.PrepareWadsForJoinAsync(server, optional: true, progress, token),
+                joinToken);
+            AddOptionalCandidateWads(optionalPreparation.NeedsDownload);
         }
 
         if (optionalCandidateWads.Count > 0)
@@ -4028,7 +4060,7 @@ public partial class MainWindow : Window
                     .ToList();
 
                 AddPendingWads(autoSelectedMissingOptionalWads, isOptional: true);
-                ResolveSelectedOptionalHashMismatches(autoSelectedOptionalWads);
+                await ResolveSelectedOptionalHashMismatchesAsync(autoSelectedOptionalWads);
             }
             else if (optionalPwadMode == OptionalPwadDownloadMode.AskEachTime)
             {
@@ -4055,7 +4087,7 @@ public partial class MainWindow : Window
                     .ToList();
 
                 AddPendingWads(selectedMissingOptionalWads, isOptional: true);
-                ResolveSelectedOptionalHashMismatches(selectedOptionalWads);
+                await ResolveSelectedOptionalHashMismatchesAsync(selectedOptionalWads);
                 downloadSelectionConfirmed = true;
 
                 if (selectionDialog.RememberSkippedSelections)
@@ -4125,9 +4157,12 @@ public partial class MainWindow : Window
 
                 await downloadDialog.ShowDialog(this);
 
-                _wadManager.RefreshCache();
-
-                var (_, stillMissing) = launcher.CheckRequiredWads(server);
+                var stillMissing = await RunJoinPreparationWithDialogAsync(
+                    "Checking downloaded WADs...", (_, token) =>
+                    {
+                        _wadManager.RefreshCache(token);
+                        return Task.FromResult(launcher.CheckRequiredWads(server, token).MissingWads);
+                    }, joinToken);
                 if (stillMissing.Count > 0)
                 {
                     _logger.Warning($"Still missing WADs: {string.Join(", ", stillMissing.Take(5).Select(w => w.Name))}");
@@ -4170,16 +4205,53 @@ public partial class MainWindow : Window
             }
 
             // Launch the game
-            if (launcher.LaunchGame(server, connectPassword, joinPassword, optionalWadsExcludedFromLaunch))
+            if (await RunJoinPreparationWithDialogAsync(
+                    "Preparing connection...", (_, token) => Task.FromResult(
+                        launcher.LaunchGame(server, connectPassword, joinPassword, optionalWadsExcludedFromLaunch, token)),
+                    joinToken))
             {
                 _logger.Success($"Launched connection to {server.Name}");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.Info("Server join cancelled during preparation.");
+            StatusLabel.Text = "Join cancelled.";
         }
         catch (Exception ex)
         {
             _logger.Exception($"Launch flow failed for {server.Address}:{server.Port}", ex);
             _logger.Error($"Join failed unexpectedly. See {_logger.LogFilePath} for details.");
         }
+        finally
+        {
+            Closing -= CancelJoin;
+            _isJoiningServer = false;
+        }
+    }
+
+    private async Task<T> RunJoinPreparationWithDialogAsync<T>(
+        string status,
+        Func<IProgress<SaveStateProgress>, CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        T result = default!;
+        var dialog = new UpdateProgressDialog(async (progress, dialogToken) =>
+        {
+            using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, dialogToken);
+            result = await action(progress, linkedCancellation.Token);
+            linkedCancellation.Token.ThrowIfCancellationRequested();
+            return true;
+        }, "Preparing Server Connection", status, "preparing server connection");
+        using var ownerCancellation = cancellationToken.Register(() => Dispatcher.UIThread.Post(dialog.CancelOperation));
+        await dialog.ShowDialog<bool>(this);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (dialog.WasCancelled)
+            throw new OperationCanceledException();
+        if (!dialog.SaveSucceeded)
+            throw dialog.OperationError ?? new InvalidOperationException("Server preparation did not complete.");
+        return result;
     }
 
     private enum HashVerificationDialogAction

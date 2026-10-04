@@ -27,6 +27,7 @@ internal static class Program
         ThemeChecks.Run();
         WadHashChecks.Run();
         WadPathPresentationChecks.Run();
+        JoinPreparationChecks.Run();
         var list = new ResizableListView();
         list.AddColumn(new ListViewColumn { Key = "text", Header = "Text", BindingPath = "Text", Width = 250 });
         list.Build(ListViewOverflowMode.AutoScroll);

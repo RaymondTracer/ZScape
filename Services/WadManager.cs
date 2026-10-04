@@ -195,8 +195,9 @@ public class WadManager
     /// Rebuilds the WAD cache from files directly inside each configured root.
     /// Priority order: 1) Executable folders, 2) Download path, 3) Search paths
     /// </summary>
-    public void RefreshCache()
+    public void RefreshCache(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         _wadCache.Clear();
         _rootFileNameIndex.Clear();
         var searchRoots = GetSearchRootsInPriorityOrder();
@@ -216,7 +217,8 @@ public class WadManager
 
         foreach (var searchPath in searchRoots)
         {
-            ScanDirectory(searchPath);
+            cancellationToken.ThrowIfCancellationRequested();
+            ScanDirectory(searchPath, cancellationToken);
         }
 
         var pathCount = searchRoots.Count;
@@ -276,13 +278,13 @@ public class WadManager
         return orderedPaths;
     }
 
-    private void ScanDirectory(string path)
+    private void ScanDirectory(string path, CancellationToken cancellationToken)
     {
         var scanResult = WadFileScanner.Scan(
             [path],
             supportedFileFound: null,
             progress: null,
-            CancellationToken.None,
+            cancellationToken,
             recurseSubdirectories: false);
 
         var count = 0;
@@ -515,49 +517,42 @@ public class WadManager
     /// <param name="baseName">The base name of the WAD (without extension).</param>
     /// <param name="extension">The file extension (e.g., ".pk3").</param>
     /// <returns>Path to file with matching hash, or null if not found.</returns>
-    public string? FindWadByHash(string expectedHash, string baseName, string extension)
+    public string? FindWadByHash(
+        string expectedHash,
+        string baseName,
+        string extension,
+        CancellationToken cancellationToken = default,
+        Action<string>? checkingFile = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrEmpty(expectedHash))
             return null;
-        
-        // Build search paths in priority order: exe folders, download path, search paths
-        var searchPaths = GetSearchRootsInPriorityOrder();
-        
-        foreach (var searchPath in searchPaths)
-        {
-            try
+
+        string? matchingPath = null;
+        // Archived copies may live below a configured root. Reuse the browser's
+        // cancellable, reparse-safe traversal; normal FindWad remains root-only.
+        WadFileScanner.Scan(
+            GetSearchRootsInPriorityOrder(),
+            supportedFileFound: null,
+            progress: null,
+            cancellationToken,
+            recurseSubdirectories: true,
+            stopAfterFile: file =>
             {
-                // Search for files matching the base pattern (case-insensitive)
-                // Matches baseName.pk3, baseName_abc123.pk3, BASENAME.PK3, etc.
-                foreach (var file in Directory.EnumerateFiles(searchPath, "*", SearchOption.AllDirectories))
-                {
-                    var fileName = Path.GetFileName(file);
-                    var fileExt = Path.GetExtension(file);
-                    var fileBase = Path.GetFileNameWithoutExtension(file);
-                    
-                    // Check if extension matches (case-insensitive)
-                    if (!fileExt.Equals(extension, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    
-                    // Check if file starts with base name (case-insensitive)
-                    if (!fileBase.StartsWith(baseName, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    
-                    var hash = ComputeFileHash(file);
-                    if (string.Equals(hash, expectedHash, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _logger.Verbose($"Found matching hash for {baseName}: {file}");
-                        return file;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Warning($"Error searching for WAD by hash in {searchPath}: {ex.Message}");
-            }
-        }
-        
-        return null;
+                checkingFile?.Invoke(file);
+                cancellationToken.ThrowIfCancellationRequested();
+                var hash = ComputeFileHash(file, cancellationToken);
+                if (!string.Equals(hash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                matchingPath = file;
+                _logger.Verbose($"Found matching hash for {baseName}: {file}");
+                return true;
+            },
+            includeFile: file => Path.GetExtension(file).Equals(extension, StringComparison.OrdinalIgnoreCase)
+                && Path.GetFileNameWithoutExtension(file).StartsWith(baseName, StringComparison.OrdinalIgnoreCase));
+        cancellationToken.ThrowIfCancellationRequested();
+        return matchingPath;
     }
     
     /// <summary>
@@ -600,12 +595,13 @@ public class WadManager
     /// </summary>
     /// <param name="filePath">Path to the WAD file.</param>
     /// <returns>New path with hash suffix, or null on failure.</returns>
-    public string? ArchiveWadWithHash(string filePath)
+    public string? ArchiveWadWithHash(string filePath, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!File.Exists(filePath))
             return null;
         
-        var hash = ComputeFileHash(filePath);
+        var hash = ComputeFileHash(filePath, cancellationToken);
         if (hash == null)
             return null;
         
@@ -621,10 +617,11 @@ public class WadManager
         // Check if archived version already exists
         if (File.Exists(newPath))
         {
-            var existingHash = ComputeFileHash(newPath);
+            var existingHash = ComputeFileHash(newPath, cancellationToken);
             if (string.Equals(existingHash, hash, StringComparison.OrdinalIgnoreCase))
             {
                 // Same file already archived, just delete the current one
+                cancellationToken.ThrowIfCancellationRequested();
                 File.Delete(filePath);
                 return newPath;
             }
@@ -635,9 +632,14 @@ public class WadManager
         
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(filePath, newPath);
             _logger.Info($"Archived WAD: {Path.GetFileName(filePath)} -> {newFileName}");
             return newPath;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -652,12 +654,32 @@ public class WadManager
     /// <param name="archivedPath">Path to the archived WAD.</param>
     /// <param name="standardName">The standard filename (e.g., "mod.pk3").</param>
     /// <returns>New path with standard name, or null on failure.</returns>
-    public string? ActivateArchivedWad(string archivedPath, string standardName)
+    public string? ActivateArchivedWad(
+        string archivedPath,
+        string standardName,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!File.Exists(archivedPath))
             return null;
         
-        var directory = Path.GetDirectoryName(archivedPath) ?? string.Empty;
+        var sourceDirectory = Path.GetDirectoryName(archivedPath) ?? string.Empty;
+        var directory = sourceDirectory;
+        // Standard server filenames are resolved at configured roots only.
+        // A recursively discovered archive must be activated at its containing
+        // root so the next lookup and final launch can still find it.
+        foreach (var root in GetSearchRootsInPriorityOrder())
+        {
+            var relativePath = Path.GetRelativePath(root, archivedPath);
+            if (!Path.IsPathRooted(relativePath)
+                && relativePath != ".."
+                && !relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                directory = root;
+                break;
+            }
+        }
         var newPath = Path.Combine(directory, standardName);
         
         try
@@ -665,7 +687,7 @@ public class WadManager
             // If a file with standard name exists, archive it first
             if (File.Exists(newPath))
             {
-                var archived = ArchiveWadWithHash(newPath);
+                var archived = ArchiveWadWithHash(newPath, cancellationToken);
                 if (archived == null)
                 {
                     _logger.Error($"Failed to archive existing WAD: {standardName}");
@@ -673,6 +695,7 @@ public class WadManager
                 }
             }
             
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(archivedPath, newPath);
             _logger.Info($"Activated WAD: {Path.GetFileName(archivedPath)} -> {standardName}");
             
@@ -681,12 +704,17 @@ public class WadManager
             var rootIndex = _rootFileNameIndex.GetOrAdd(
                 PathResolver.NormalizeDirectoryPath(directory),
                 _ => new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-            rootIndex.TryRemove(Path.GetFileName(archivedPath), out _);
+            if (_rootFileNameIndex.TryGetValue(PathResolver.NormalizeDirectoryPath(sourceDirectory), out var sourceIndex))
+                sourceIndex.TryRemove(Path.GetFileName(archivedPath), out _);
             rootIndex[standardName] = newPath;
             _wadCache.TryRemove(Path.GetFileName(archivedPath), out _);
             _wadCache[standardName] = newPath;
             
             return newPath;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

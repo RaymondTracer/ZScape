@@ -45,9 +45,10 @@ public class GameLauncher : IDisposable
         ServerInfo server,
         string? connectPassword = null,
         string? joinPassword = null,
-        ISet<string>? excludedOptionalPwads = null)
+        ISet<string>? excludedOptionalPwads = null,
+        CancellationToken cancellationToken = default)
     {
-        var settings = SettingsService.Instance.Settings;
+        cancellationToken.ThrowIfCancellationRequested();
         
         // Select correct executable based on testing status
         var exePath = GetExecutablePath(server);
@@ -70,7 +71,7 @@ public class GameLauncher : IDisposable
             return false;
         }
 
-        var args = BuildCommandLine(server, connectPassword, joinPassword, excludedOptionalPwads);
+        var args = BuildCommandLine(server, connectPassword, joinPassword, excludedOptionalPwads, cancellationToken);
         
         try
         {
@@ -84,6 +85,7 @@ public class GameLauncher : IDisposable
             
             LoggingService.Instance.Verbose($"Launching: {exePath} {args}");
             
+            cancellationToken.ThrowIfCancellationRequested();
             var launchedProcess = Process.Start(startInfo);
             ZandronumConfigSyncService.Instance.TrackLaunchedProcess(launchedProcess, exePath);
             
@@ -99,6 +101,10 @@ public class GameLauncher : IDisposable
             LaunchSuccess?.Invoke(this, msg);
             LoggingService.Instance.Info(msg);
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -116,61 +122,128 @@ public class GameLauncher : IDisposable
     /// </summary>
     /// <param name="server">The server to check.</param>
     /// <returns>A tuple with (allFound, missingWads) where each missing WAD includes name and expected hash.</returns>
-    public (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckRequiredWads(ServerInfo server)
+    public (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckRequiredWads(
+        ServerInfo server,
+        CancellationToken cancellationToken = default)
     {
-        return CheckPwads(server, pwad => !pwad.IsOptional);
+        return CheckPwads(server, pwad => !pwad.IsOptional, includeIwad: true, WadManager.Instance, cancellationToken);
     }
 
     /// <summary>
     /// Finds optional PWADs that are not currently available.
     /// These do not block joins, but can be offered for download.
     /// </summary>
-    public (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckOptionalWads(ServerInfo server)
+    public (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckOptionalWads(
+        ServerInfo server,
+        CancellationToken cancellationToken = default)
     {
-        return CheckPwads(server, pwad => pwad.IsOptional);
+        return CheckPwads(server, pwad => pwad.IsOptional, includeIwad: false, WadManager.Instance, cancellationToken);
     }
 
-    private (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckPwads(
+    private static (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckPwads(
         ServerInfo server,
-        Func<PWadInfo, bool> predicate)
+        Func<PWadInfo, bool> predicate,
+        bool includeIwad,
+        WadManager wadManager,
+        CancellationToken cancellationToken,
+        IProgress<SaveStateProgress>? progress = null)
     {
         var missing = new List<(string Name, string? Hash)>();
-        var exeFolder = GetExecutableFolder(server);
+        cancellationToken.ThrowIfCancellationRequested();
+        var pwads = server.PWADs.Where(predicate).ToList();
+        var total = pwads.Count + (includeIwad && !string.IsNullOrEmpty(server.IWAD) ? 1 : 0);
+        var current = 0;
+
+        string? Find(string name)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(new SaveStateProgress { Status = $"Checking {name}", Current = current++, Total = total });
+            return wadManager.FindWad(name);
+        }
         
         // Check IWAD (IWADs don't have server-provided hashes)
-        if (!string.IsNullOrEmpty(server.IWAD))
+        if (includeIwad && !string.IsNullOrEmpty(server.IWAD))
         {
-            var iwadPath = FindWadWithExeFolder(server.IWAD, exeFolder);
+            var iwadPath = Find(server.IWAD);
             if (string.IsNullOrEmpty(iwadPath))
             {
                 missing.Add((server.IWAD, null));
             }
         }
         
-        foreach (var pwad in server.PWADs.Where(predicate))
+        foreach (var pwad in pwads)
         {
-            var pwadPath = FindWadWithExeFolder(pwad.Name, exeFolder);
+            var pwadPath = Find(pwad.Name);
             if (string.IsNullOrEmpty(pwadPath))
             {
                 missing.Add((pwad.Name, pwad.Hash));
             }
         }
         
+        cancellationToken.ThrowIfCancellationRequested();
         return (missing.Count == 0, missing);
     }
+
+    public sealed record WadJoinPreparationResult(
+        List<(string Name, string? Hash)> MissingWads,
+        List<WadInfo> NeedsDownload);
+
+    public Task<WadJoinPreparationResult> PrepareWadsForJoinAsync(
+        ServerInfo server,
+        bool optional,
+        IProgress<SaveStateProgress>? progress,
+        CancellationToken cancellationToken) =>
+        PrepareWadsForJoinAsync(server, WadManager.Instance, optional, progress, cancellationToken);
+
+    internal static Task<WadJoinPreparationResult> PrepareWadsForJoinAsync(
+        ServerInfo server,
+        WadManager wadManager,
+        bool optional,
+        IProgress<SaveStateProgress>? progress,
+        CancellationToken cancellationToken) => Task.Run(() =>
+        {
+            var (_, missing) = CheckPwads(server, pwad => pwad.IsOptional == optional,
+                includeIwad: !optional, wadManager, cancellationToken, progress);
+            // Commercial IWADs must be supplied locally. Do not begin archive
+            // work or change local files before the caller shows that gate.
+            if (missing.Any(wad => WadManager.IsForbiddenWad(wad.Name)))
+                return new WadJoinPreparationResult(missing, []);
+
+            var (needsDownload, cacheChanged) = ResolveMissingWadsByHash(
+                missing, wadManager, cancellationToken, progress);
+            if (cacheChanged)
+            {
+                progress?.Report(new SaveStateProgress { Status = "Refreshing local WAD files..." });
+                wadManager.RefreshCache(cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return new WadJoinPreparationResult(missing, needsDownload);
+        }, cancellationToken);
 
     /// <summary>
     /// Resolves missing WADs by activating locally archived copies that match the server hash.
     /// Returns only the WADs that still need to be downloaded.
     /// </summary>
-    public (List<WadInfo> NeedsDownload, bool CacheChanged) ResolveMissingWadsByHash(List<(string Name, string? Hash)> missingWads)
+    public (List<WadInfo> NeedsDownload, bool CacheChanged) ResolveMissingWadsByHash(
+        List<(string Name, string? Hash)> missingWads,
+        CancellationToken cancellationToken = default,
+        IProgress<SaveStateProgress>? progress = null) =>
+        ResolveMissingWadsByHash(missingWads, WadManager.Instance, cancellationToken, progress);
+
+    private static (List<WadInfo> NeedsDownload, bool CacheChanged) ResolveMissingWadsByHash(
+        List<(string Name, string? Hash)> missingWads,
+        WadManager wadManager,
+        CancellationToken cancellationToken,
+        IProgress<SaveStateProgress>? progress)
     {
         var needsDownload = new List<WadInfo>();
-        var wadManager = WadManager.Instance;
         var cacheChanged = false;
+        var current = 0;
 
         foreach (var (name, hash) in missingWads)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(new SaveStateProgress { Status = $"Looking for local versions of {name}", Current = current++, Total = missingWads.Count });
             if (string.IsNullOrEmpty(hash))
             {
                 needsDownload.Add(new WadInfo(name, hash));
@@ -179,14 +252,16 @@ public class GameLauncher : IDisposable
 
             var baseName = Path.GetFileNameWithoutExtension(name);
             var extension = Path.GetExtension(name);
-            var matchingPath = wadManager.FindWadByHash(hash, baseName, extension);
+            var matchingPath = wadManager.FindWadByHash(hash, baseName, extension, cancellationToken,
+                file => progress?.Report(new SaveStateProgress { Status = $"Checking archived {Path.GetFileName(file)}", Current = current - 1, Total = missingWads.Count }));
             if (string.IsNullOrEmpty(matchingPath))
             {
                 needsDownload.Add(new WadInfo(name, hash));
                 continue;
             }
 
-            var activatedPath = wadManager.ActivateArchivedWad(matchingPath, name);
+            cancellationToken.ThrowIfCancellationRequested();
+            var activatedPath = wadManager.ActivateArchivedWad(matchingPath, name, cancellationToken);
             if (activatedPath != null)
             {
                 cacheChanged = true;
@@ -199,6 +274,7 @@ public class GameLauncher : IDisposable
             needsDownload.Add(new WadInfo(name, hash));
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return (needsDownload, cacheChanged);
     }
 
@@ -272,7 +348,7 @@ public class GameLauncher : IDisposable
         IProgress<HashVerificationProgress>? progress,
         CancellationToken cancellationToken)
     {
-        return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, _ => true);
+        return await Task.Run(() => VerifyWadHashesCoreAsync(server, progress, cancellationToken, _ => true), cancellationToken);
     }
 
     /// <summary>
@@ -284,7 +360,7 @@ public class GameLauncher : IDisposable
         IProgress<HashVerificationProgress>? progress,
         CancellationToken cancellationToken)
     {
-        return await VerifyWadHashesCoreAsync(server, progress, cancellationToken, pwad => pwad.IsOptional);
+        return await Task.Run(() => VerifyWadHashesCoreAsync(server, progress, cancellationToken, pwad => pwad.IsOptional), cancellationToken);
     }
 
     /// <summary>
@@ -320,11 +396,10 @@ public class GameLauncher : IDisposable
         if (!hashCache.IsEnabled)
             return new CachedWadHashVerificationResult(false, 0);
 
-        var exeFolder = GetExecutableFolder(server);
         var verifiedFileCount = 0;
         foreach (var pwad in pwadsWithHashes)
         {
-            var localPath = FindWadWithExeFolder(pwad.Name, exeFolder);
+            var localPath = WadManager.Instance.FindWad(pwad.Name);
             if (string.IsNullOrEmpty(localPath))
                 return new CachedWadHashVerificationResult(false, verifiedFileCount);
 
@@ -348,7 +423,6 @@ public class GameLauncher : IDisposable
         Func<PWadInfo, bool> predicate)
     {
         var mismatches = new System.Collections.Concurrent.ConcurrentBag<WadHashMismatch>();
-        var exeFolder = GetExecutableFolder(server);
         var wadManager = WadManager.Instance;
         var hashCache = WadHashCacheService.Instance;
         var settings = SettingsService.Instance.Settings;
@@ -380,7 +454,8 @@ public class GameLauncher : IDisposable
         var verificationItems = new List<(PWadInfo Pwad, string LocalPath, long FileSize)>();
         foreach (var pwad in pwadsWithHashes)
         {
-            var localPath = FindWadWithExeFolder(pwad.Name, exeFolder);
+            cancellationToken.ThrowIfCancellationRequested();
+            var localPath = wadManager.FindWad(pwad.Name);
             if (string.IsNullOrEmpty(localPath))
                 continue;
             
@@ -502,7 +577,7 @@ public class GameLauncher : IDisposable
                 {
                     var baseName = Path.GetFileNameWithoutExtension(item.Pwad.Name);
                     var extension = Path.GetExtension(item.Pwad.Name);
-                    var matchingPath = wadManager.FindWadByHash(item.Pwad.Hash!, baseName, extension);
+                    var matchingPath = wadManager.FindWadByHash(item.Pwad.Hash!, baseName, extension, cancellationToken);
                     var expectedHash = item.Pwad.Hash!;
                     
                     mismatches.Add(new WadHashMismatch
@@ -568,20 +643,25 @@ public class GameLauncher : IDisposable
     /// </summary>
     /// <param name="mismatches">List of WAD hash mismatches to resolve.</param>
     /// <returns>List of WADs that need to be downloaded (no local version with matching hash).</returns>
-    public List<WadInfo> ResolveHashMismatches(List<WadHashMismatch> mismatches)
+    public List<WadInfo> ResolveHashMismatches(
+        List<WadHashMismatch> mismatches,
+        CancellationToken cancellationToken = default,
+        IProgress<SaveStateProgress>? progress = null)
     {
         var needsDownload = new List<WadInfo>();
         var wadManager = WadManager.Instance;
         
         foreach (var mismatch in mismatches)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(new SaveStateProgress { Status = $"Resolving version of {mismatch.WadName}" });
             if (!string.IsNullOrEmpty(mismatch.MatchingVersionPath))
             {
                 // We have a local version with matching hash - swap them
                 LoggingService.Instance.Info($"Swapping WAD versions for {mismatch.WadName}");
                 
                 // Archive the current (mismatched) file
-                var archived = wadManager.ArchiveWadWithHash(mismatch.LocalPath);
+                var archived = wadManager.ArchiveWadWithHash(mismatch.LocalPath, cancellationToken);
                 if (archived == null)
                 {
                     LoggingService.Instance.Error($"Failed to archive {mismatch.WadName}");
@@ -599,8 +679,13 @@ public class GameLauncher : IDisposable
                     var targetPath = Path.Combine(targetDir!, mismatch.WadName);
                     try
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         File.Copy(mismatch.MatchingVersionPath, targetPath, overwrite: true);
                         LoggingService.Instance.Info($"Copied matching version to {targetPath}");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -611,7 +696,7 @@ public class GameLauncher : IDisposable
                 else
                 {
                     // Activate the archived version (rename to standard name)
-                    var activated = wadManager.ActivateArchivedWad(mismatch.MatchingVersionPath, mismatch.WadName);
+                    var activated = wadManager.ActivateArchivedWad(mismatch.MatchingVersionPath, mismatch.WadName, cancellationToken);
                     if (activated == null)
                     {
                         LoggingService.Instance.Error($"Failed to activate archived version of {mismatch.WadName}");
@@ -623,7 +708,7 @@ public class GameLauncher : IDisposable
             {
                 // No local version with matching hash - need to download
                 // First, archive the current file
-                var archived = wadManager.ArchiveWadWithHash(mismatch.LocalPath);
+                var archived = wadManager.ArchiveWadWithHash(mismatch.LocalPath, cancellationToken);
                 if (archived != null)
                 {
                     LoggingService.Instance.Info($"Archived mismatched {mismatch.WadName} as {Path.GetFileName(archived)}");
@@ -637,53 +722,8 @@ public class GameLauncher : IDisposable
             }
         }
         
+        cancellationToken.ThrowIfCancellationRequested();
         return needsDownload;
-    }
-
-    /// <summary>
-    /// Gets the folder containing the Zandronum executable.
-    /// </summary>
-    private string? GetExecutableFolder(ServerInfo server)
-    {
-        var exePath = GetExecutablePath(server);
-        if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
-        {
-            return Path.GetDirectoryName(exePath);
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Finds a WAD file using WadManager.
-    /// WadManager now includes executable folders as highest priority search locations.
-    /// </summary>
-    private string? FindWadWithExeFolder(string wadName, string? exeFolder)
-    {
-        // WadManager now handles exe folder priority automatically
-        return WadManager.Instance.FindWad(wadName);
-    }
-
-    /// <summary>
-    /// Finds a file in a directory with case-insensitive name matching.
-    /// </summary>
-    private static string? FindFileIgnoreCase(string directory, string fileName)
-    {
-        if (!Directory.Exists(directory))
-            return null;
-        
-        try
-        {
-            foreach (var file in Directory.EnumerateFiles(directory))
-            {
-                if (Path.GetFileName(file).Equals(fileName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return file;
-                }
-            }
-        }
-        catch { /* Ignore access errors */ }
-        
-        return null;
     }
 
     /// <summary>
@@ -1354,10 +1394,20 @@ public class GameLauncher : IDisposable
         ServerInfo server,
         string? connectPassword,
         string? joinPassword,
-        ISet<string>? excludedOptionalPwads = null)
+        ISet<string>? excludedOptionalPwads = null,
+        CancellationToken cancellationToken = default) =>
+        BuildConnectArguments(server, WadManager.Instance, connectPassword, joinPassword, excludedOptionalPwads, cancellationToken);
+
+    internal static string BuildConnectArguments(
+        ServerInfo server,
+        WadManager wadManager,
+        string? connectPassword,
+        string? joinPassword,
+        ISet<string>? excludedOptionalPwads = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var args = new List<string>();
-        var exeFolder = GetExecutableFolder(server);
         
         // Connection
         args.Add($"-connect {server.Address}:{server.Port}");
@@ -1365,7 +1415,7 @@ public class GameLauncher : IDisposable
         // IWAD
         if (!string.IsNullOrEmpty(server.IWAD))
         {
-            var iwadPath = FindWadWithExeFolder(server.IWAD, exeFolder);
+            var iwadPath = wadManager.FindWad(server.IWAD);
             if (!string.IsNullOrEmpty(iwadPath))
             {
                 args.Add($"-iwad \"{iwadPath}\"");
@@ -1376,12 +1426,13 @@ public class GameLauncher : IDisposable
         var pwadPaths = new List<string>();
         foreach (var pwad in server.PWADs)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (pwad.IsOptional && excludedOptionalPwads?.Contains(pwad.Name) == true)
             {
                 continue;
             }
 
-            var path = FindWadWithExeFolder(pwad.Name, exeFolder);
+            var path = wadManager.FindWad(pwad.Name);
             if (!string.IsNullOrEmpty(path))
             {
                 pwadPaths.Add($"\"{path}\"");
@@ -1402,6 +1453,7 @@ public class GameLauncher : IDisposable
             args.Add($"+cl_joinpassword \"{joinPassword}\"");
         }
         
+        cancellationToken.ThrowIfCancellationRequested();
         return string.Join(" ", args);
     }
     

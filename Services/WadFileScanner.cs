@@ -35,7 +35,9 @@ public static class WadFileScanner
         Action<string>? supportedFileFound,
         IProgress<WadFileScanProgress>? progress,
         CancellationToken cancellationToken,
-        bool recurseSubdirectories = true)
+        bool recurseSubdirectories = true,
+        Func<string, bool>? stopAfterFile = null,
+        Func<string, bool>? includeFile = null)
     {
         var files = new List<string>();
         var issues = new List<WadFileScanIssue>();
@@ -47,6 +49,7 @@ public static class WadFileScanner
         var lastProgressReport = TimeSpan.MinValue;
         var currentRoot = string.Empty;
         var currentDirectory = string.Empty;
+        var searchComplete = false;
 
         void ReportProgress(int rootIndex, bool force = false)
         {
@@ -106,10 +109,16 @@ public static class WadFileScanner
                         cancellationToken.ThrowIfCancellationRequested();
                         filesExamined++;
 
-                        if (WadExtensions.IsSupportedExtension(Path.GetExtension(filePath)))
+                        if (includeFile?.Invoke(filePath)
+                            ?? WadExtensions.IsSupportedExtension(Path.GetExtension(filePath)))
                         {
                             files.Add(filePath);
                             supportedFileFound?.Invoke(filePath);
+                            if (stopAfterFile?.Invoke(filePath) == true)
+                            {
+                                searchComplete = true;
+                                break;
+                            }
                         }
 
                         ReportProgress(rootIndex);
@@ -122,6 +131,9 @@ public static class WadFileScanner
                     ReportProgress(rootIndex, force: true);
                     continue;
                 }
+
+                if (searchComplete)
+                    break;
 
                 if (!recurseSubdirectories)
                 {
@@ -165,8 +177,11 @@ public static class WadFileScanner
             }
 
             ReportProgress(rootIndex, force: true);
+            if (searchComplete)
+                break;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         stopwatch.Stop();
         return new WadFileScanResult(
             files,
