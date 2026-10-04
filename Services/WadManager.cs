@@ -556,41 +556,6 @@ public class WadManager
     }
     
     /// <summary>
-    /// Gets all archived versions of a WAD (files with hash suffixes).
-    /// </summary>
-    /// <param name="baseName">The base name of the WAD.</param>
-    /// <param name="extension">The file extension.</param>
-    /// <returns>Dictionary of hash to file path.</returns>
-    public Dictionary<string, string> GetArchivedVersions(string baseName, string extension)
-    {
-        var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        
-        // Build search paths in priority order: exe folders, download path, search paths
-        var searchPaths = GetSearchRootsInPriorityOrder();
-        
-        foreach (var searchPath in searchPaths)
-        {
-            try
-            {
-                var pattern = $"{baseName}_*{extension}";
-                var files = Directory.GetFiles(searchPath, pattern, SearchOption.AllDirectories);
-                
-                foreach (var file in files)
-                {
-                    var hash = ComputeFileHash(file);
-                    if (hash != null && !results.ContainsKey(hash))
-                    {
-                        results[hash] = file;
-                    }
-                }
-            }
-            catch { /* Ignore access errors */ }
-        }
-        
-        return results;
-    }
-    
-    /// <summary>
     /// Renames a WAD file to include its hash suffix for archival.
     /// </summary>
     /// <param name="filePath">Path to the WAD file.</param>
