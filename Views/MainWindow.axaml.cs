@@ -289,7 +289,7 @@ public partial class MainWindow : Window
         // already has a valid cached MD5.
         CalculateWadHashMenuItem = new MenuItem
         {
-            Header = "Calculate _Hash",
+            Header = WadHashActions.NoSelection.CalculateHeader,
             IsEnabled = false
         };
         CalculateWadHashMenuItem.Click += CalculateWadHashMenuItem_Click;
@@ -300,7 +300,7 @@ public partial class MainWindow : Window
         // future preparation failure never creates a blank menu item.
         ToggleWadHashCachingMenuItem = new MenuItem
         {
-            Header = "_Don't Cache Hash",
+            Header = WadHashActions.NoSelection.ToggleExclusionHeader,
             IsEnabled = false
         };
         ToggleWadHashCachingMenuItem.Click += ToggleWadHashCachingMenuItem_Click;
@@ -334,48 +334,25 @@ public partial class MainWindow : Window
 
         var localPath = target.LocalPath;
         var hasLocalFile = !string.IsNullOrWhiteSpace(localPath);
-        var hashCache = WadHashCacheService.Instance;
-        var isExcluded = hasLocalFile && hashCache.IsHashCachingExcluded(localPath);
-        var hasCachedHash = hasLocalFile && !isExcluded && target.HasCachedHash;
+        // LocalPath is published only after the background lookup has initialized
+        // the cache; missing/queued rows must not initialize it from menu opening.
+        var actions = hasLocalFile
+            ? WadHashCacheService.Instance.GetActionsForFiles([localPath!],
+                _isCalculatingWadHash || _isUpdatingWadHashCacheExclusion)
+            : WadHashActions.NoSelection;
         if (LocateWadFileMenuItem != null)
             LocateWadFileMenuItem.IsEnabled = hasLocalFile;
         if (CalculateWadHashMenuItem != null)
         {
-            CalculateWadHashMenuItem.IsEnabled = hasLocalFile
-                && hashCache.IsEnabled
-                && !isExcluded
-                && !_isCalculatingWadHash
-                && !_isUpdatingWadHashCacheExclusion;
-            CalculateWadHashMenuItem.Header = hasCachedHash
-                ? "_Recalculate Hash"
-                : "Calculate _Hash";
-            ToolTip.SetTip(
-                CalculateWadHashMenuItem,
-                !hasLocalFile
-                    ? "This WAD is not available locally."
-                    : !hashCache.IsEnabled
-                        ? "Enable WAD hash caching in Preferences before calculating a cached MD5."
-                        : isExcluded
-                            ? "Allow hash caching for this file before calculating a cached MD5."
-                            : hasCachedHash
-                                ? "Calculate this file's MD5 again and replace its cached value."
-                                : "Calculate this file's MD5 and save it in the local hash cache.");
+            CalculateWadHashMenuItem.IsEnabled = actions.CanCalculate;
+            CalculateWadHashMenuItem.Header = actions.CalculateHeader;
+            ToolTip.SetTip(CalculateWadHashMenuItem, actions.CalculateToolTip);
         }
         if (ToggleWadHashCachingMenuItem != null)
         {
-            // Excluding a file always remains available, even when global cache
-            // reuse is disabled, because it clears a previous persisted entry.
-            ToggleWadHashCachingMenuItem.IsEnabled = hasLocalFile
-                && !_isCalculatingWadHash
-                && !_isUpdatingWadHashCacheExclusion;
-            ToggleWadHashCachingMenuItem.Header = isExcluded
-                ? "Allow Hash _Caching"
-                : "_Don't Cache Hash";
-            ToolTip.SetTip(
-                ToggleWadHashCachingMenuItem,
-                isExcluded
-                    ? "Allow this file to receive a fresh cached MD5 on a later verification or cache pass."
-                    : "Do not reuse or store a cached MD5 for this file. Server hash verification still runs normally.");
+            ToggleWadHashCachingMenuItem.IsEnabled = actions.CanToggleExclusion;
+            ToggleWadHashCachingMenuItem.Header = actions.ToggleExclusionHeader;
+            ToolTip.SetTip(ToggleWadHashCachingMenuItem, actions.ToggleExclusionToolTip);
         }
     }
 
@@ -438,7 +415,9 @@ public partial class MainWindow : Window
         }
 
         var hashCache = WadHashCacheService.Instance;
-        var shouldExclude = !hashCache.IsHashCachingExcluded(filePath);
+        var actions = hashCache.GetActionsForFiles([filePath]);
+        if (!actions.CanToggleExclusion) return;
+        var shouldExclude = actions.ShouldExclude;
         _isUpdatingWadHashCacheExclusion = true;
         StatusLabel.Text = shouldExclude
             ? $"Excluding {wad.Name} from hash caching..."
@@ -486,32 +465,23 @@ public partial class MainWindow : Window
         }
 
         var hashCache = WadHashCacheService.Instance;
-        if (!hashCache.IsEnabled)
+        var actions = hashCache.GetActionsForFiles([filePath]);
+        if (!actions.CanCalculate)
         {
-            StatusLabel.Text = "Enable WAD hash caching in Preferences before calculating a cached MD5.";
+            StatusLabel.Text = actions.CalculateToolTip;
             return;
         }
 
-        if (hashCache.IsHashCachingExcluded(filePath))
-        {
-            StatusLabel.Text = $"{wad.Name} is excluded from hash caching. Allow caching first to calculate its MD5.";
-            return;
-        }
-
-        // A valid entry means the explicit action is a true recalculation;
-        // otherwise GetHashAsync performs the first calculation and records it.
-        var isRecalculation = wad.HasCachedHash;
         _isCalculatingWadHash = true;
-        StatusLabel.Text = isRecalculation
+        StatusLabel.Text = actions.IsRecalculation
             ? $"Recalculating cached MD5 for {wad.Name}..."
             : $"Calculating MD5 for {wad.Name}...";
 
         try
         {
-            var result = isRecalculation
-                ? await hashCache.RefreshHashAsync(filePath, progress: null, CancellationToken.None)
-                : await hashCache.GetHashAsync(filePath, progress: null, CancellationToken.None);
-            var cachedHash = await Task.Run(() => hashCache.TryGetCachedHash(filePath));
+            var completed = await hashCache.CalculateAndCacheHashAsync(filePath, CancellationToken.None);
+            var result = completed.HashResult;
+            var cachedHash = completed.CachedHash;
 
             if (!result.IsSuccess)
             {
@@ -527,11 +497,11 @@ public partial class MainWindow : Window
 
             StatusLabel.Text = cachedHash == null
                 ? $"{wad.Name} changed while its MD5 was calculated; no cache entry was saved."
-                : isRecalculation
+                : completed.WasRecalculation
                     ? $"Recalculated cached MD5 for {wad.Name}."
                     : $"Calculated and cached MD5 for {wad.Name}.";
             _logger.Info(
-                $"{(isRecalculation ? "Recalculated" : "Calculated")} cached MD5 for server WAD {wad.Name}.");
+                $"{(completed.WasRecalculation ? "Recalculated" : "Calculated")} cached MD5 for server WAD {wad.Name}.");
         }
         catch (Exception ex)
         {

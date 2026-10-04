@@ -82,6 +82,7 @@ public class WadFileEntry : INotifyPropertyChanged
 public partial class WadBrowserDialog : Window
 {
     private readonly SettingsService _settings;
+    private WadHashCacheService? _hashCache;
     private readonly LoggingService _logger = LoggingService.Instance;
     private readonly List<WadFileEntry> _allWads = new();
     private ObservableCollection<WadFileEntry> _filteredWads = new();
@@ -103,10 +104,13 @@ public partial class WadBrowserDialog : Window
     // For shift-click range selection
     // (Handled by built-in multi-select in ResizableListView)
 
-    public WadBrowserDialog()
+    public WadBrowserDialog() : this(SettingsService.Instance, null) { }
+
+    internal WadBrowserDialog(SettingsService settings, WadHashCacheService? hashCache)
     {
+        _settings = settings;
+        _hashCache = hashCache;
         InitializeComponent();
-        _settings = SettingsService.Instance;
 
         // Configure the list view columns
         WadListView.SelectionMode = ListViewSelectionMode.Multi;
@@ -192,7 +196,7 @@ public partial class WadBrowserDialog : Window
 
     private async Task ScanWadsAsync()
     {
-        if (_isScanning) return;
+        if (_isScanning || _isRefreshingSelectedHash || _isUpdatingHashCacheExclusions) return;
         _isScanning = true;
         _isClosing = false;
 
@@ -278,14 +282,16 @@ public partial class WadBrowserDialog : Window
         }
     }
 
-    private static WadBrowserScanResult ScanWadFiles(
+    private WadBrowserScanResult ScanWadFiles(
         IReadOnlyList<string> wadPaths,
         IProgress<WadFileScanProgress> progress,
         CancellationToken cancellationToken)
     {
         var entries = new List<WadFileEntry>();
         var skippedEntries = 0;
-        var hashCache = WadHashCacheService.Instance;
+        // The first cache load belongs to this scan worker, not to selection or
+        // context-menu opening on the UI thread.
+        var hashCache = _hashCache ??= WadHashCacheService.Instance;
 
         var scanResult = WadFileScanner.Scan(
             wadPaths,
@@ -512,28 +518,35 @@ public partial class WadBrowserDialog : Window
 
     private async void CacheAllHashesButton_Click(object? sender, RoutedEventArgs e)
     {
-        if (_isScanning || _allWads.Count == 0)
+        if (_isScanning || _isRefreshingSelectedHash || _isUpdatingHashCacheExclusions || _allWads.Count == 0)
             return;
 
-        if (!WadHashCacheService.Instance.IsEnabled)
+        if (!(_hashCache?.IsEnabled ?? false))
         {
             StatusLabel.Text = "Enable WAD hash caching in Preferences before caching files.";
             return;
         }
 
-        var dialog = new WadHashCacheDialog(_allWads.Select(wad => wad.FullPath));
-        await dialog.ShowDialog(this);
-
-        var hashCache = WadHashCacheService.Instance;
-        foreach (var wad in _allWads)
-        {
-            wad.SetHashCachingExcluded(hashCache.IsHashCachingExcluded(wad.FullPath));
-            wad.SetCachedHash(hashCache.TryGetCachedHash(wad.FullPath));
-        }
-
-        ApplyFilterAndSort();
-        UpdateStats();
+        _isRefreshingSelectedHash = true;
         UpdateActionAvailability();
+        try
+        {
+            var dialog = new WadHashCacheDialog(_allWads.Select(wad => wad.FullPath));
+            await dialog.ShowDialog(this);
+            await RefreshCachedStatusesAsync(_allWads);
+            ApplyFilterAndSort();
+            UpdateStats();
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Could not refresh WAD hash-cache status: {ex.Message}";
+            _logger.Warning($"Could not refresh WAD hash-cache status: {ex.Message}");
+        }
+        finally
+        {
+            _isRefreshingSelectedHash = false;
+            UpdateActionAvailability();
+        }
     }
 
     private static Control CreateCachedStatusCell()
@@ -568,41 +581,28 @@ public partial class WadBrowserDialog : Window
     private async Task CalculateSelectedHashAsync()
     {
         var selected = GetSingleSelectedWad();
-        if (_isScanning || _isRefreshingSelectedHash || selected == null)
+        if (_isScanning || _isRefreshingSelectedHash || _isUpdatingHashCacheExclusions || selected == null)
             return;
 
-        var hashCache = WadHashCacheService.Instance;
-        if (!hashCache.IsEnabled)
+        var hashCache = _hashCache;
+        var actions = hashCache?.GetActionsForFiles([selected.FullPath]) ?? WadHashActions.NoSelection;
+        if (!actions.CanCalculate)
         {
-            StatusLabel.Text = "Enable WAD hash caching in Preferences before calculating a cached MD5.";
+            StatusLabel.Text = actions.CalculateToolTip;
             return;
         }
 
-        if (hashCache.IsHashCachingExcluded(selected.FullPath))
-        {
-            StatusLabel.Text = $"{selected.NameWithExtension} is excluded from hash caching. Allow caching first to calculate its MD5.";
-            return;
-        }
-
-        var isRecalculation = !string.IsNullOrWhiteSpace(hashCache.TryGetCachedHash(selected.FullPath));
         _isRefreshingSelectedHash = true;
-        StatusLabel.Text = isRecalculation
+        StatusLabel.Text = actions.IsRecalculation
             ? $"Recalculating cached MD5 for {selected.NameWithExtension}..."
             : $"Calculating MD5 for {selected.NameWithExtension}...";
         UpdateActionAvailability();
 
         try
         {
-            var result = isRecalculation
-                ? await hashCache.RefreshHashAsync(
-                    selected.FullPath,
-                    progress: null,
-                    CancellationToken.None)
-                : await hashCache.GetHashAsync(
-                    selected.FullPath,
-                    progress: null,
-                    CancellationToken.None);
-            var cachedHash = hashCache.TryGetCachedHash(selected.FullPath);
+            var completed = await hashCache!.CalculateAndCacheHashAsync(selected.FullPath, CancellationToken.None);
+            var result = completed.HashResult;
+            var cachedHash = completed.CachedHash;
             selected.SetCachedHash(cachedHash);
 
             if (!result.IsSuccess)
@@ -616,13 +616,13 @@ public partial class WadBrowserDialog : Window
             UpdateStats();
             StatusLabel.Text = cachedHash == null
                 ? $"{selected.NameWithExtension} changed while its MD5 was calculated; no cache entry was saved."
-                : isRecalculation
+                : completed.WasRecalculation
                     ? $"Recalculated cached MD5 for {selected.NameWithExtension}."
                     : $"Calculated and cached MD5 for {selected.NameWithExtension}.";
         }
         catch (Exception ex)
         {
-            selected.SetCachedHash(hashCache.TryGetCachedHash(selected.FullPath));
+            selected.SetCachedHash(null);
             StatusLabel.Text = $"Could not calculate {selected.NameWithExtension}: {ex.Message}";
         }
         finally
@@ -653,7 +653,7 @@ public partial class WadBrowserDialog : Window
 
         _calculateHashMenuItem = new MenuItem
         {
-            Header = "Calculate _Hash",
+            Header = WadHashActions.NoSelection.CalculateHeader,
             IsEnabled = false
         };
         _calculateHashMenuItem.Click += CalculateHashMenuItem_Click;
@@ -661,7 +661,7 @@ public partial class WadBrowserDialog : Window
 
         _toggleHashCachingMenuItem = new MenuItem
         {
-            Header = "_Don't Cache Hash",
+            Header = WadHashActions.NoSelection.ToggleExclusionHeader,
             IsEnabled = false
         };
         _toggleHashCachingMenuItem.Click += ToggleHashCachingMenuItem_Click;
@@ -691,8 +691,10 @@ public partial class WadBrowserDialog : Window
         if (_isScanning || _isRefreshingSelectedHash || _isUpdatingHashCacheExclusions || selected.Count == 0)
             return;
 
-        var hashCache = WadHashCacheService.Instance;
-        var shouldExclude = selected.Any(wad => !hashCache.IsHashCachingExcluded(wad.FullPath));
+        var hashCache = _hashCache;
+        var actions = hashCache?.GetActionsForFiles(selected.Select(wad => wad.FullPath)) ?? WadHashActions.NoSelection;
+        if (!actions.CanToggleExclusion) return;
+        var shouldExclude = actions.ShouldExclude;
         _isUpdatingHashCacheExclusions = true;
         StatusLabel.Text = shouldExclude
             ? "Updating per-file hash cache preference..."
@@ -701,15 +703,11 @@ public partial class WadBrowserDialog : Window
 
         try
         {
-            await hashCache.SetHashCachingExcludedAsync(
+            await hashCache!.SetHashCachingExcludedAsync(
                 selected.Select(wad => wad.FullPath),
                 shouldExclude);
 
-            foreach (var wad in selected)
-            {
-                wad.SetHashCachingExcluded(hashCache.IsHashCachingExcluded(wad.FullPath));
-                wad.SetCachedHash(hashCache.TryGetCachedHash(wad.FullPath));
-            }
+            await RefreshCachedStatusesAsync(selected);
 
             ApplyFilterAndSort();
             UpdateStats();
@@ -735,6 +733,22 @@ public partial class WadBrowserDialog : Window
         }
     }
 
+    private async Task RefreshCachedStatusesAsync(IEnumerable<WadFileEntry> entries)
+    {
+        var hashCache = _hashCache;
+        if (hashCache == null) return;
+        var snapshot = entries.ToList();
+        var states = await Task.Run(() => snapshot.Select(wad => (
+            Wad: wad,
+            IsExcluded: hashCache.IsHashCachingExcluded(wad.FullPath),
+            Hash: hashCache.TryGetCachedHash(wad.FullPath))).ToList());
+        foreach (var state in states)
+        {
+            state.Wad.SetHashCachingExcluded(state.IsExcluded);
+            state.Wad.SetCachedHash(state.Hash);
+        }
+    }
+
     private void UpdateActionAvailability()
     {
         var selected = GetSelectedWads();
@@ -742,52 +756,24 @@ public partial class WadBrowserDialog : Window
         var hasSingleSelection = selectedCount == 1;
         var hasSelection = selectedCount > 0;
         var isBusy = _isScanning || _isRefreshingSelectedHash || _isUpdatingHashCacheExclusions;
-        var hashCache = WadHashCacheService.Instance;
-        var hashCachingEnabled = hashCache.IsEnabled;
-        var selectedFileIsExcluded = hasSingleSelection
-            && hashCache.IsHashCachingExcluded(selected[0].FullPath);
-        var allSelectedFilesAreExcluded = hasSelection
-            && selected.All(wad => hashCache.IsHashCachingExcluded(wad.FullPath));
+        var actions = _hashCache?.GetActionsForFiles(selected.Select(wad => wad.FullPath), isBusy)
+            ?? WadHashActions.NoSelection;
 
         RefreshButton.IsEnabled = !isBusy;
-        CacheAllHashesButton.IsEnabled = !isBusy && hashCachingEnabled && _allWads.Count > 0;
+        CacheAllHashesButton.IsEnabled = !isBusy && actions.CachingEnabled && _allWads.Count > 0;
         if (_locateFileMenuItem != null)
             _locateFileMenuItem.IsEnabled = !isBusy && hasSingleSelection;
         if (_calculateHashMenuItem != null)
         {
-            var hasCachedHash = hasSingleSelection
-                && !selectedFileIsExcluded
-                && !string.IsNullOrWhiteSpace(hashCache.TryGetCachedHash(selected[0].FullPath));
-            _calculateHashMenuItem.IsEnabled = !isBusy
-                && hashCachingEnabled
-                && hasSingleSelection
-                && !selectedFileIsExcluded;
-            _calculateHashMenuItem.Header = hasCachedHash
-                ? "_Recalculate Hash"
-                : "Calculate _Hash";
-            ToolTip.SetTip(
-                _calculateHashMenuItem,
-                !hasSingleSelection
-                    ? "Select one WAD file first."
-                    : !hashCachingEnabled
-                        ? "Enable WAD hash caching in Preferences before calculating a cached MD5."
-                        : selectedFileIsExcluded
-                            ? "Allow hash caching for this file before calculating a cached MD5."
-                            : hasCachedHash
-                                ? "Calculate this file's MD5 again and replace its cached value."
-                                : "Calculate this file's MD5 and save it in the local hash cache.");
+            _calculateHashMenuItem.IsEnabled = actions.CanCalculate;
+            _calculateHashMenuItem.Header = actions.CalculateHeader;
+            ToolTip.SetTip(_calculateHashMenuItem, actions.CalculateToolTip);
         }
         if (_toggleHashCachingMenuItem != null)
         {
-            _toggleHashCachingMenuItem.IsEnabled = !isBusy && hasSelection;
-            _toggleHashCachingMenuItem.Header = allSelectedFilesAreExcluded
-                ? hasSingleSelection ? "Allow Hash _Caching" : "Allow Hash Caching for _Selected Files"
-                : hasSingleSelection ? "_Don't Cache Hash" : "_Don't Cache Selected Hashes";
-            ToolTip.SetTip(
-                _toggleHashCachingMenuItem,
-                allSelectedFilesAreExcluded
-                    ? "Allow these files to receive a fresh cached MD5 on a later verification or cache pass."
-                    : "Do not reuse or store cached MD5 values for these files. Server hash verification still runs normally.");
+            _toggleHashCachingMenuItem.IsEnabled = actions.CanToggleExclusion;
+            _toggleHashCachingMenuItem.Header = actions.ToggleExclusionHeader;
+            ToolTip.SetTip(_toggleHashCachingMenuItem, actions.ToggleExclusionToolTip);
         }
         if (_deleteSelectedMenuItem != null)
             _deleteSelectedMenuItem.IsEnabled = !isBusy && hasSelection;

@@ -115,7 +115,7 @@ public sealed class WadHashCacheService
         }
 
         if (changed)
-            await PersistIfDirtyAsync().ConfigureAwait(false);
+            await Task.Run(PersistIfDirtyAsync).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -146,8 +146,56 @@ public sealed class WadHashCacheService
             return false;
 
         lock (_entriesLock)
-            return !_excludedPaths.Contains(normalizedPath)
-                && _entries.ContainsKey(normalizedPath);
+            return HasCachedEntryForNormalizedPath(normalizedPath);
+    }
+
+    /// <summary>
+    /// Menu hints use only canonical paths and in-memory metadata. A recorded
+    /// entry means an explicit action should recalculate it, not that its file
+    /// snapshot is still valid. Validation belongs to the actual hash operation.
+    /// </summary>
+    public WadHashActions GetActionsForFiles(IEnumerable<string> filePaths, bool isBusy = false)
+    {
+        // Preserve the selection count: even two rows pointing at the same
+        // canonical file are a multi-selection, not a single calculate action.
+        var paths = filePaths.Select(NormalizePath).OfType<string>().ToList();
+        var enabled = IsEnabled;
+        lock (_entriesLock)
+        {
+            var allExcluded = paths.Count > 0 && paths.All(_excludedPaths.Contains);
+            var hasRecordedHash = paths.Count == 1 && enabled
+                && HasCachedEntryForNormalizedPath(paths[0]);
+            return new WadHashActions(paths.Count, enabled, allExcluded, hasRecordedHash, isBusy);
+        }
+    }
+
+    private bool HasCachedEntryForNormalizedPath(string path) =>
+        !_excludedPaths.Contains(path) && _entries.ContainsKey(path);
+
+    /// <summary>
+    /// Runs a manual cache action, including its initial file inspection and
+    /// post-calculation snapshot validation, away from the caller's UI thread.
+    /// Ordinary verification still uses GetHashAsync and is never suppressed
+    /// by cache preferences or the manual-action eligibility policy.
+    /// </summary>
+    public Task<WadHashActionResult> CalculateAndCacheHashAsync(
+        string filePath, CancellationToken cancellationToken)
+    {
+        return Task.Run(async () =>
+        {
+            var actions = GetActionsForFiles([filePath]);
+            if (!actions.CanCalculate)
+            {
+                return new WadHashActionResult(
+                    new WadHashResult(null, false, 0, actions.CalculateToolTip),
+                    CachedHash: null, actions.IsRecalculation);
+            }
+
+            var result = actions.IsRecalculation
+                ? await RefreshHashAsync(filePath, null, cancellationToken).ConfigureAwait(false)
+                : await GetHashAsync(filePath, null, cancellationToken).ConfigureAwait(false);
+            return new WadHashActionResult(result, TryGetCachedHash(filePath), actions.IsRecalculation);
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -729,6 +777,40 @@ public sealed record WadHashResult(
 {
     public bool IsSuccess => !string.IsNullOrWhiteSpace(Hash);
 }
+
+/// <summary>Filesystem-free presentation and eligibility for WAD hash actions.</summary>
+public sealed record WadHashActions(
+    int SelectedFileCount,
+    bool CachingEnabled,
+    bool AllFilesExcluded,
+    bool IsRecalculation,
+    bool IsBusy)
+{
+    public static WadHashActions NoSelection { get; } = new(0, false, false, false, false);
+    public bool CanCalculate => !IsBusy && CachingEnabled && SelectedFileCount == 1 && !AllFilesExcluded;
+    // Exclusions remain editable while global caching is disabled.
+    public bool CanToggleExclusion => !IsBusy && SelectedFileCount > 0;
+    public bool ShouldExclude => SelectedFileCount > 0 && !AllFilesExcluded;
+    public string CalculateHeader => IsRecalculation ? "_Recalculate Hash" : "Calculate _Hash";
+    public string CalculateToolTip => SelectedFileCount != 1
+        ? "Select one local WAD file first."
+        : !CachingEnabled
+            ? "Enable WAD hash caching in Preferences before calculating a cached MD5."
+            : AllFilesExcluded
+                ? "Allow hash caching for this file before calculating a cached MD5."
+                : IsRecalculation
+                    ? "Calculate this file's MD5 again and replace its cached value."
+                    : "Calculate this file's MD5 and save it in the local hash cache.";
+    public string ToggleExclusionHeader => AllFilesExcluded
+        ? SelectedFileCount == 1 ? "Allow Hash _Caching" : "Allow Hash Caching for _Selected Files"
+        : SelectedFileCount <= 1 ? "_Don't Cache Hash" : "_Don't Cache Selected Hashes";
+    public string ToggleExclusionToolTip => AllFilesExcluded
+        ? "Allow these files to receive a fresh cached MD5 on a later verification or cache pass."
+        : "Do not reuse or store cached MD5 values for these files. Server hash verification still runs normally.";
+}
+
+/// <summary>A completed manual operation plus its freshly validated cache state.</summary>
+public sealed record WadHashActionResult(WadHashResult HashResult, string? CachedHash, bool WasRecalculation);
 
 /// <summary>Progress stage for a background WAD hash-cache operation.</summary>
 public enum WadHashCacheProgressStage
