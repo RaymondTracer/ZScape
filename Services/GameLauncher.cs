@@ -1,10 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
-using SharpCompress.Archives;
-using SharpCompress.Common;
 using ZScape.Models;
 using ZScape.Utilities;
 
@@ -937,29 +934,22 @@ public class GameLauncher : IDisposable
             try
             {
                 await DownloadTestingArchiveAsync(archiveUri, tempFile, totalBytes, response);
+
+                DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
+                {
+                    Status = "Extracting...",
+                    ProgressPercent = 90,
+                    DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
+                    TotalBytes = totalBytes > 0 ? totalBytes : 0
+                });
+
+                Directory.CreateDirectory(versionFolder);
+                await Task.Run(() => ExtractArchive(tempFile, versionFolder, archiveUri.AbsoluteUri, totalBytes));
             }
-            catch
+            finally
             {
                 try { File.Delete(tempFile); } catch { }
-                throw;
             }
-
-            DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
-            {
-                Status = "Extracting...",
-                ProgressPercent = 90,
-                DownloadedBytes = totalBytes > 0 ? totalBytes : 0,
-                TotalBytes = totalBytes > 0 ? totalBytes : 0
-            });
-
-            // Create version folder
-            Directory.CreateDirectory(versionFolder);
-
-            // Extract archive
-            await Task.Run(() => ExtractArchive(tempFile, versionFolder, archiveUri.AbsoluteUri));
-
-            // Clean up temp file
-            try { File.Delete(tempFile); } catch { }
 
             // Copy configuration files from base Zandronum directory (matches Doomseeker behavior)
             DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
@@ -1288,29 +1278,22 @@ public class GameLauncher : IDisposable
     }
 
     /// <summary>
-    /// Extracts an archive (zip, 7z, tar.gz, etc.) to the destination folder using SharpCompress.
+    /// Extracts a testing archive through the shared installer destination policy.
     /// </summary>
-    private void ExtractArchive(string archivePath, string destinationFolder, string originalUrl)
+    private void ExtractArchive(string archivePath, string destinationFolder, string originalUrl, long totalBytes)
     {
         var extension = Path.GetExtension(originalUrl).ToLowerInvariant();
-        
-        // For simple zip files, use built-in ZipFile for efficiency
-        if (extension == ".zip" || extension == ".pk3")
-        {
-            ZipFile.ExtractToDirectory(archivePath, destinationFolder, overwriteFiles: true);
-            return;
-        }
-        
-        // Use SharpCompress for all other archive formats (7z, rar, tar, etc.)
-        using var archive = ArchiveFactory.Open(archivePath);
-        foreach (var entry in archive.Entries.Where(e => !e.IsDirectory))
-        {
-            entry.WriteToDirectory(destinationFolder, new ExtractionOptions
+        var format = extension is ".zip" or ".pk3"
+            ? ArchiveExtractionFormat.Zip
+            : ArchiveExtractionFormat.SharpCompress;
+        ArchiveExtractionService.Extract(archivePath, destinationFolder, format, update =>
+            DownloadProgress?.Invoke(this, new TestingBuildDownloadProgress
             {
-                ExtractFullPath = true,
-                Overwrite = true
-            });
-        }
+                Status = $"Extracting {update.EntryName}...",
+                ProgressPercent = 90 + update.Percent * 5 / 100,
+                DownloadedBytes = Math.Max(totalBytes, 0),
+                TotalBytes = Math.Max(totalBytes, 0)
+            }));
     }
 
     /// <summary>

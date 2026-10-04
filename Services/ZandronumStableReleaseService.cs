@@ -1,12 +1,10 @@
 using System.Diagnostics;
-using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using SharpCompress.Archives;
-using SharpCompress.Common;
 using ZScape.Models;
+using ZScape.Utilities;
 
 namespace ZScape.Services;
 
@@ -406,13 +404,14 @@ public sealed class ZandronumStableReleaseService
                 cancellationToken);
         }
 
-        if (release.ArchiveFileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-        {
-            await Task.Run(() => ExtractZipArchiveSafely(archivePath, installDirectory, progress, release.Version, cancellationToken), cancellationToken);
-            return installDirectory;
-        }
-
-        await Task.Run(() => ExtractSharpCompressArchiveSafely(archivePath, installDirectory, progress, release.Version, cancellationToken), cancellationToken);
+        var format = release.ArchiveFileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+            ? ArchiveExtractionFormat.Zip
+            : ArchiveExtractionFormat.SharpCompress;
+        await Task.Run(() => ArchiveExtractionService.Extract(
+            archivePath, installDirectory, format,
+            update => progress?.Report(new InstallProgress(
+                $"Extracting {update.EntryName}...", 10 + update.Percent * 90 / 100)),
+            cancellationToken), cancellationToken);
         return installDirectory;
     }
 
@@ -469,73 +468,6 @@ public sealed class ZandronumStableReleaseService
         {
             TryUnmountDiskImage(mountPoint);
         }
-    }
-
-    private static void ExtractZipArchiveSafely(
-        string archivePath,
-        string destinationDirectory,
-        IProgress<InstallProgress>? progress,
-        string version,
-        CancellationToken cancellationToken)
-    {
-        using var archive = ZipFile.OpenRead(archivePath);
-        var fileEntries = archive.Entries.Where(entry => !IsZipDirectory(entry)).ToList();
-
-        for (var index = 0; index < fileEntries.Count; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var entry = fileEntries[index];
-            var destinationPath = GetSafeDestinationPath(destinationDirectory, entry.FullName);
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-            entry.ExtractToFile(destinationPath, overwrite: true);
-
-            progress?.Report(CreateExtractionProgress(version, index + 1, fileEntries.Count, 10, 100, entry.FullName));
-        }
-    }
-
-    private static void ExtractSharpCompressArchiveSafely(
-        string archivePath,
-        string destinationDirectory,
-        IProgress<InstallProgress>? progress,
-        string version,
-        CancellationToken cancellationToken)
-    {
-        using var archive = ArchiveFactory.Open(archivePath);
-        var fileEntries = archive.Entries.Where(entry => !entry.IsDirectory).ToList();
-
-        for (var index = 0; index < fileEntries.Count; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var entry = fileEntries[index];
-            var entryKey = entry.Key ?? string.Empty;
-            var destinationPath = GetSafeDestinationPath(destinationDirectory, entryKey);
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-            entry.WriteToFile(destinationPath, new ExtractionOptions { Overwrite = true });
-
-            progress?.Report(CreateExtractionProgress(version, index + 1, fileEntries.Count, 10, 100, entryKey));
-        }
-    }
-
-    private static InstallProgress CreateExtractionProgress(
-        string version,
-        int current,
-        int total,
-        int startPercent,
-        int endPercent,
-        string currentEntry)
-    {
-        var progressPercent = total > 0
-            ? startPercent + (current * (endPercent - startPercent)) / total
-            : endPercent;
-
-        var entryName = Path.GetFileName(currentEntry.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar));
-        return new InstallProgress(
-            Status: string.IsNullOrEmpty(entryName)
-                ? $"Extracting Zandronum {version}..."
-                : $"Extracting {entryName}...",
-            ProgressPercent: Math.Min(progressPercent, endPercent));
     }
 
     private static InstallProgress CreateDownloadProgress(
@@ -601,39 +533,6 @@ public sealed class ZandronumStableReleaseService
             var mappedPercent = startPercent + (int)Math.Round((endPercent - startPercent) * (update.ProgressPercent / 100d));
             progress.Report(update with { ProgressPercent = Math.Clamp(mappedPercent, startPercent, endPercent) });
         });
-    }
-
-    private static bool IsZipDirectory(ZipArchiveEntry entry) =>
-        string.IsNullOrEmpty(entry.Name) && entry.FullName.EndsWith("/", StringComparison.Ordinal);
-
-    private static string GetSafeDestinationPath(string destinationDirectory, string entryPath)
-    {
-        if (string.IsNullOrWhiteSpace(entryPath))
-        {
-            throw new InvalidDataException("Archive entry path was empty.");
-        }
-
-        var normalizedEntryPath = entryPath
-            .Replace('/', Path.DirectorySeparatorChar)
-            .Replace('\\', Path.DirectorySeparatorChar)
-            .TrimStart(Path.DirectorySeparatorChar);
-
-        if (string.IsNullOrWhiteSpace(normalizedEntryPath))
-        {
-            throw new InvalidDataException("Archive entry path was invalid.");
-        }
-
-        var rootPath = Path.GetFullPath(destinationDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        var destinationPath = Path.GetFullPath(Path.Combine(rootPath, normalizedEntryPath));
-        var expectedPrefix = rootPath + Path.DirectorySeparatorChar;
-
-        if (!destinationPath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(destinationPath, rootPath, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException($"Archive entry would extract outside the destination directory: {entryPath}");
-        }
-
-        return destinationPath;
     }
 
     private static string FindExecutablePath(string installDirectory, string executableName)

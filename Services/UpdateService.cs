@@ -3,8 +3,6 @@ using System.Net.Http.Json;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
-using SharpCompress.Archives;
-using SharpCompress.Common;
 
 namespace ZScape.Services;
 
@@ -263,17 +261,7 @@ public class UpdateService
             Directory.CreateDirectory(extractPath);
             
             // Extract the update
-            using (var archive = ArchiveFactory.Open(_downloadedUpdatePath))
-            {
-                foreach (var entry in archive.Entries.Where(e => !e.IsDirectory))
-                {
-                    entry.WriteToDirectory(extractPath, new ExtractionOptions
-                    {
-                        ExtractFullPath = true,
-                        Overwrite = true
-                    });
-                }
-            }
+            ArchiveExtractionService.Extract(_downloadedUpdatePath, extractPath, ArchiveExtractionFormat.SharpCompress);
 
             var payload = ResolveExtractedPayload(extractPath);
             
