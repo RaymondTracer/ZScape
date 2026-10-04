@@ -361,13 +361,6 @@ public partial class LaunchGameDialog : Window
             }
         }
 
-        foreach (var file in files)
-        {
-            var dir = Path.GetDirectoryName(file.Path.LocalPath);
-            if (!string.IsNullOrEmpty(dir))
-                _wadManager.AddSearchPath(dir);
-        }
-
         if (PwadsListView.SelectedItem == null && _pwads.Count > 0)
             PwadsListView.SelectItem(_pwads[^1]);
     }
@@ -442,9 +435,6 @@ public partial class LaunchGameDialog : Window
         }
 
         _pwads[idx].Path = newPath;
-        var dir = Path.GetDirectoryName(newPath);
-        if (!string.IsNullOrEmpty(dir))
-            _wadManager.AddSearchPath(dir);
     }
 
     private void EnableAllPwadButton_Click(object? sender, RoutedEventArgs e)
