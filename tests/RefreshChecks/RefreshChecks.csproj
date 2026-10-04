@@ -9,6 +9,5 @@
   <ItemGroup>
     <ProjectReference Include="../../ZScape.csproj" />
     <PackageReference Include="Avalonia.Headless" Version="11.2.3" />
-    <Compile Include="../../Services/ServerUpdateBatch.cs" Link="ServerUpdateBatch.cs" />
   </ItemGroup>
 </Project>

@@ -37,10 +37,12 @@ public class SettingsService
 
     public event EventHandler? SettingsChanged;
 
-    private SettingsService()
+    private SettingsService() : this(AppContext.BaseDirectory) { }
+
+    internal SettingsService(string directory)
     {
         // Save settings in the same directory as the executable (portable mode)
-        var exeDirectory = AppContext.BaseDirectory;
+        var exeDirectory = directory;
         _settingsPath = Path.Combine(exeDirectory, "settings.json");
         _historyPath = Path.Combine(exeDirectory, "history.json");
         _domainSettingsPath = Path.Combine(exeDirectory, "domain-settings.json");
@@ -95,7 +97,7 @@ public class SettingsService
             settingsJson.TryGetProperty("serverListSorts", out _);
         settings.FavoriteServers ??= [];
         settings.ManualServers ??= [];
-        settings.WadSearchPaths ??= [];
+        settings.WadSearchPaths = PathResolver.DistinctDirectoryPaths(settings.WadSearchPaths ?? []);
         settings.DownloadSites ??= [];
         settings.FavoriteServerNameRules = NormalizeRules(settings.FavoriteServerNameRules);
         settings.HiddenServerNameRules = NormalizeRules(settings.HiddenServerNameRules);

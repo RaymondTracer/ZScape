@@ -8,6 +8,40 @@ namespace ZScape.Utilities;
 /// </summary>
 public static class PathResolver
 {
+    // Directory identity is platform-sensitive; WAD filename matching has its
+    // own deliberately case-insensitive rule in WadManager.
+    public static StringComparer DirectoryPathComparer { get; } =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    public static string NormalizeDirectoryPath(string path)
+    {
+        try
+        {
+            path = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+        {
+            // Preserve unavailable/invalid configured text for the user to edit.
+        }
+
+        return Path.TrimEndingDirectorySeparator(path);
+    }
+
+    public static bool DirectoryPathsEqual(string? left, string? right) =>
+        left is not null && right is not null
+        && DirectoryPathComparer.Equals(NormalizeDirectoryPath(left), NormalizeDirectoryPath(right));
+
+    /// <summary>
+    /// Retains the first spelling and explicit order without probing the filesystem.
+    /// Availability is runtime state, not a reason to discard saved configuration.
+    /// </summary>
+    public static List<string> DistinctDirectoryPaths(IEnumerable<string> paths)
+    {
+        var seen = new HashSet<string>(DirectoryPathComparer);
+        return paths.Where(path => !string.IsNullOrWhiteSpace(path)
+            && seen.Add(NormalizeDirectoryPath(path))).ToList();
+    }
+
     /// <summary>
     /// Folder under the current user's Documents directory that ZScape owns
     /// for non-runtime files such as build archives and safe backups.

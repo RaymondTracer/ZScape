@@ -277,7 +277,8 @@ public partial class UnifiedSettingsDialog : Window
             _wadPaths.Add(DownloadFolderPrefix + "(not set)");
         }
         // Add other search paths, excluding the download path (it's already first)
-        foreach (var path in Settings.WadSearchPaths.Where(p => !p.Equals(downloadPath, StringComparison.OrdinalIgnoreCase)))
+        foreach (var path in PathResolver.DistinctDirectoryPaths(Settings.WadSearchPaths)
+            .Where(p => !PathResolver.DirectoryPathsEqual(p, downloadPath)))
         {
             _wadPaths.Add(path);
         }
@@ -653,20 +654,8 @@ public partial class UnifiedSettingsDialog : Window
         Settings.WadDownloadPath = downloadPath;
         
         // Build search paths list: download folder first, then other paths
-        var searchPaths = new System.Collections.Generic.List<string>();
-        if (!string.IsNullOrEmpty(downloadPath))
-        {
-            searchPaths.Add(downloadPath);
-        }
-        // Add remaining paths (skip index 0 which is the prefixed download folder)
-        foreach (var path in _wadPaths.Skip(1))
-        {
-            if (!string.IsNullOrEmpty(path) && !searchPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
-            {
-                searchPaths.Add(path);
-            }
-        }
-        Settings.WadSearchPaths = searchPaths;
+        Settings.WadSearchPaths = PathResolver.DistinctDirectoryPaths(
+            new[] { downloadPath }.Concat(_wadPaths.Skip(1)));
 
         // Download Sites
         Settings.DownloadSites = _downloadSites.ToList();
@@ -987,11 +976,11 @@ public partial class UnifiedSettingsDialog : Window
             var downloadPath = WadDownloadPathTextBox.Text?.Trim() ?? "";
             
             // Check if it's the download folder
-            if (path.Equals(downloadPath, StringComparison.OrdinalIgnoreCase))
+            if (PathResolver.DirectoryPathsEqual(path, downloadPath))
                 return; // Already the download folder
             
             // Check if already in list (skip index 0 which has prefix)
-            if (!_wadPaths.Skip(1).Any(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)))
+            if (!_wadPaths.Skip(1).Any(p => PathResolver.DirectoryPathsEqual(p, path)))
             {
                 _wadPaths.Add(path);
             }
@@ -1054,7 +1043,7 @@ public partial class UnifiedSettingsDialog : Window
         // Add the old download folder as a regular search path if valid
         if (!string.IsNullOrEmpty(oldDownloadPath) && 
             Directory.Exists(oldDownloadPath) &&
-            !_wadPaths.Skip(1).Any(p => p.Equals(oldDownloadPath, StringComparison.OrdinalIgnoreCase)))
+            !_wadPaths.Skip(1).Any(p => PathResolver.DirectoryPathsEqual(p, oldDownloadPath)))
         {
             _wadPaths.Insert(1, oldDownloadPath);
         }
@@ -1078,8 +1067,8 @@ public partial class UnifiedSettingsDialog : Window
             // Preserve old download path as a search path if valid and different
             if (!string.IsNullOrEmpty(oldDownloadPath) && 
                 Directory.Exists(oldDownloadPath) &&
-                !oldDownloadPath.Equals(newPath, StringComparison.OrdinalIgnoreCase) &&
-                !_wadPaths.Skip(1).Any(p => p.Equals(oldDownloadPath, StringComparison.OrdinalIgnoreCase)))
+                !PathResolver.DirectoryPathsEqual(oldDownloadPath, newPath) &&
+                !_wadPaths.Skip(1).Any(p => PathResolver.DirectoryPathsEqual(p, oldDownloadPath)))
             {
                 _wadPaths.Insert(1, oldDownloadPath);
             }

@@ -1644,10 +1644,8 @@ public partial class MainWindow : Window
         settings.GameModeFilterIndex = GameModeComboBox?.SelectedIndex ?? 0;
         settings.SearchText = SearchBox?.Text ?? "";
 
-        // WAD settings
-        settings.WadSearchPaths = _wadManager.SearchPaths.ToList();
-        settings.WadDownloadPath = _wadManager.DownloadPath;
-
+        // WAD configuration is owned by settings editors, not the runtime
+        // discovery snapshot (which can contain defaults or unavailable roots).
         CapturePanelLayout();
 
         _settings.Save();

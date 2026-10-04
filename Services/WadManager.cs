@@ -24,10 +24,10 @@ public class WadManager
     
     private readonly ConcurrentDictionary<string, string> _wadCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _rootFileNameIndex =
-        new(StringComparer.OrdinalIgnoreCase);
+        new(PathResolver.DirectoryPathComparer);
     private readonly object _searchPathsLock = new();
-    private readonly HashSet<string> _searchPaths = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _executableFolders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _searchPaths = [];
+    private readonly List<string> _executableFolders = [];
     private string _downloadPath = string.Empty;
     private readonly LoggingService _logger = LoggingService.Instance;
     
@@ -91,17 +91,20 @@ public class WadManager
         }
     }
     
-    private WadManager() { }
+    internal WadManager() { }
     
     /// <summary>
     /// Adds a search path for WAD files.
     /// </summary>
     public void AddSearchPath(string path)
     {
-        if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+        if (!string.IsNullOrWhiteSpace(path))
         {
             lock (_searchPathsLock)
-                _searchPaths.Add(path);
+            {
+                if (!_searchPaths.Any(existing => PathResolver.DirectoryPathsEqual(existing, path)))
+                    _searchPaths.Add(path);
+            }
         }
     }
     
@@ -111,7 +114,7 @@ public class WadManager
     public void RemoveSearchPath(string path)
     {
         lock (_searchPathsLock)
-            _searchPaths.Remove(path);
+            _searchPaths.RemoveAll(existing => PathResolver.DirectoryPathsEqual(existing, path));
     }
     
     /// <summary>
@@ -128,14 +131,12 @@ public class WadManager
     /// </summary>
     public void SetSearchPaths(IEnumerable<string> paths)
     {
-        var validatedPaths = paths
-            .Where(p => !string.IsNullOrWhiteSpace(p) && Directory.Exists(p))
-            .ToArray();
+        var configuredPaths = PathResolver.DistinctDirectoryPaths(paths);
 
         lock (_searchPathsLock)
         {
             _searchPaths.Clear();
-            _searchPaths.UnionWith(validatedPaths);
+            _searchPaths.AddRange(configuredPaths);
         }
     }
     
@@ -147,7 +148,7 @@ public class WadManager
     public void SetExecutableFolders(IEnumerable<string> exePaths)
     {
         var pathList = exePaths.ToList();
-        var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var folders = new List<string>();
         foreach (var exePath in pathList)
         {
             if (string.IsNullOrWhiteSpace(exePath))
@@ -160,7 +161,8 @@ public class WadManager
             var folder = Path.GetDirectoryName(exePath);
             if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
             {
-                folders.Add(folder);
+                if (!folders.Any(existing => PathResolver.DirectoryPathsEqual(existing, folder)))
+                    folders.Add(folder);
                 _logger.Verbose($"Added WAD search folder: {folder}");
             }
         }
@@ -168,7 +170,7 @@ public class WadManager
         lock (_searchPathsLock)
         {
             _executableFolders.Clear();
-            _executableFolders.UnionWith(folders);
+            _executableFolders.AddRange(folders);
         }
     }
     
@@ -180,7 +182,10 @@ public class WadManager
         if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
         {
             lock (_searchPathsLock)
-                _executableFolders.Add(folder);
+            {
+                if (!_executableFolders.Any(existing => PathResolver.DirectoryPathsEqual(existing, folder)))
+                    _executableFolders.Add(folder);
+            }
         }
     }
     
@@ -237,7 +242,7 @@ public class WadManager
         }
 
         var orderedPaths = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(PathResolver.DirectoryPathComparer);
 
         void AddPath(string? path)
         {
@@ -247,7 +252,7 @@ public class WadManager
                 return;
             }
 
-            var normalizedPath = NormalizePathKey(path);
+            var normalizedPath = PathResolver.NormalizeDirectoryPath(path);
             if (seen.Add(normalizedPath))
             {
                 orderedPaths.Add(path);
@@ -269,20 +274,6 @@ public class WadManager
         return orderedPaths;
     }
 
-    private static string NormalizePathKey(string path)
-    {
-        try
-        {
-            path = Path.GetFullPath(path);
-        }
-        catch
-        {
-            // Keep the original path if normalization fails.
-        }
-
-        return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
-    
     private void ScanDirectory(string path)
     {
         var scanResult = WadFileScanner.Scan(
@@ -306,7 +297,7 @@ public class WadManager
             }
         }
 
-        _rootFileNameIndex[NormalizePathKey(path)] = filesInRoot;
+        _rootFileNameIndex[PathResolver.NormalizeDirectoryPath(path)] = filesInRoot;
 
         _logger.Verbose(
             $"  Scanned {path}: found {count} WAD files after checking {scanResult.FilesExamined} top-level files");
@@ -335,7 +326,7 @@ public class WadManager
 
         foreach (var searchRoot in GetSearchRootsInPriorityOrder(requireExistingDirectories: false))
         {
-            var rootKey = NormalizePathKey(searchRoot);
+            var rootKey = PathResolver.NormalizeDirectoryPath(searchRoot);
             var directPath = Path.Combine(searchRoot, fileName);
 
             // The root index uses OrdinalIgnoreCase, so differently-cased
@@ -700,7 +691,7 @@ public class WadManager
             // Update both the priority cache and that root's case-insensitive
             // top-level filename index.
             var rootIndex = _rootFileNameIndex.GetOrAdd(
-                NormalizePathKey(directory),
+                PathResolver.NormalizeDirectoryPath(directory),
                 _ => new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase));
             rootIndex.TryRemove(Path.GetFileName(archivedPath), out _);
             rootIndex[standardName] = newPath;

@@ -288,19 +288,19 @@ public partial class FirstTimeSetupDialog : Window
     private void LoadExistingWadPaths()
     {
         var downloadPath = WadDownloadPathTextBox.Text?.Trim() ?? string.Empty;
-        foreach (var path in Settings.WadSearchPaths)
+        foreach (var path in PathResolver.DistinctDirectoryPaths(Settings.WadSearchPaths))
         {
             if (string.IsNullOrWhiteSpace(path))
             {
                 continue;
             }
 
-            if (!string.IsNullOrEmpty(downloadPath) && path.Equals(downloadPath, StringComparison.OrdinalIgnoreCase))
+            if (PathResolver.DirectoryPathsEqual(path, downloadPath))
             {
                 continue;
             }
 
-            if (_wadPaths.Any(existing => NormalizeDisplayedWadPath(existing).Equals(path, StringComparison.OrdinalIgnoreCase)))
+            if (_wadPaths.Any(existing => PathResolver.DirectoryPathsEqual(NormalizeDisplayedWadPath(existing), path)))
             {
                 continue;
             }
@@ -614,7 +614,7 @@ public partial class FirstTimeSetupDialog : Window
             var existingPaths = _wadPaths
                 .Select(p => p.StartsWith(DownloadFolderPrefix) ? p[DownloadFolderPrefix.Length..] : p);
 
-            if (!existingPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
+            if (!existingPaths.Any(existing => PathResolver.DirectoryPathsEqual(existing, path)))
             {
                 _wadPaths.Add(path);
             }
@@ -729,16 +729,8 @@ public partial class FirstTimeSetupDialog : Window
         Settings.ZandronumTestingPath = TestingFolderTextBox.Text?.Trim() ?? string.Empty;
 
         // Save WAD paths
-        var wadPaths = new List<string>();
-        foreach (var item in _wadPaths)
-        {
-            var path = item;
-            if (path.StartsWith(DownloadFolderPrefix))
-                path = path[DownloadFolderPrefix.Length..];
-            if (!string.IsNullOrWhiteSpace(path) && !wadPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
-                wadPaths.Add(path);
-        }
-        Settings.WadSearchPaths = wadPaths;
+        Settings.WadSearchPaths = PathResolver.DistinctDirectoryPaths(
+            _wadPaths.Select(NormalizeDisplayedWadPath));
         Settings.WadDownloadPath = WadDownloadPathTextBox.Text?.Trim() ?? string.Empty;
 
         // Save update settings
