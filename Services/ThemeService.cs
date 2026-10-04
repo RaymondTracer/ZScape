@@ -1,205 +1,295 @@
-﻿using Avalonia;
+using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Styling;
+using Avalonia.Threading;
+using System.Xml.Linq;
 
 namespace ZScape.Services;
 
-/// <summary>
-/// Manages application themes. Call <see cref="Initialize"/> once in App.axaml.cs
-/// before the first window is created. Supports built-in themes (Dark, Light) and
-/// user-supplied theme files loaded from disk.
-/// 
-/// Architecture: ThemeService owns exactly one <see cref="StyleInclude"/> in
-/// Application.Current.Styles. Swapping themes removes the old and adds the new.
-/// </summary>
+/// <summary>Owns the active theme, its palette, and reversible editor previews.</summary>
 public class ThemeService
 {
     private static readonly Lazy<ThemeService> _instance = new(() => new ThemeService());
     public static ThemeService Instance => _instance.Value;
 
-    // Built-in themes (embedded avares resources)
     private const string DarkUri = "avares://ZScape/Themes/DarkTheme.axaml";
-    private const string LightUri = "avares://ZScape/Themes/LightTheme.axaml";
-
-    private static readonly Dictionary<string, string> BuiltInThemes = new()
+    private static readonly XNamespace XamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
+    private static readonly Dictionary<string, string> BuiltInThemes = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["Dark"] = DarkUri,
-        ["Light"] = LightUri,
+        ["Dark"] = "ZScape.ThemePalettes.Dark",
+        ["Light"] = "ZScape.ThemePalettes.Light",
     };
 
-    public event EventHandler? ThemeChanged;
-
-    private ThemeVariant _currentTheme = ThemeVariant.Dark;
-    private string _currentAccent = "Blue";
-    private string _activeThemeId = "Dark"; // key into BuiltInThemes or user theme name
-    private StyleInclude? _styleInclude;
+    private readonly SettingsService _settings;
+    private readonly string _userThemesDirectory;
+    private IResourceDictionary? _paletteResources;
+    private ThemePalette? _palette;
+    private ThemePreview? _preview;
     private bool _isInitialized;
 
-    public ThemeVariant CurrentTheme => _currentTheme;
-    public string CurrentAccent => _currentAccent;
-    public bool IsDark => _currentTheme == ThemeVariant.Dark;
-    public bool IsLight => _currentTheme == ThemeVariant.Light;
+    public event EventHandler? ThemeChanged;
+    public ThemeVariant CurrentTheme { get; private set; } = ThemeVariant.Dark;
+    public string CurrentAccent { get; private set; } = "Blue";
+    public string ActiveThemeId { get; private set; } = "Dark";
+    public bool IsDark => CurrentTheme == ThemeVariant.Dark;
+    public bool IsLight => CurrentTheme == ThemeVariant.Light;
 
-    /// <summary>
-    /// Returns available built-in theme names.
-    /// </summary>
-    public static IReadOnlyList<string> GetBuiltInThemeNames() => new List<string>(BuiltInThemes.Keys);
+    public static IReadOnlyList<string> GetBuiltInThemeNames() => BuiltInThemes.Keys.ToArray();
+    public static string UserThemesDirectory => Path.Combine(AppContext.BaseDirectory, "Themes", "User");
 
-    private ThemeService() { }
+    private ThemeService() : this(SettingsService.Instance, UserThemesDirectory) { }
 
-    /// <summary>
-    /// Must be called once after Avalonia is initialized but before the first window.
-    /// Loads the saved theme from settings and applies it.
-    /// </summary>
+    internal ThemeService(SettingsService settings, string userThemesDirectory)
+    {
+        _settings = settings;
+        _userThemesDirectory = userThemesDirectory;
+    }
+
+    /// <summary>Loads saved appearance without rewriting settings.</summary>
     public void Initialize()
     {
+        Dispatcher.UIThread.VerifyAccess();
         if (_isInitialized) return;
+        var app = Application.Current ?? throw new InvalidOperationException("Avalonia must be initialized before themes.");
+        var styleInclude = new StyleInclude(new Uri("avares://ZScape/")) { Source = new Uri(DarkUri) };
+        var styles = (Styles)styleInclude.Loaded;
+        // Keep one stylesheet and its brush instances. Light and custom files
+        // supply colors; existing controls retain the same live brush objects.
+        _paletteResources = styles.OfType<Style>().First(style => style.Resources.ContainsKey("PrimaryBackground")).Resources;
+        app.Styles.Add(styleInclude);
         _isInitialized = true;
 
-        var settings = SettingsService.Instance.Settings;
-
-        // Determine which theme to load
-        var themeId = settings.ThemeId ?? "Dark";
-
-        // Try built-in themes first, then user themes
-        if (BuiltInThemes.TryGetValue(themeId, out var uri))
+        var settings = _settings.Settings;
+        CurrentAccent = settings.Accent;
+        var themeId = settings.ThemeId ?? (settings.Theme == AppTheme.Light ? "Light" : "Dark");
+        try
         {
-            LoadThemeInternal(uri, ThemeVariant.Dark, themeId);
+            ApplyPalette(ReadPalette(themeId, settings.Theme));
+            ActiveThemeId = CanonicalThemeId(themeId);
         }
-        else
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or FormatException)
         {
-            // User theme: try loading from disk
-            var userPath = GetUserThemePath(themeId);
-            if (File.Exists(userPath))
-            {
-                LoadThemeInternal(userPath, ThemeVariant.Dark, themeId);
-            }
-            else
-            {
-                // Fallback to Dark
-                LoadThemeInternal(DarkUri, ThemeVariant.Dark, "Dark");
-            }
-        }
-
-        // If saved theme says Light, then layer the light variant/overrides
-        if (settings.Theme == AppTheme.Light)
-        {
-            _currentTheme = ThemeVariant.Light;
-            if (Application.Current is { } app)
-                app.RequestedThemeVariant = ThemeVariant.Light;
+            LoggingService.Instance.Warning($"Could not load theme '{themeId}': {ex.Message}");
+            ApplyPalette(ReadPalette("Dark", AppTheme.Dark));
+            ActiveThemeId = "Dark";
         }
     }
 
-    /// <summary>
-    /// Switches to a named theme at runtime. "Dark" and "Light" are built-in.
-    /// Any other name is treated as a user theme file in the themes directory.
-    /// </summary>
+    /// <summary>Applies a named theme and persists only the accepted appearance.</summary>
     public void ApplyTheme(string themeId, string? accent = null)
     {
-        if (!_isInitialized) Initialize();
-
-        var newAccent = accent ?? _currentAccent;
-        var isDark = string.Equals(themeId, "Dark", StringComparison.OrdinalIgnoreCase);
-        var newVariant = isDark ? ThemeVariant.Dark : ThemeVariant.Light;
-
-        if (themeId == _activeThemeId && newAccent == _currentAccent)
-            return;
-
-        _currentAccent = newAccent;
-        _activeThemeId = themeId;
-        _currentTheme = newVariant;
-
-        if (Application.Current is { } app)
-        {
-            app.RequestedThemeVariant = newVariant;
-
-            if (BuiltInThemes.TryGetValue(themeId, out var uri))
-            {
-                LoadThemeInternal(uri, newVariant, themeId);
-            }
-            else
-            {
-                var userPath = GetUserThemePath(themeId);
-                if (File.Exists(userPath))
-                    LoadThemeInternal(userPath, newVariant, themeId);
-            }
-        }
-
-        // Persist
-        var settings = SettingsService.Instance.Settings;
-        settings.Theme = isDark ? AppTheme.Dark : AppTheme.Light;
-        settings.ThemeId = themeId;
-        SettingsService.Instance.Save();
-
+        Initialize();
+        var palette = ReadPalette(themeId, _palette!.BaseTheme);
+        var newAccent = accent ?? CurrentAccent;
+        _preview?.Dispose();
+        ApplyPalette(palette);
+        ActiveThemeId = CanonicalThemeId(themeId);
+        CurrentAccent = newAccent;
+        PersistAppearance();
         ThemeChanged?.Invoke(this, EventArgs.Empty);
     }
 
     [Obsolete("Use ApplyTheme(string themeId) instead.")]
-    public void ApplyTheme(AppTheme theme, string? accent = null)
-    {
-        ApplyTheme(theme == AppTheme.Dark ? "Dark" : "Light", accent);
-    }
+    public void ApplyTheme(AppTheme theme, string? accent = null) => ApplyTheme(theme.ToString(), accent);
 
-    /// <summary>
-    /// Applies theme from persisted settings.
-    /// </summary>
     public void ApplyFromSettings()
     {
-        var s = SettingsService.Instance.Settings;
-        ApplyTheme(s.ThemeId ?? (s.Theme == AppTheme.Dark ? "Dark" : "Light"), s.Accent);
+        Initialize();
+        var settings = _settings.Settings;
+        var themeId = settings.ThemeId ?? settings.Theme.ToString();
+        var palette = ReadPalette(themeId, settings.Theme);
+        _preview?.Dispose();
+        ApplyPalette(palette);
+        ActiveThemeId = CanonicalThemeId(themeId);
+        CurrentAccent = settings.Accent;
+        ThemeChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>
-    /// Resolves an IBrush from a resource key with a fallback hex color.
-    /// </summary>
+    public ThemePreview BeginPreview()
+    {
+        Initialize();
+        if (_preview != null) throw new InvalidOperationException("A theme preview is already open.");
+        return _preview = new ThemePreview(this, _palette!.Copy());
+    }
+
+    private void PersistAppearance()
+    {
+        var settings = _settings.Settings;
+        settings.Theme = _palette!.BaseTheme;
+        settings.ThemeId = ActiveThemeId;
+        settings.Accent = CurrentAccent;
+        _settings.Save();
+    }
+
+    private void ApplyPalette(ThemePalette palette)
+    {
+        var resources = _paletteResources!;
+        if (_palette != null)
+        {
+            foreach (var key in _palette.Colors.Keys.Except(palette.Colors.Keys)) resources.Remove(key);
+            foreach (var key in _palette.BrushColors.Keys.Except(palette.BrushColors.Keys)) resources.Remove(key);
+        }
+        foreach (var (key, color) in palette.Colors) resources[key] = color;
+        foreach (var (key, colorKey) in palette.BrushColors)
+        {
+            if (!palette.Colors.TryGetValue(colorKey, out var color)) continue;
+            if (resources.TryGetValue(key, out var existing) && existing is SolidColorBrush brush)
+                brush.Color = color;
+            else
+                resources[key] = new SolidColorBrush(color);
+        }
+        _palette = palette.Copy();
+        CurrentTheme = palette.BaseTheme == AppTheme.Light ? ThemeVariant.Light : ThemeVariant.Dark;
+        Application.Current!.RequestedThemeVariant = CurrentTheme;
+    }
+
+    private ThemePalette ReadPalette(string themeId, AppTheme fallbackBaseTheme)
+    {
+        if (BuiltInThemes.TryGetValue(themeId, out var resourceName))
+        {
+            using var stream = typeof(ThemeService).Assembly.GetManifestResourceStream(resourceName)
+                ?? throw new IOException($"Built-in palette '{themeId}' was not embedded.");
+            return ParsePalette(XDocument.Load(stream), themeId.Equals("Light", StringComparison.OrdinalIgnoreCase) ? AppTheme.Light : AppTheme.Dark);
+        }
+        return ReadPaletteFile(Path.Combine(_userThemesDirectory, $"{themeId}.axaml"), fallbackBaseTheme);
+    }
+
+    private ThemePalette ReadPaletteFile(string path, AppTheme fallbackBaseTheme)
+    {
+        var document = XDocument.Load(path);
+        var baseValue = document.Descendants().FirstOrDefault(element =>
+            element.Attribute(XamlNamespace + "Key")?.Value == "ZScapeBaseTheme")?.Value;
+        var baseTheme = Enum.TryParse<AppTheme>(baseValue, out var parsedBase) && Enum.IsDefined(parsedBase)
+            ? parsedBase : fallbackBaseTheme;
+        var custom = ParsePalette(document, baseTheme);
+        if (custom.Colors.Count == 0) throw new FormatException("The theme does not contain any colors.");
+        var palette = ReadPalette(baseTheme.ToString(), baseTheme);
+        foreach (var (key, color) in custom.Colors) palette.Colors[key] = color;
+        foreach (var (key, colorKey) in custom.BrushColors) palette.BrushColors[key] = colorKey;
+        if (palette.BrushColors.Values.Any(key => !palette.Colors.ContainsKey(key)))
+            throw new FormatException("A theme brush refers to an undefined color.");
+        return palette;
+    }
+
+    private static ThemePalette ParsePalette(XDocument document, AppTheme baseTheme)
+    {
+        var colors = new Dictionary<string, Color>();
+        var brushes = new Dictionary<string, string>();
+        foreach (var element in document.Descendants())
+        {
+            var key = element.Attribute(XamlNamespace + "Key")?.Value;
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            if (element.Name.LocalName == "Color")
+                colors[key] = Color.Parse((element.Attribute("Value")?.Value ?? element.Value).Trim());
+            else if (element.Name.LocalName == "SolidColorBrush")
+            {
+                var reference = element.Attribute("Color")?.Value;
+                const string prefix = "{StaticResource ";
+                if (reference?.StartsWith(prefix, StringComparison.Ordinal) == true && reference.EndsWith('}'))
+                    brushes[key] = reference[prefix.Length..^1].Trim();
+            }
+        }
+        return new ThemePalette(baseTheme, colors, brushes);
+    }
+
+    private static string CanonicalThemeId(string themeId) => BuiltInThemes.Keys.FirstOrDefault(
+        name => name.Equals(themeId, StringComparison.OrdinalIgnoreCase)) ?? themeId;
+
     public static IBrush GetBrush(string key, string fallbackHex)
     {
         var app = Application.Current;
-        if (app == null) return new SolidColorBrush(Color.Parse(fallbackHex));
-        if (app.TryGetResource(key, app.ActualThemeVariant, out var r) && r is IBrush brush) return brush;
-        return new SolidColorBrush(Color.Parse(fallbackHex));
+        return app?.TryGetResource(key, app.ActualThemeVariant, out var resource) == true && resource is IBrush brush
+            ? brush : new SolidColorBrush(Color.Parse(fallbackHex));
     }
 
-    /// <summary>
-    /// Resolves a Color from a resource key with a fallback hex color.
-    /// </summary>
     public static Color GetColor(string key, string fallbackHex)
     {
         var app = Application.Current;
-        if (app == null) return Color.Parse(fallbackHex);
-        if (app.TryGetResource(key, app.ActualThemeVariant, out var r) && r is Color color) return color;
-        return Color.Parse(fallbackHex);
+        return app?.TryGetResource(key, app.ActualThemeVariant, out var resource) == true && resource is Color color
+            ? color : Color.Parse(fallbackHex);
     }
 
-    /// <summary>
-    /// Path where user-created theme files are stored.
-    /// </summary>
-    public static string UserThemesDirectory =>
-        Path.Combine(AppContext.BaseDirectory, "Themes", "User");
-
-    private static string GetUserThemePath(string themeId) =>
-        Path.Combine(UserThemesDirectory, $"{themeId}.axaml");
-
-    private void LoadThemeInternal(string sourceUri, ThemeVariant variant, string themeId)
+    internal sealed record ThemePalette(AppTheme BaseTheme, Dictionary<string, Color> Colors, Dictionary<string, string> BrushColors)
     {
-        if (Application.Current is not { } app) return;
+        public ThemePalette Copy() => new(BaseTheme, new(Colors), new(BrushColors));
+    }
 
-        // Remove old theme
-        if (_styleInclude != null)
+    /// <summary>An editor draft. Disposing restores the last accepted palette without saving settings.</summary>
+    public sealed class ThemePreview : IDisposable
+    {
+        private readonly ThemeService _owner;
+        private ThemePalette _accepted;
+        private bool _disposed;
+        internal ThemePreview(ThemeService owner, ThemePalette accepted) { _owner = owner; _accepted = accepted; }
+
+        public IReadOnlyDictionary<string, Color> Colors
         {
-            app.Styles.Remove(_styleInclude);
-            _styleInclude = null;
+            get
+            {
+                VerifyActive();
+                return new Dictionary<string, Color>(_owner._palette!.Colors);
+            }
         }
 
-        _activeThemeId = themeId;
-
-        var styleInclude = new StyleInclude(new Uri("avares://ZScape/"))
+        public void Update(IReadOnlyDictionary<string, Color> colors)
         {
-            Source = new Uri(sourceUri, sourceUri.StartsWith("avares://") ? UriKind.Absolute : UriKind.RelativeOrAbsolute)
-        };
-        app.Styles.Add(styleInclude);
-        _styleInclude = styleInclude;
+            VerifyActive();
+            var palette = _owner._palette!.Copy();
+            foreach (var (key, color) in colors) palette.Colors[key] = color;
+            _owner.ApplyPalette(palette);
+            _owner.ThemeChanged?.Invoke(_owner, EventArgs.Empty);
+        }
+
+        public void Load(string path)
+        {
+            VerifyActive();
+            var palette = _owner.ReadPaletteFile(path, _owner._palette!.BaseTheme);
+            _owner.ApplyPalette(palette);
+            _owner.ThemeChanged?.Invoke(_owner, EventArgs.Empty);
+        }
+
+        public void Save(string name)
+        {
+            VerifyActive();
+            name = name.Trim();
+            if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || BuiltInThemes.ContainsKey(name))
+                throw new ArgumentException("Choose a valid custom theme name other than Dark or Light.", nameof(name));
+
+            var palette = _owner._palette!;
+            XNamespace avaloniaNamespace = "https://github.com/avaloniaui";
+            var root = new XElement(avaloniaNamespace + "ResourceDictionary", new XAttribute(XNamespace.Xmlns + "x", XamlNamespace));
+            root.Add(new XElement(XamlNamespace + "String", new XAttribute(XamlNamespace + "Key", "ZScapeBaseTheme"), palette.BaseTheme));
+            foreach (var (key, color) in palette.Colors.OrderBy(pair => pair.Key))
+                root.Add(new XElement(avaloniaNamespace + "Color", new XAttribute(XamlNamespace + "Key", key), color.ToString()));
+            foreach (var (key, colorKey) in palette.BrushColors.OrderBy(pair => pair.Key))
+                root.Add(new XElement(avaloniaNamespace + "SolidColorBrush", new XAttribute(XamlNamespace + "Key", key),
+                    new XAttribute("Color", $"{{StaticResource {colorKey}}}")));
+            Directory.CreateDirectory(_owner._userThemesDirectory);
+            new XDocument(root).Save(Path.Combine(_owner._userThemesDirectory, $"{name}.axaml"));
+            _owner.ActiveThemeId = name;
+            _owner.PersistAppearance();
+            _accepted = palette.Copy();
+            _owner.ThemeChanged?.Invoke(_owner, EventArgs.Empty);
+        }
+
+        private void VerifyActive()
+        {
+            Dispatcher.UIThread.VerifyAccess();
+            if (_disposed || !ReferenceEquals(_owner._preview, this)) throw new ObjectDisposedException(nameof(ThemePreview));
+        }
+
+        public void Dispose()
+        {
+            Dispatcher.UIThread.VerifyAccess();
+            if (_disposed) return;
+            _disposed = true;
+            if (!ReferenceEquals(_owner._preview, this)) return;
+            _owner._preview = null;
+            _owner.ApplyPalette(_accepted);
+            _owner.ThemeChanged?.Invoke(_owner, EventArgs.Empty);
+        }
     }
 }
 

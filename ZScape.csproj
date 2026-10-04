@@ -52,6 +52,8 @@
   <ItemGroup>
     <AvaloniaResource Include="packaging\assets\**"/>
     <AvaloniaResource Include="Themes\**"/>
+    <EmbeddedResource Include="Themes\DarkTheme.axaml" LogicalName="ZScape.ThemePalettes.Dark"/>
+    <EmbeddedResource Include="Themes\LightTheme.axaml" LogicalName="ZScape.ThemePalettes.Light"/>
   </ItemGroup>
 
 </Project>

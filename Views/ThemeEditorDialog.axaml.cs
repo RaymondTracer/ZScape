@@ -4,29 +4,27 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
-using Avalonia.Styling;
-using Avalonia.Threading;
-using System.Xml.Linq;
 using ZScape.Services;
 
 namespace ZScape.Views;
 
 /// <summary>
-/// Theme editor dialog for creating and editing custom theme .axaml files.
-/// Parses Color definitions from built-in themes, provides a visual editor
-/// with live preview, and saves to Themes/User/ directory.
-/// If Avalonia.Controls.ColorPicker is available, uses it; otherwise falls
-/// back to hex textbox input.
+/// Presents a ThemeService palette draft with live preview and hex color editors.
+/// Loading, saving, and restoring the accepted appearance belong to ThemeService.
 /// </summary>
 public partial class ThemeEditorDialog : Window
 {
-    private const string DefaultBaseTheme = "Dark";
+    private readonly ThemeService _themes;
     private readonly Dictionary<string, ColorEditorRow> _colorRows = new();
     private readonly Dictionary<string, Color> _appliedColors = new();
     private string _currentThemeName = "Untitled";
+    private ThemeService.ThemePreview? _preview;
 
-    public ThemeEditorDialog()
+    public ThemeEditorDialog() : this(ThemeService.Instance) { }
+
+    internal ThemeEditorDialog(ThemeService themes)
     {
+        _themes = themes;
         InitializeComponent();
         DataContext = this;
         Loaded += OnLoaded;
@@ -36,7 +34,12 @@ public partial class ThemeEditorDialog : Window
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
-        LoadThemeColors(DefaultBaseTheme);
+        if (_preview != null) return;
+        _preview = _themes.BeginPreview();
+        var name = _themes.ActiveThemeId;
+        if (ThemeService.GetBuiltInThemeNames().Contains(name))
+            name += " Custom";
+        PopulateColors(_preview.Colors, name);
     }
 
     private void UpdateSaveButtonState()
@@ -47,46 +50,19 @@ public partial class ThemeEditorDialog : Window
     private void ThemeNameBox_TextChanged(object? sender, TextChangedEventArgs e) => UpdateSaveButtonState();
 
     /// <summary>
-    /// Parses a built-in or user theme file and populates the color editor.
+    /// Presents the palette owned by the current theme preview.
     /// </summary>
-    private void LoadThemeColors(string themeName)
+    private void PopulateColors(IReadOnlyDictionary<string, Color> colors, string themeName)
     {
         ColorEditorPanel.Children.Clear();
         _colorRows.Clear();
         _appliedColors.Clear();
 
-        var doc = TryLoadThemeDoc(themeName);
-        if (doc?.Root == null)
-        {
-            ShowStatus("Could not load theme.", true);
-            return;
-        }
-
-        var colorElements = doc.Descendants()
-            .Where(e => e.Name.LocalName == "Color")
-            .ToList();
-
-        if (colorElements.Count == 0)
-        {
-            ShowStatus("No Color definitions found.", true);
-            return;
-        }
-
-        var categories = new Dictionary<string, List<XElement>>();
-        foreach (var el in colorElements)
-        {
-            var key = GetXamlKey(el);
-            if (string.IsNullOrEmpty(key)) continue;
-            var cat = InferCategory(key);
-            if (!categories.ContainsKey(cat)) categories[cat] = new();
-            categories[cat].Add(el);
-        }
-
-        foreach (var kvp in categories.OrderBy(c => c.Key))
+        foreach (var group in colors.GroupBy(pair => InferCategory(pair.Key)).OrderBy(group => group.Key))
         {
             var header = new TextBlock
             {
-                Text = kvp.Key,
+                Text = group.Key,
                 FontWeight = FontWeight.Bold,
                 FontSize = 12,
                 Margin = new Thickness(0, 8, 0, 4),
@@ -94,14 +70,8 @@ public partial class ThemeEditorDialog : Window
             };
             ColorEditorPanel.Children.Add(header);
 
-            foreach (var el in kvp.Value.OrderBy(e => GetXamlKey(e)))
+            foreach (var (key, currentColor) in group.OrderBy(pair => pair.Key))
             {
-                var key = GetXamlKey(el);
-                var hex = el.Attribute("Value")?.Value ?? el.Value?.Trim() ?? "#FFFFFFFF";
-                var currentApp = Application.Current;
-                var currentColor = currentApp?.TryGetResource(key, currentApp.ActualThemeVariant, out var r) == true
-                    && r is Color c ? c : ParseColor(hex);
-
                 _appliedColors[key] = currentColor;
                 var row = new ColorEditorRow(key, currentColor, OnColorChanged);
                 _colorRows[key] = row;
@@ -117,48 +87,24 @@ public partial class ThemeEditorDialog : Window
     private void OnColorChanged(string key, Color newColor)
     {
         _appliedColors[key] = newColor;
-        ApplyLivePreview();
-    }
-
-    private void ApplyLivePreview()
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (Application.Current == null) return;
-            foreach (var (key, color) in _appliedColors)
-            {
-                Application.Current.Resources[key] = color;
-                Application.Current.Resources[key + "Brush"] = new SolidColorBrush(color);
-            }
-        });
-    }
-
-    private void RollbackPreview()
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            // Reload the currently active theme to restore original colors
-            var activeTheme = ThemeService.Instance.CurrentTheme;
-            var themeId = activeTheme == ThemeVariant.Dark ? "Dark" : "Light";
-            ThemeService.Instance.ApplyTheme(themeId);
-        });
+        _preview?.Update(_appliedColors);
     }
 
     private void SaveButton_Click(object? sender, RoutedEventArgs e)
     {
         var name = ThemeNameBox.Text?.Trim();
-        if (string.IsNullOrEmpty(name)) return;
+        if (string.IsNullOrEmpty(name) || _preview == null) return;
 
-        foreach (var c in Path.GetInvalidFileNameChars())
-            name = name.Replace(c, '_');
-
-        var dir = ThemeService.UserThemesDirectory;
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{name}.axaml");
-        File.WriteAllText(path, BuildThemeXml(name));
-        _currentThemeName = name;
-        ThemeService.Instance.ApplyTheme(name);
-        ShowStatus($"Saved and applied '{name}'.", false);
+        try
+        {
+            _preview.Save(name);
+            _currentThemeName = name;
+            ShowStatus($"Saved and applied '{name}'.", false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            ShowStatus(ex.Message, true);
+        }
     }
 
     private async void LoadButton_Click(object? sender, RoutedEventArgs e)
@@ -173,9 +119,17 @@ public partial class ThemeEditorDialog : Window
             FileTypeFilter = new[] { new FilePickerFileType("Avalonia Theme") { Patterns = new[] { "*.axaml" } } }
         });
 
-        if (files.Count == 0) return;
-        var themeName = Path.GetFileNameWithoutExtension(files[0].Path.LocalPath);
-        LoadThemeColors(themeName);
+        if (files.Count == 0 || _preview == null) return;
+        try
+        {
+            var path = files[0].Path.LocalPath;
+            _preview.Load(path);
+            PopulateColors(_preview.Colors, Path.GetFileNameWithoutExtension(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or FormatException)
+        {
+            ShowStatus(ex.Message, true);
+        }
     }
 
     private void CloseButton_Click(object? sender, RoutedEventArgs e) => Close();
@@ -183,51 +137,9 @@ public partial class ThemeEditorDialog : Window
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
-        RollbackPreview();
+        _preview?.Dispose();
+        _preview = null;
     }
-
-    private string BuildThemeXml(string themeName)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("<ResourceDictionary xmlns=\"https://github.com/avaloniaui\"");
-        sb.AppendLine("                    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">");
-        sb.AppendLine();
-        sb.AppendLine($"    <!-- {themeName} Theme -->");
-
-        foreach (var (key, color) in _appliedColors.OrderBy(k => k.Key))
-        {
-            var hex = $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
-            sb.AppendLine($"    <Color x:Key=\"{key}\">{hex}</Color>");
-        }
-
-        sb.AppendLine();
-        sb.AppendLine("    <!-- Brushes -->");
-        foreach (var key in _appliedColors.Keys.OrderBy(k => k))
-            sb.AppendLine($"    <SolidColorBrush x:Key=\"{key}Brush\" Color=\"{{StaticResource {key}}}\" />");
-
-        sb.AppendLine("</ResourceDictionary>");
-        return sb.ToString();
-    }
-
-    private static XDocument? TryLoadThemeDoc(string themeName)
-    {
-        try
-        {
-            var userPath = Path.Combine(ThemeService.UserThemesDirectory, $"{themeName}.axaml");
-            if (File.Exists(userPath)) return XDocument.Load(userPath);
-
-            var builtInName = themeName.EndsWith("Theme", StringComparison.OrdinalIgnoreCase)
-                ? themeName : $"{themeName}Theme";
-            var resourcePath = Path.Combine(AppContext.BaseDirectory, "Themes", $"{builtInName}.axaml");
-            if (File.Exists(resourcePath)) return XDocument.Load(resourcePath);
-
-            return null;
-        }
-        catch { return null; }
-    }
-
-    private static string GetXamlKey(XElement el) =>
-        el.Attribute(XName.Get("Key", "http://schemas.microsoft.com/winfx/2006/xaml"))?.Value ?? "";
 
     private static string InferCategory(string key)
     {
@@ -248,18 +160,6 @@ public partial class ThemeEditorDialog : Window
         if (key.Contains("Password") || key.Contains("Online") || key.Contains("Offline"))
             return "Icons";
         return "Other";
-    }
-
-    private static Color ParseColor(string hex)
-    {
-        try
-        {
-            hex = hex.Trim();
-            if (hex.StartsWith("#")) hex = hex.Substring(1);
-            if (hex.Length == 6) hex = "FF" + hex;
-            return Color.Parse("#" + hex);
-        }
-        catch { return Colors.White; }
     }
 
     private async void ShowStatus(string msg, bool isError)
