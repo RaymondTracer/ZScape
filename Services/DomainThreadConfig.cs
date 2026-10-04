@@ -12,17 +12,40 @@ public class DomainThreadConfig
     public static DomainThreadConfig Instance => _instance.Value;
     
     private readonly object _lock = new();
-    private readonly LoggingService _logger = LoggingService.Instance;
-    
-    /// <summary>
-    /// Gets the domain settings dictionary from the settings service.
-    /// </summary>
-    private Dictionary<string, DomainSettings> DomainSettings => 
-        SettingsService.Instance.DomainThreadSettings;
+    private readonly Dictionary<string, DomainSettings> _domainSettings;
+    private readonly Func<AppSettings> _getGlobalSettings;
+    private readonly Action _saveSettings;
+    private readonly Action<string>? _verboseLog;
+    private readonly Action<string>? _warningLog;
 
-    private DomainThreadConfig()
+    private DomainThreadConfig() : this(
+        SettingsService.Instance.DomainThreadSettings,
+        () => SettingsService.Instance.Settings,
+        SettingsService.Instance.SaveDomainSettings,
+        LoggingService.Instance.Verbose,
+        LoggingService.Instance.Warning)
     {
-        _logger.Verbose($"Domain thread config initialized: {DomainSettings.Count} domains");
+    }
+
+    internal DomainThreadConfig(
+        Dictionary<string, DomainSettings> domainSettings,
+        Func<AppSettings> getGlobalSettings,
+        Action saveSettings,
+        Action<string>? verboseLog = null,
+        Action<string>? warningLog = null)
+    {
+        _domainSettings = domainSettings;
+        _getGlobalSettings = getGlobalSettings;
+        _saveSettings = saveSettings;
+        _verboseLog = verboseLog;
+        _warningLog = warningLog;
+
+        var normalizedSettings = CreateNormalizedSnapshot(domainSettings);
+        _domainSettings.Clear();
+        foreach (var pair in normalizedSettings)
+            _domainSettings.Add(pair.Key, pair.Value);
+
+        _verboseLog?.Invoke($"Domain thread config initialized: {_domainSettings.Count} domains");
     }
 
     /// <summary>
@@ -33,7 +56,7 @@ public class DomainThreadConfig
         domain = NormalizeDomain(domain);
         lock (_lock)
         {
-            if (DomainSettings.TryGetValue(domain, out var settings))
+            if (_domainSettings.TryGetValue(domain, out var settings))
             {
                 return settings.MaxThreads;
             }
@@ -42,14 +65,14 @@ public class DomainThreadConfig
     }
 
     /// <summary>
-    /// Gets the full settings for a domain, or null if not configured.
+    /// Gets a detached settings snapshot for a domain, or null if not configured.
     /// </summary>
     public DomainSettings? GetSettings(string domain)
     {
         domain = NormalizeDomain(domain);
         lock (_lock)
         {
-            return DomainSettings.TryGetValue(domain, out var settings) ? settings : null;
+            return _domainSettings.TryGetValue(domain, out var settings) ? CopySettings(settings) : null;
         }
     }
 
@@ -62,7 +85,7 @@ public class DomainThreadConfig
     public (int MaxThreads, int MinSegmentSizeKb, bool ShouldProbe, bool AdaptiveLearning) 
         GetEffectiveThreadSettings(string domain)
     {
-        var globalSettings = SettingsService.Instance.Settings;
+        var globalSettings = _getGlobalSettings();
         var effective = GetEffectiveDomainBudgetSettings(domain);
         var maxThreads = effective.MaxThreads;
         if (globalSettings.MaxThreadsPerFile > 0)
@@ -88,11 +111,11 @@ public class DomainThreadConfig
         GetEffectiveDomainBudgetSettings(string domain)
     {
         domain = NormalizeDomain(domain);
-        var globalSettings = SettingsService.Instance.Settings;
+        var globalSettings = _getGlobalSettings();
 
         lock (_lock)
         {
-            if (!DomainSettings.TryGetValue(domain, out var settings))
+            if (!_domainSettings.TryGetValue(domain, out var settings))
             {
                 return (
                     32,
@@ -126,21 +149,25 @@ public class DomainThreadConfig
     public void UpdateThreadCount(string domain, int threadCount)
     {
         domain = NormalizeDomain(domain);
+        if (domain.Length == 0)
+            return;
+
+        threadCount = NormalizeMaxThreads(threadCount);
         lock (_lock)
         {
-            if (!DomainSettings.TryGetValue(domain, out var settings))
+            if (!_domainSettings.TryGetValue(domain, out var settings))
             {
                 settings = new DomainSettings { MaxThreads = threadCount };
-                DomainSettings[domain] = settings;
+                _domainSettings[domain] = settings;
             }
 
             if (settings.AdaptiveLearning && threadCount > settings.MaxThreads)
             {
-                _logger.Verbose($"Domain {domain}: Updated thread count from {settings.MaxThreads} to {threadCount}");
+                _verboseLog?.Invoke($"Domain {domain}: Updated thread count from {settings.MaxThreads} to {threadCount}");
                 settings.MaxThreads = threadCount;
             }
 
-            SettingsService.Instance.SaveDomainSettings();
+            _saveSettings();
         }
     }
 
@@ -152,48 +179,134 @@ public class DomainThreadConfig
     {
         domain = NormalizeDomain(domain);
         int reducedCount = Math.Max(1, currentThreads / 2);
+        if (domain.Length == 0)
+            return reducedCount;
 
         lock (_lock)
         {
-            if (!DomainSettings.TryGetValue(domain, out var settings))
+            if (!_domainSettings.TryGetValue(domain, out var settings))
             {
                 settings = new DomainSettings();
-                DomainSettings[domain] = settings;
+                _domainSettings[domain] = settings;
             }
             
             // Only reduce thread count if adaptive learning is enabled
             if (settings.AdaptiveLearning)
             {
                 settings.MaxThreads = reducedCount;
-                _logger.Warning($"Domain {domain}: Reduced threads from {currentThreads} to {reducedCount}");
+                _warningLog?.Invoke($"Domain {domain}: Reduced threads from {currentThreads} to {reducedCount}");
             }
             else
             {
                 // Keep using current max, just log the failure
                 reducedCount = settings.MaxThreads;
-                _logger.Verbose($"Domain {domain}: Connection issue (adaptive learning disabled, keeping {reducedCount} threads)");
+                _verboseLog?.Invoke($"Domain {domain}: Connection issue (adaptive learning disabled, keeping {reducedCount} threads)");
             }
             
-            SettingsService.Instance.SaveDomainSettings();
+            _saveSettings();
         }
 
         return reducedCount;
     }
 
     /// <summary>
-    /// Gets all configured domains and their settings.
+    /// Gets detached settings snapshots for all configured domains.
     /// </summary>
     public IReadOnlyDictionary<string, DomainSettings> GetAllSettings()
     {
         lock (_lock)
         {
-            return new Dictionary<string, DomainSettings>(DomainSettings);
+            return CreateNormalizedSnapshot(_domainSettings);
         }
     }
 
+    /// <summary>
+    /// Applies fields changed since the editor's original snapshot. Adaptive updates
+    /// to untouched fields and newly learned domains remain intact. Explicit edits
+    /// and removals win over concurrent adaptive updates under the same lock.
+    /// </summary>
+    public void ApplyConfiguredChanges(
+        IEnumerable<KeyValuePair<string, DomainSettings>> editedSettings,
+        IReadOnlyDictionary<string, DomainSettings> originalSettings)
+    {
+        var edited = CreateNormalizedSnapshot(editedSettings);
+        var original = CreateNormalizedSnapshot(originalSettings);
+        lock (_lock)
+        {
+            foreach (var domain in original.Keys)
+            {
+                if (!edited.ContainsKey(domain))
+                    _domainSettings.Remove(domain);
+            }
+
+            foreach (var pair in edited)
+            {
+                var changes = pair.Value;
+                if (!original.TryGetValue(pair.Key, out var baseline))
+                {
+                    _domainSettings[pair.Key] = new DomainSettings
+                    {
+                        MaxThreads = NormalizeMaxThreads(changes.MaxThreads),
+                        MinSegmentSizeKb = NormalizeMinSegmentSizeKb(changes.MinSegmentSizeKb),
+                        AdaptiveLearning = changes.AdaptiveLearning
+                    };
+                    continue;
+                }
+
+                var threadsChanged = changes.MaxThreads != baseline.MaxThreads;
+                var segmentSizeChanged = changes.MinSegmentSizeKb != baseline.MinSegmentSizeKb;
+                var adaptiveChanged = changes.AdaptiveLearning != baseline.AdaptiveLearning;
+                if (!threadsChanged && !segmentSizeChanged && !adaptiveChanged)
+                    continue;
+
+                if (!_domainSettings.TryGetValue(pair.Key, out var current))
+                {
+                    current = CopySettings(baseline);
+                    _domainSettings.Add(pair.Key, current);
+                }
+
+                if (threadsChanged)
+                    current.MaxThreads = NormalizeMaxThreads(changes.MaxThreads);
+                if (segmentSizeChanged)
+                    current.MinSegmentSizeKb = NormalizeMinSegmentSizeKb(changes.MinSegmentSizeKb);
+                if (adaptiveChanged)
+                    current.AdaptiveLearning = changes.AdaptiveLearning;
+            }
+
+            _saveSettings();
+        }
+    }
+
+    internal static int NormalizeMaxThreads(int maxThreads) => Math.Max(0, maxThreads);
+
+    internal static int NormalizeMinSegmentSizeKb(int minSegmentSizeKb) =>
+        minSegmentSizeKb <= 0 ? 0 : Math.Clamp(minSegmentSizeKb, 64, 4096);
+
+    private static Dictionary<string, DomainSettings> CreateNormalizedSnapshot(
+        IEnumerable<KeyValuePair<string, DomainSettings>> settings)
+    {
+        var snapshot = new Dictionary<string, DomainSettings>(StringComparer.Ordinal);
+        foreach (var pair in settings)
+        {
+            var domain = NormalizeDomain(pair.Key);
+            if (domain.Length > 0)
+                snapshot[domain] = CopySettings(pair.Value);
+        }
+
+        return snapshot;
+    }
+
+    private static DomainSettings CopySettings(DomainSettings settings) => new()
+    {
+        MaxThreads = settings.MaxThreads,
+        MinSegmentSizeKb = settings.MinSegmentSizeKb,
+        AdaptiveLearning = settings.AdaptiveLearning
+    };
+
     private static string NormalizeDomain(string domain)
     {
-        if (Uri.TryCreate(domain, UriKind.Absolute, out var uri))
+        domain = domain.Trim();
+        if (Uri.TryCreate(domain, UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Host))
         {
             domain = uri.Host;
         }

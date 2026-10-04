@@ -34,6 +34,8 @@ public partial class UnifiedSettingsDialog : Window
     private ObservableCollection<string> _downloadSites = new();
     private ObservableCollection<string> _skippedOptionalPwads = new();
     private ObservableCollection<DomainThreadDisplay> _domainConfigs = new();
+    private IReadOnlyDictionary<string, DomainSettings> _originalDomainSettings =
+        new Dictionary<string, DomainSettings>();
     private string _lastValidDownloadPath = string.Empty;
     private bool _updatingIntervalControls;
     private bool _updatingAutoRefreshControls;
@@ -395,7 +397,8 @@ public partial class UnifiedSettingsDialog : Window
     private void LoadDomainConfigs()
     {
         _domainConfigs.Clear();
-        foreach (var config in SettingsService.Instance.DomainThreadSettings.OrderBy(k => k.Key))
+        _originalDomainSettings = DomainThreadConfig.Instance.GetAllSettings();
+        foreach (var config in _originalDomainSettings.OrderBy(k => k.Key))
         {
             var display = new DomainThreadDisplay();
             display.InitializeFromSettings(
@@ -708,22 +711,14 @@ public partial class UnifiedSettingsDialog : Window
 
     private void SaveDomainConfigs()
     {
-        var domainSettings = SettingsService.Instance.DomainThreadSettings;
-        domainSettings.Clear();
-        foreach (var item in _domainConfigs)
-        {
-            // Normalize domain to lowercase like WinForms
-            string domain = item.Domain.ToLowerInvariant().Trim();
-            if (string.IsNullOrWhiteSpace(domain)) continue;
-            
-            domainSettings[domain] = new DomainSettings
+        var editedSettings = _domainConfigs.Select(item =>
+            new KeyValuePair<string, DomainSettings>(item.Domain, new DomainSettings
             {
                 MaxThreads = item.MaxThreads,
                 MinSegmentSizeKb = item.MinSegmentSizeKb,
                 AdaptiveLearning = item.AdaptiveLearning
-            };
-        }
-        SettingsService.Instance.SaveDomainSettings();
+            }));
+        DomainThreadConfig.Instance.ApplyConfiguredChanges(editedSettings, _originalDomainSettings);
     }
 
     private void SaveUpdateInterval()
@@ -1366,7 +1361,7 @@ public partial class UnifiedSettingsDialog : Window
         public int MaxThreads
         {
             get => _maxThreads;
-            set { _maxThreads = Math.Max(0, value); OnPropertyChanged(nameof(MaxThreads)); }
+            set { _maxThreads = DomainThreadConfig.NormalizeMaxThreads(value); OnPropertyChanged(nameof(MaxThreads)); }
         }
         
         public int MinSegmentSizeKb
@@ -1374,7 +1369,7 @@ public partial class UnifiedSettingsDialog : Window
             get => _minSegmentSizeKb;
             set
             {
-                _minSegmentSizeKb = value <= 0 ? 0 : Math.Clamp(value, 64, 4096);
+                _minSegmentSizeKb = DomainThreadConfig.NormalizeMinSegmentSizeKb(value);
                 OnPropertyChanged(nameof(MinSegmentSizeKb));
             }
         }

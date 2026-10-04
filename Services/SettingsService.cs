@@ -30,7 +30,7 @@ public class SettingsService
     public List<ConnectionHistoryEntry> ConnectionHistory => _historyData.Entries;
     
     /// <summary>Domain-specific thread settings for downloads.</summary>
-    public Dictionary<string, DomainSettings> DomainThreadSettings => _domainSettingsData.Domains;
+    internal Dictionary<string, DomainSettings> DomainThreadSettings => _domainSettingsData.Domains;
     
     /// <summary>Returns true if the settings file exists on disk.</summary>
     public bool SettingsFileExists => File.Exists(_settingsPath);
