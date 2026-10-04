@@ -50,6 +50,7 @@ public partial class FirstTimeSetupDialog : Window
         _stableReleaseService = ZandronumStableReleaseService.Instance;
         
         WadPathsListBox.ItemsSource = _wadPaths;
+        _ = new WadPathListPresenter(this, WadPathsListBox, NormalizeDisplayedWadPath);
         WadPathsListBox.SelectionChanged += WadPathsListBox_SelectionChanged;
         WadDownloadPathTextBox.TextChanged += WadDownloadPathTextBox_TextChanged;
         UpdateIntervalSpinner.ValueChanged += IntervalSpinner_Changed;

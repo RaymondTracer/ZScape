@@ -91,6 +91,9 @@ public class WadManager
     }
     
     internal WadManager() { }
+
+    public static Task<bool> IsSearchPathAvailableAsync(string path, CancellationToken cancellationToken) =>
+        Task.Run(() => Directory.Exists(path), cancellationToken);
     
     /// <summary>
     /// Adds a search path for WAD files.

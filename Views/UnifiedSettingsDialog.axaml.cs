@@ -47,6 +47,12 @@ public partial class UnifiedSettingsDialog : Window
     {
         InitializeComponent();
         _settingsService = SettingsService.Instance;
+        _ = new WadPathListPresenter(this, WadPathsListBox, displayedPath =>
+        {
+            var path = displayedPath.StartsWith(DownloadFolderPrefix, StringComparison.Ordinal)
+                ? displayedPath[DownloadFolderPrefix.Length..] : displayedPath;
+            return path == "(not set)" ? null : path;
+        });
         
         CategoryList.SelectionChanged += CategoryList_SelectionChanged;
         FavoriteNameRulesListBox.SelectionChanged += (_, _) => UpdateFavoriteRuleButtons();
