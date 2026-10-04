@@ -14,16 +14,23 @@ namespace ZScape.Services;
 public class ServerBrowserService : IDisposable
 {
     private readonly LoggingService _logger = LoggingService.Instance;
-    private readonly SettingsService _settings = SettingsService.Instance;
+    private readonly SettingsService _settings;
     private readonly MasterServerClient _masterClient = new();
     private readonly ConcurrentDictionary<string, ServerInfo> _servers = new();
     private readonly Ip2CountryService _ip2CountryService;
+    private readonly Func<IPEndPoint, CancellationToken, Task<ServerInfo?>> _queryServer;
     private List<IPEndPoint> _lastKnownEndpoints = [];
     private CancellationTokenSource? _refreshCts;
     private bool _disposed;
 
-    public ServerBrowserService()
+    public ServerBrowserService() : this(SettingsService.Instance, QueryServerOnceAsync) { }
+
+    internal ServerBrowserService(
+        SettingsService settings,
+        Func<IPEndPoint, CancellationToken, Task<ServerInfo?>> queryServer)
     {
+        _settings = settings;
+        _queryServer = queryServer;
         _ip2CountryService = new Ip2CountryService(_logger);
     }
 
@@ -332,6 +339,7 @@ public class ServerBrowserService : IDisposable
         var settings = _settings.Settings;
         int retryAttempts = Math.Max(1, settings.QueryRetryAttempts);
         int retryDelayMs = Math.Max(100, settings.QueryRetryDelayMs);
+        int failuresBeforeOffline = Math.Max(1, settings.ConsecutiveFailuresBeforeOffline);
         
         var key = endpoint.ToString();
         var pendingServer = initialServer == null
@@ -342,71 +350,87 @@ public class ServerBrowserService : IDisposable
 
         try
         {
-            ServerInfo? result = null;
-
-            for (int attempt = 1; attempt <= retryAttempts; attempt++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                using var queryClient = new ServerQueryClient();
-                result = await queryClient.QueryServerAsync(endpoint, cancellationToken);
-
-                if (result != null && result.IsOnline && result.IsQueried)
-                    break; // Success
-
-                if (attempt < retryAttempts)
-                {
-                    _logger.Verbose($"Retry {attempt}/{retryAttempts} for {endpoint} in {retryDelayMs}ms");
-                    await Task.Delay(retryDelayMs, cancellationToken);
-                }
-            }
-
-            CompleteSingleServerRefresh(key, result, countFailure: true);
+            var result = await QueryServerWithRetryAsync(endpoint, retryAttempts, retryDelayMs, cancellationToken);
+            CompleteServerRefresh(key, result, RefreshOutcome.Completed, failuresBeforeOffline);
         }
         catch (OperationCanceledException)
         {
             // A user-cancelled direct refresh is not a failed server. Restore
             // the old row if there is one, or remove a placeholder-only row.
-            CompleteSingleServerRefresh(key, result: null, countFailure: false);
+            CompleteServerRefresh(key, result: null, RefreshOutcome.Cancelled, failuresBeforeOffline);
         }
         catch (Exception ex)
         {
             _logger.Verbose($"Query failed for {endpoint}: {ex.Message}");
-            CompleteSingleServerRefresh(key, result: null, countFailure: true);
+            CompleteServerRefresh(key, result: null, RefreshOutcome.Completed, failuresBeforeOffline);
         }
     }
 
     /// <summary>
-    /// Finishes a one-address refresh without ever retaining a blank endpoint
-    /// as though it were a real server row.
+    /// Applies the same address-backed transition for direct and queued queries,
+    /// then publishes the resulting row or collection change.
     /// </summary>
-    private void CompleteSingleServerRefresh(string key, ServerInfo? result, bool countFailure)
+    private void CompleteServerRefresh(string key, ServerInfo? result, RefreshOutcome outcome, int failuresBeforeOffline)
     {
-        if (result != null && result.IsOnline && result.IsQueried)
+        if (outcome == RefreshOutcome.Completed && result != null && (!result.IsOnline || !result.IsQueried))
+        {
+            _logger.Verbose($"Server {key} query incomplete: IsOnline={result.IsOnline}, IsQueried={result.IsQueried}, Error={result.ErrorMessage}");
+        }
+
+        var change = ApplyRefreshOutcome(_servers, key, result, outcome, failuresBeforeOffline);
+        if (change.MembershipChanged)
+            ServerListChanged?.Invoke(this, EventArgs.Empty);
+        if (change.UpdatedServer != null)
+            ServerUpdated?.Invoke(this, change.UpdatedServer);
+    }
+
+    internal enum RefreshOutcome
+    {
+        Completed,
+        Cancelled
+    }
+
+    internal readonly record struct RefreshChange(ServerInfo? UpdatedServer, bool MembershipChanged);
+
+    /// <summary>
+    /// A successful complete response replaces the old snapshot and resets its
+    /// failures. A failed query retains real data until the offline threshold;
+    /// cancellation retains it without counting a failure. Neither failure nor
+    /// cancellation turns an unresolved placeholder into a server snapshot.
+    /// </summary>
+    internal static RefreshChange ApplyRefreshOutcome(
+        ConcurrentDictionary<string, ServerInfo> servers,
+        string key,
+        ServerInfo? result,
+        RefreshOutcome outcome,
+        int failuresBeforeOffline)
+    {
+        if (outcome == RefreshOutcome.Completed && result is { IsOnline: true, IsQueried: true })
         {
             result.ConsecutiveFailures = 0;
             result.IsRefreshPending = false;
-            _servers[key] = result;
-            ServerUpdated?.Invoke(this, result);
-            return;
+            servers[key] = result;
+            return new RefreshChange(result, false);
         }
 
-        if (!_servers.TryGetValue(key, out var existingServer))
-            return;
+        if (!servers.TryGetValue(key, out var existingServer))
+            return default;
 
         existingServer.IsRefreshPending = false;
-
         if (!existingServer.IsQueried)
+            return new RefreshChange(null, servers.TryRemove(key, out _));
+
+        if (outcome == RefreshOutcome.Completed)
         {
-            if (_servers.TryRemove(key, out _))
-                ServerListChanged?.Invoke(this, EventArgs.Empty);
-            return;
+            existingServer.ConsecutiveFailures++;
+            if (existingServer.ConsecutiveFailures >= Math.Max(1, failuresBeforeOffline))
+            {
+                existingServer.IsOnline = false;
+                existingServer.ErrorMessage = $"Offline after {existingServer.ConsecutiveFailures} failed queries";
+            }
         }
 
-        if (countFailure)
-            existingServer.ConsecutiveFailures++;
-
-        ServerUpdated?.Invoke(this, existingServer);
+        return new RefreshChange(existingServer, false);
     }
 
     /// <summary>
@@ -433,154 +457,121 @@ public class ServerBrowserService : IDisposable
         using var concurrencySemaphore = new SemaphoreSlim(maxConcurrent, maxConcurrent);
         
         // Channel for collecting completed queries - enables true pipelining
-        var completionChannel = Channel.CreateUnbounded<(IPEndPoint Endpoint, ServerInfo? Result)>();
+        var completionChannel = Channel.CreateUnbounded<(IPEndPoint Endpoint, ServerInfo? Result, RefreshOutcome Outcome)>();
         
         // Task to process completed results as they stream in
         var processingTask = Task.Run(async () =>
         {
-            await foreach (var (endpoint, result) in completionChannel.Reader.ReadAllAsync(cancellationToken))
+            // Drain the results even when launching is cancelled. In-flight
+            // queries must finish before their semaphore/channel are disposed.
+            await foreach (var (endpoint, result, outcome) in completionChannel.Reader.ReadAllAsync())
             {
-                var key = endpoint.ToString();
-                
-                if (result != null && result.IsOnline && result.IsQueried)
+                CompleteServerRefresh(endpoint.ToString(), result, outcome, failuresBeforeOffline);
+                if (outcome == RefreshOutcome.Completed)
                 {
-                    // Success - reset failure count and update server
-                    result.ConsecutiveFailures = 0;
-                    result.IsRefreshPending = false;
-                    _servers[key] = result;
-                    ServerUpdated?.Invoke(this, result);
+                    var current = Interlocked.Increment(ref completed);
+                    RefreshProgress?.Invoke(this, (int)((double)current / total * 100));
                 }
-                else
-                {
-                    // Failed - log why for debugging
-                    if (result != null)
-                    {
-                        _logger.Verbose($"Server {key} query incomplete: IsOnline={result.IsOnline}, IsQueried={result.IsQueried}, Error={result.ErrorMessage}");
-                    }
-                    
-                    // Failed - increment failure count on existing entry
-                    if (_servers.TryGetValue(key, out var existingServer))
-                    {
-                        // Fresh master-list entries have no usable data to
-                        // keep after their query fails. Remove their temporary
-                        // <Refreshing> row instead of turning it into a blank
-                        // pseudo-server.
-                        if (!existingServer.IsQueried)
-                        {
-                            if (_servers.TryRemove(key, out _))
-                                ServerListChanged?.Invoke(this, EventArgs.Empty);
-                            continue;
-                        }
-
-                        existingServer.ConsecutiveFailures++;
-                        existingServer.IsRefreshPending = false;
-                        
-                        // Mark offline after N consecutive failures
-                        if (existingServer.ConsecutiveFailures >= failuresBeforeOffline)
-                        {
-                            existingServer.IsOnline = false;
-                            existingServer.ErrorMessage = $"Offline after {existingServer.ConsecutiveFailures} failed queries";
-                            _logger.Verbose($"Server {key} marked offline after {existingServer.ConsecutiveFailures} failures");
-                        }
-                        
-                        ServerUpdated?.Invoke(this, existingServer);
-                    }
-                    else if (result != null)
-                    {
-                        // New server that failed on first query
-                        result.ConsecutiveFailures = 1;
-                        result.IsOnline = false;
-                        result.IsRefreshPending = false;
-                        _servers[key] = result;
-                        ServerUpdated?.Invoke(this, result);
-                    }
-                }
-                
-                var current = Interlocked.Increment(ref completed);
-                RefreshProgress?.Invoke(this, (int)((double)current / total * 100));
             }
-        }, cancellationToken);
+        });
         
         // Fire off all queries with pipelining - don't wait for batches
         var queryTasks = new List<Task>();
         
-        foreach (var endpoint in endpoints)
+        try
         {
-            if (cancellationToken.IsCancellationRequested)
-                break;
-            
-            // Wait for a slot to become available (limits concurrency)
-            await concurrencySemaphore.WaitAsync(cancellationToken);
-            
-            // Fire query without waiting for it to complete (pipelining)
-            queryTasks.Add(QueryServerWithRetryAsync(
-                endpoint, retryAttempts, retryDelayMs, 
-                concurrencySemaphore, completionChannel.Writer, 
-                cancellationToken));
-            
-            // Small interval between sending queries
-            if (intervalMs > 0)
+            foreach (var endpoint in endpoints)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Wait for a slot to become available (limits concurrency)
+                await concurrencySemaphore.WaitAsync(cancellationToken);
+
+                // Fire query without waiting for it to complete (pipelining)
+                queryTasks.Add(QueryServerForBatchAsync(
+                    endpoint, retryAttempts, retryDelayMs,
+                    concurrencySemaphore, completionChannel.Writer,
+                    cancellationToken));
+
+                // Small interval between sending queries
                 await Task.Delay(intervalMs, cancellationToken);
+            }
         }
-        
-        // Wait for all queries to complete
-        await Task.WhenAll(queryTasks);
-        
-        // Signal that no more items will be written
-        completionChannel.Writer.Complete();
-        
-        // Wait for processing to finish
-        await processingTask;
+        finally
+        {
+            try
+            {
+                await Task.WhenAll(queryTasks);
+            }
+            finally
+            {
+                completionChannel.Writer.TryComplete();
+                await processingTask;
+            }
+        }
     }
 
-    private async Task QueryServerWithRetryAsync(
+    private async Task QueryServerForBatchAsync(
         IPEndPoint endpoint, 
         int retryAttempts, 
         int retryDelayMs,
         SemaphoreSlim semaphore,
-        ChannelWriter<(IPEndPoint, ServerInfo?)> writer,
+        ChannelWriter<(IPEndPoint, ServerInfo?, RefreshOutcome)> writer,
         CancellationToken cancellationToken)
     {
         try
         {
-            ServerInfo? result = null;
-            
-            for (int attempt = 1; attempt <= retryAttempts; attempt++)
-            {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
-                
-                using var queryClient = new ServerQueryClient();
-                result = await queryClient.QueryServerAsync(endpoint, cancellationToken);
-                
-                if (result != null && result.IsOnline && result.IsQueried)
-                    break; // Success, no need to retry
-                
-                if (attempt < retryAttempts)
-                {
-                    _logger.Verbose($"Retry {attempt}/{retryAttempts} for {endpoint} in {retryDelayMs}ms");
-                    await Task.Delay(retryDelayMs, cancellationToken);
-                }
-            }
-            
-            // Write result to channel for processing
-            await writer.WriteAsync((endpoint, result), cancellationToken);
+            var result = await QueryServerWithRetryAsync(endpoint, retryAttempts, retryDelayMs, cancellationToken);
+            await writer.WriteAsync((endpoint, result, RefreshOutcome.Completed));
         }
         catch (OperationCanceledException)
         {
-            // Cancelled - don't write anything
+            await writer.WriteAsync((endpoint, null, RefreshOutcome.Cancelled));
         }
         catch (Exception ex)
         {
             _logger.Verbose($"Query failed for {endpoint}: {ex.Message}");
             // Write null result to update progress
-            await writer.WriteAsync((endpoint, null), cancellationToken);
+            await writer.WriteAsync((endpoint, null, RefreshOutcome.Completed));
         }
         finally
         {
             // Release semaphore slot for next query
             semaphore.Release();
         }
+    }
+
+    private async Task<ServerInfo?> QueryServerWithRetryAsync(
+        IPEndPoint endpoint,
+        int retryAttempts,
+        int retryDelayMs,
+        CancellationToken cancellationToken)
+    {
+        ServerInfo? result = null;
+        for (int attempt = 1; attempt <= retryAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            result = await _queryServer(endpoint, cancellationToken);
+
+            // The protocol client can return an unsuccessful response after a
+            // cancelled receive. Cancellation must not become a failed query.
+            cancellationToken.ThrowIfCancellationRequested();
+            if (result is { IsOnline: true, IsQueried: true })
+                break;
+
+            if (attempt < retryAttempts)
+            {
+                _logger.Verbose($"Retry {attempt}/{retryAttempts} for {endpoint} in {retryDelayMs}ms");
+                await Task.Delay(retryDelayMs, cancellationToken);
+            }
+        }
+        return result;
+    }
+
+    private static async Task<ServerInfo?> QueryServerOnceAsync(IPEndPoint endpoint, CancellationToken cancellationToken)
+    {
+        using var queryClient = new ServerQueryClient();
+        return await queryClient.QueryServerAsync(endpoint, cancellationToken);
     }
 
     /// <summary>
@@ -598,15 +589,8 @@ public class ServerBrowserService : IDisposable
             if (!server.IsRefreshPending)
                 continue;
 
-            if (!server.IsQueried)
-            {
-                changed |= _servers.TryRemove(entry.Key, out _);
-            }
-            else
-            {
-                server.IsRefreshPending = false;
-                changed = true;
-            }
+            var change = ApplyRefreshOutcome(_servers, entry.Key, result: null, RefreshOutcome.Cancelled, failuresBeforeOffline: 1);
+            changed |= change.MembershipChanged || change.UpdatedServer != null;
         }
 
         if (changed)

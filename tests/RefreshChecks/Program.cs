@@ -23,6 +23,7 @@ internal static class Program
         Application.Current!.Styles.Add(new Avalonia.Themes.Fluent.FluentTheme());
         WadPathChecks.Run();
         DomainThreadChecks.Run();
+        ServerRefreshChecks.Run();
         var list = new ResizableListView();
         list.AddColumn(new ListViewColumn { Key = "text", Header = "Text", BindingPath = "Text", Width = 250 });
         list.Build(ListViewOverflowMode.AutoScroll);
