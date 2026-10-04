@@ -74,11 +74,10 @@ public class NotificationService : IDisposable
         RegisterKnownServer(server, alertType);
 
         var effectiveMode = GetEffectiveDisplayMode(displayModeOverride);
-
-        if (!TryShowNativeServerAlert(server, alertType, effectiveMode, isTestAlert))
-        {
-            ShowCustomServerAlert(server, alertType, isTestAlert);
-        }
+        var request = CreateSingleNativeNotificationRequest(server, alertType, isTestAlert);
+        PresentNotification(request,
+            candidate => TryShowNativeNotification(candidate, effectiveMode),
+            candidate => ShowCustomNotification(candidate));
     }
 
     /// <summary>
@@ -104,11 +103,10 @@ public class NotificationService : IDisposable
         }
 
         var effectiveMode = GetEffectiveDisplayMode(displayModeOverride);
-
-        if (!TryShowNativeMultipleServersAlert(servers, effectiveMode, isTestAlert))
-        {
-            ShowCustomMultipleServersAlert(servers, isTestAlert);
-        }
+        var request = CreateMultipleNativeNotificationRequest(servers, isTestAlert);
+        PresentNotification(request,
+            candidate => TryShowNativeNotification(candidate, effectiveMode),
+            candidate => ShowCustomNotification(candidate));
     }
 
     /// <summary>
@@ -127,13 +125,16 @@ public class NotificationService : IDisposable
         var detail = $"Previewing the in-app popup in the {AppConstants.CustomNotificationCornerLabels.GetLabel(effectiveCorner)} corner. {durationText}";
 
         ShowCustomNotification(
-            "Custom notification preview",
-            "This is how ZScape's in-app alert popup will appear.",
-            detail,
-            [],
-            server: null,
-            alertType: null,
-            isTestAlert: true,
+            new NativeNotificationRequest(
+                "Custom notification preview",
+                "This is how ZScape's in-app alert popup will appear.",
+                detail,
+                [],
+                null,
+                null,
+                null,
+                ServerAlertAction.FocusWindow,
+                IsTestAlert: true),
             ownerOverride,
             cornerOverride,
             autoCloseSecondsOverride,
@@ -252,11 +253,18 @@ public class NotificationService : IDisposable
     }
 #endif
 
-    private bool TryShowNativeServerAlert(
-        ServerInfo server,
-        ServerAlertType alertType,
-        NotificationDisplayMode effectiveMode,
-        bool isTestAlert)
+    internal static void PresentNotification(
+        NativeNotificationRequest request,
+        Func<NativeNotificationRequest, bool> tryShowNative,
+        Action<NativeNotificationRequest> showCustom)
+    {
+        if (!tryShowNative(request))
+            showCustom(request);
+    }
+
+    private bool TryShowNativeNotification(
+        NativeNotificationRequest request,
+        NotificationDisplayMode effectiveMode)
     {
         if (_disposed || effectiveMode != NotificationDisplayMode.Native)
         {
@@ -265,10 +273,8 @@ public class NotificationService : IDisposable
 
         if (OperatingSystem.IsWindows())
         {
-            return TryShowWindowsNativeServerAlert(server, alertType, isTestAlert);
+            return TryShowWindowsNativeNotification(request);
         }
-
-        var request = CreateSingleNativeNotificationRequest(server, alertType, isTestAlert);
 
         if (OperatingSystem.IsLinux() && _linuxNotificationClient != null)
         {
@@ -284,10 +290,7 @@ public class NotificationService : IDisposable
         return false;
     }
 
-    private bool TryShowWindowsNativeServerAlert(
-        ServerInfo server,
-        ServerAlertType alertType,
-        bool isTestAlert)
+    private bool TryShowWindowsNativeNotification(NativeNotificationRequest request)
     {
 #if WINDOWS
         if (_disposed || !OperatingSystem.IsWindows())
@@ -297,113 +300,34 @@ public class NotificationService : IDisposable
 
         try
         {
-            var address = ServerRuleUtility.GetServerAddress(server);
-            var title = alertType == ServerAlertType.Favorite ? "Favorite server online" : "Manual server online";
-            var testValue = isTestAlert ? "true" : "false";
+            var builder = new ToastContentBuilder()
+                .AddText(request.Title)
+                .AddText(request.Message)
+                .AddText(request.Detail);
+            foreach (var argument in request.GetActivationArguments())
+                builder.AddArgument(argument.Key, argument.Value);
 
-            new ToastContentBuilder()
-                .AddArgument("serverAddress", address)
-                .AddArgument("alertType", alertType.ToString())
-                .AddArgument("action", ServerAlertAction.ShowServer.ToString())
-                .AddArgument("test", testValue)
-                .AddText(title)
-                .AddText(server.Name)
-                .AddText($"{server.CurrentPlayers}/{server.MaxClients} players on {server.Map} ({server.GameMode.Name})")
-                .AddButton(new ToastButton()
-                    .SetContent("Connect")
-                    .AddArgument("action", ServerAlertAction.Connect.ToString())
-                    .AddArgument("serverAddress", address)
-                    .AddArgument("alertType", alertType.ToString())
-                    .AddArgument("test", testValue))
-                .AddButton(new ToastButton()
-                    .SetContent("Show Server")
-                    .AddArgument("action", ServerAlertAction.ShowServer.ToString())
-                    .AddArgument("serverAddress", address)
-                    .AddArgument("alertType", alertType.ToString())
-                    .AddArgument("test", testValue))
-                .Show(toast =>
-                {
-                    toast.Tag = address;
-                    toast.Group = "server-alerts";
-                    toast.ExpirationTime = DateTime.Now.AddMinutes(10);
-                });
+            foreach (var action in request.Actions)
+            {
+                var button = new ToastButton().SetContent(action.Label);
+                foreach (var argument in request.GetActivationArguments(action.Action))
+                    button.AddArgument(argument.Key, argument.Value);
+                builder.AddButton(button);
+            }
+
+            builder.Show(toast =>
+            {
+                if (!string.IsNullOrEmpty(request.ServerAddress))
+                    toast.Tag = request.ServerAddress;
+                toast.Group = "server-alerts";
+                toast.ExpirationTime = DateTime.Now.AddMinutes(10);
+            });
 
             return true;
         }
         catch (Exception ex)
         {
-            LoggingService.Instance.Warning($"Native single-server notification failed, using custom fallback: {ex.Message}");
-            return false;
-        }
-#else
-        return false;
-#endif
-    }
-
-    private bool TryShowNativeMultipleServersAlert(
-        IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers,
-        NotificationDisplayMode effectiveMode,
-        bool isTestAlert)
-    {
-        if (_disposed || effectiveMode != NotificationDisplayMode.Native)
-        {
-            return false;
-        }
-
-        if (OperatingSystem.IsWindows())
-        {
-            return TryShowWindowsNativeMultipleServersAlert(servers, isTestAlert);
-        }
-
-        var request = CreateMultipleNativeNotificationRequest(servers, isTestAlert);
-
-        if (OperatingSystem.IsLinux() && _linuxNotificationClient != null)
-        {
-            _ = ShowLinuxNativeAlertAsync(request);
-            return true;
-        }
-
-        if (OperatingSystem.IsMacOS() && _macOsNotificationClient != null)
-        {
-            return _macOsNotificationClient.TryShow(request);
-        }
-
-        return false;
-    }
-
-    private bool TryShowWindowsNativeMultipleServersAlert(
-        IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers,
-        bool isTestAlert)
-    {
-#if WINDOWS
-        if (_disposed || !OperatingSystem.IsWindows())
-        {
-            return false;
-        }
-
-        try
-        {
-            new ToastContentBuilder()
-                .AddArgument("action", ServerAlertAction.FocusWindow.ToString())
-                .AddArgument("test", isTestAlert ? "true" : "false")
-                .AddText("Servers online")
-                .AddText($"{servers.Count} favorite or manual servers are online")
-                .AddText(BuildServerSummary(servers.Select(entry => entry.Server)))
-                .AddButton(new ToastButton()
-                    .SetContent("Show Window")
-                    .AddArgument("action", ServerAlertAction.FocusWindow.ToString())
-                    .AddArgument("test", isTestAlert ? "true" : "false"))
-                .Show(toast =>
-                {
-                    toast.Group = "server-alerts";
-                    toast.ExpirationTime = DateTime.Now.AddMinutes(10);
-                });
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            LoggingService.Instance.Warning($"Native multi-server notification failed, using custom fallback: {ex.Message}");
+            LoggingService.Instance.Warning($"Native notification failed, using custom fallback: {ex.Message}");
             return false;
         }
 #else
@@ -427,19 +351,7 @@ public class NotificationService : IDisposable
         }
     }
 
-    private void ShowCustomNotification(NativeNotificationRequest request)
-    {
-        ShowCustomNotification(
-            request.Title,
-            request.Message,
-            request.Detail,
-            request.Actions,
-            request.Server,
-            request.AlertType,
-            request.IsTestAlert);
-    }
-
-    private static NativeNotificationRequest CreateSingleNativeNotificationRequest(
+    internal static NativeNotificationRequest CreateSingleNativeNotificationRequest(
         ServerInfo server,
         ServerAlertType alertType,
         bool isTestAlert)
@@ -462,7 +374,7 @@ public class NotificationService : IDisposable
             isTestAlert);
     }
 
-    private static NativeNotificationRequest CreateMultipleNativeNotificationRequest(
+    internal static NativeNotificationRequest CreateMultipleNativeNotificationRequest(
         IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers,
         bool isTestAlert)
     {
@@ -480,46 +392,8 @@ public class NotificationService : IDisposable
             isTestAlert);
     }
 
-    private void ShowCustomServerAlert(ServerInfo server, ServerAlertType alertType, bool isTestAlert)
-    {
-        var title = alertType == ServerAlertType.Favorite ? "Favorite server online" : "Manual server online";
-        var detail = $"{server.CurrentPlayers}/{server.MaxClients} players on {server.Map} ({server.GameMode.Name})";
-
-        ShowCustomNotification(
-            title,
-            server.Name,
-            detail,
-            [
-                new AlertActionDefinition("Connect", ServerAlertAction.Connect, IsPrimary: true),
-                new AlertActionDefinition("Show Server", ServerAlertAction.ShowServer, IsPrimary: false)
-            ],
-            server,
-            alertType,
-            isTestAlert);
-    }
-
-    private void ShowCustomMultipleServersAlert(IReadOnlyList<(ServerInfo Server, ServerAlertType Type)> servers, bool isTestAlert)
-    {
-        ShowCustomNotification(
-            "Servers online",
-            $"{servers.Count} favorite or manual servers are online",
-            BuildServerSummary(servers.Select(entry => entry.Server)),
-            [
-                new AlertActionDefinition("Show Window", ServerAlertAction.FocusWindow, IsPrimary: true)
-            ],
-            server: null,
-            alertType: null,
-            isTestAlert);
-    }
-
     private void ShowCustomNotification(
-        string title,
-        string message,
-        string detail,
-        IReadOnlyList<AlertActionDefinition> actions,
-        ServerInfo? server,
-        ServerAlertType? alertType,
-        bool isTestAlert,
+        NativeNotificationRequest request,
         Window? ownerOverride = null,
         CustomNotificationCorner? cornerOverride = null,
         int? autoCloseSecondsOverride = null,
@@ -546,16 +420,12 @@ public class NotificationService : IDisposable
             var corner = cornerOverride ?? SettingsService.Instance.Settings.CustomNotificationCorner;
             var autoCloseSeconds = Math.Max(0, autoCloseSecondsOverride ?? SettingsService.Instance.Settings.CustomNotificationDurationSeconds);
 
-            var notificationWindow = new ServerAlertNotificationWindow(title, message, detail, actions, autoCloseSeconds);
-            var entry = new CustomNotificationEntry(notificationWindow, ownerWindow, corner, isTestAlert);
+            var notificationWindow = new ServerAlertNotificationWindow(
+                request.Title, request.Message, request.Detail, request.Actions, autoCloseSeconds);
+            var entry = new CustomNotificationEntry(notificationWindow, ownerWindow, corner, request.IsTestAlert);
             notificationWindow.ActionInvoked += (_, action) =>
             {
-                AlertClicked?.Invoke(this, new ServerAlertEventArgs(
-                    server,
-                    alertType,
-                    action,
-                    server is null ? null : ServerRuleUtility.GetServerAddress(server),
-                    isTestAlert));
+                AlertClicked?.Invoke(this, request.CreateEventArgs(action));
             };
             notificationWindow.Closed += (_, _) =>
             {
@@ -660,7 +530,6 @@ public class NotificationService : IDisposable
         var names = servers
             .Select(server => server.Name)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(3)
             .ToList();
 
         if (names.Count == 0)
@@ -668,11 +537,8 @@ public class NotificationService : IDisposable
             return "Open ZScape to review the servers.";
         }
 
-        var summary = string.Join(", ", names);
-        var remaining = servers
-            .Select(server => server.Name)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count() - names.Count;
+        var summary = string.Join(", ", names.Take(3));
+        var remaining = names.Count - Math.Min(names.Count, 3);
 
         return remaining > 0 ? $"{summary}, and {remaining} more" : summary;
     }
@@ -754,4 +620,22 @@ internal sealed record NativeNotificationRequest(
     ServerAlertType? AlertType,
     string? ServerAddress,
     ServerAlertAction DefaultAction,
-    bool IsTestAlert);
+    bool IsTestAlert)
+{
+    public IReadOnlyDictionary<string, string> GetActivationArguments(ServerAlertAction? action = null)
+    {
+        var arguments = new Dictionary<string, string>
+        {
+            ["action"] = (action ?? DefaultAction).ToString(),
+            ["test"] = IsTestAlert ? "true" : "false"
+        };
+        if (!string.IsNullOrEmpty(ServerAddress))
+            arguments.Add("serverAddress", ServerAddress);
+        if (AlertType.HasValue)
+            arguments.Add("alertType", AlertType.Value.ToString());
+        return arguments;
+    }
+
+    public ServerAlertEventArgs CreateEventArgs(ServerAlertAction action) =>
+        new(Server, AlertType, action, ServerAddress, IsTestAlert);
+}
