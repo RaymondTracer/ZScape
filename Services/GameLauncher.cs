@@ -814,7 +814,7 @@ public class GameLauncher : IDisposable
         {
             return null;
         }
-        return Path.Combine(folder, "zandronum.exe");
+        return PathResolver.FindZandronumExecutable(folder);
     }
 
     /// <summary>
@@ -1354,23 +1354,8 @@ public class GameLauncher : IDisposable
     /// </summary>
     public List<string> GetInstalledTestingVersions()
     {
-        var testingRoot = GetTestingRootPath();
-        if (string.IsNullOrEmpty(testingRoot) || 
-            !Directory.Exists(testingRoot))
-        {
-            return [];
-        }
-
-        var versions = new List<string>();
-        foreach (var dir in Directory.GetDirectories(testingRoot))
-        {
-            var exePath = Path.Combine(dir, "zandronum.exe");
-            if (File.Exists(exePath))
-            {
-                versions.Add(Path.GetFileName(dir));
-            }
-        }
-        return versions;
+        return PathResolver.GetManagedZandronumVersions(GetTestingRootPath())
+            .Select(version => version.Name).ToList();
     }
 
     private string BuildCommandLine(

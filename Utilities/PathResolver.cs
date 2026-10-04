@@ -6,7 +6,7 @@ namespace ZScape.Utilities;
 /// Centralized path resolution for application directories.
 /// Single source of truth for default folder logic.
 /// </summary>
-public static class PathResolver
+public static partial class PathResolver
 {
     // Directory identity is platform-sensitive; WAD filename matching has its
     // own deliberately case-insensitive rule in WadManager.

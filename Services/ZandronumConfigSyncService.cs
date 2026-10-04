@@ -85,19 +85,19 @@ public sealed class ZandronumConfigSyncService
         var stableVersionsRoot = string.IsNullOrWhiteSpace(settings.ZandronumPath)
             ? null
             : ZandronumStableReleaseService.Instance.GetStableVersionsRootPath(settings.ZandronumPath);
-        foreach (var executablePath in EnumerateManagedZandronumExecutables(stableVersionsRoot))
+        foreach (var version in PathResolver.GetManagedZandronumVersions(stableVersionsRoot))
         {
             AddCandidate(
-                executablePath,
-                $"Stable · {GetVersionFolderLabel(executablePath, stableVersionsRoot)}");
+                version.ExecutablePath,
+                $"Stable · {version.Name}");
         }
 
         var testingRoot = PathResolver.GetTestingVersionsPath(settings);
-        foreach (var executablePath in EnumerateManagedZandronumExecutables(testingRoot))
+        foreach (var version in PathResolver.GetManagedZandronumVersions(testingRoot))
         {
             AddCandidate(
-                executablePath,
-                $"Testing · {GetVersionFolderLabel(executablePath, testingRoot)}");
+                version.ExecutablePath,
+                $"Testing · {version.Name}");
         }
 
         return candidates
@@ -644,94 +644,6 @@ public sealed class ZandronumConfigSyncService
             exists,
             fileInfo?.LastWriteTimeUtc,
             fileInfo?.Length ?? 0);
-    }
-
-    private static IEnumerable<string> EnumerateManagedZandronumExecutables(string? rootPath)
-    {
-        if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
-            yield break;
-
-        var executableNames = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? new[] { "zandronum.exe" }
-            : new[] { "zandronum", "zandronum.x86_64" };
-
-        IEnumerable<string>? installationDirectories = null;
-        try
-        {
-            installationDirectories = Directory.EnumerateDirectories(rootPath, "*", SearchOption.TopDirectoryOnly);
-        }
-        catch
-        {
-            yield break;
-        }
-
-        using var enumerator = installationDirectories.GetEnumerator();
-        while (true)
-        {
-            string? installationDirectory;
-            try
-            {
-                if (!enumerator.MoveNext())
-                    break;
-
-                installationDirectory = enumerator.Current;
-            }
-            catch
-            {
-                // One inaccessible version directory should not prevent the
-                // manager from showing the rest of the configured root.
-                break;
-            }
-
-            foreach (var executableName in executableNames)
-            {
-                var executablePath = Path.Combine(installationDirectory, executableName);
-                if (File.Exists(executablePath))
-                {
-                    yield return executablePath;
-                    break;
-                }
-
-                // macOS app bundles keep the executable at this predictable
-                // location while still remaining one managed version folder.
-                var appBundleExecutablePath = Path.Combine(
-                    installationDirectory,
-                    "Contents",
-                    "MacOS",
-                    executableName);
-                if (File.Exists(appBundleExecutablePath))
-                {
-                    yield return appBundleExecutablePath;
-                    break;
-                }
-            }
-        }
-    }
-
-    private static string GetVersionFolderLabel(string executablePath, string? rootPath)
-    {
-        if (string.IsNullOrWhiteSpace(rootPath))
-            return Path.GetFileName(Path.GetDirectoryName(executablePath)) ?? "Unknown";
-
-        try
-        {
-            var relativeDirectory = Path.GetRelativePath(
-                rootPath,
-                Path.GetDirectoryName(executablePath) ?? rootPath);
-            if (!relativeDirectory.StartsWith("..", StringComparison.Ordinal))
-            {
-                var firstSegment = relativeDirectory.Split(
-                    [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                    StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(firstSegment))
-                    return firstSegment;
-            }
-        }
-        catch
-        {
-        }
-
-        return Path.GetFileName(Path.GetDirectoryName(executablePath)) ?? "Unknown";
     }
 
     private static ZandronumConfigSyncScope CreateScopeSnapshot(ZandronumConfigSyncSettings? options) =>

@@ -206,13 +206,11 @@ public partial class TestingVersionManagerDialog : Window
 
             await Task.Run(() =>
             {
-                foreach (var dir in Directory.GetDirectories(testingRoot))
+                foreach (var version in PathResolver.GetManagedZandronumVersions(testingRoot, includeIncomplete: true))
                 {
-                    var versionName = System.IO.Path.GetFileName(dir);
-                    var exeNames = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) 
-                        ? new[] { "zandronum.exe" } 
-                        : new[] { "zandronum", "zandronum.x86_64" };
-                    var hasExe = exeNames.Any(name => File.Exists(System.IO.Path.Combine(dir, name)));
+                    var dir = version.DirectoryPath;
+                    var versionName = version.Name;
+                    var hasExe = version.IsInstalled;
 
                     var (size, fileCount) = GetDirectoryInfo(dir);
 

@@ -87,34 +87,28 @@ public class ScreenshotMonitorService : IDisposable
             
             try
             {
-                // Watch the stable release folder
-                var stableDir = GetStableZandronumDir();
-                if (!string.IsNullOrEmpty(stableDir) && Directory.Exists(stableDir) && 
-                    !stableDir.Equals(DestinationPath, StringComparison.OrdinalIgnoreCase))
+                foreach (var sourceDirectory in GetScreenshotSourceDirectories(settings))
                 {
-                    CreateWatcherForDirectory(stableDir);
-                    watchedDirs.Add("stable");
+                    if (PathResolver.DirectoryPathsEqual(sourceDirectory, DestinationPath))
+                        continue;
+                    CreateWatcherForDirectory(sourceDirectory);
+                    watchedDirs.Add(sourceDirectory);
                 }
                 
                 // Watch testing version directories
                 var testingRoot = GetTestingRootPath();
                 if (!string.IsNullOrEmpty(testingRoot) && Directory.Exists(testingRoot))
                 {
-                    foreach (var versionDir in Directory.GetDirectories(testingRoot))
-                    {
-                        CreateWatcherForDirectory(versionDir);
-                    }
-                    
                     // Also watch the root testing folder for new version directories
                     var rootWatcher = new FileSystemWatcher(testingRoot)
                     {
-                        NotifyFilter = NotifyFilters.DirectoryName,
+                        NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName,
+                        IncludeSubdirectories = true,
                         EnableRaisingEvents = true
                     };
                     rootWatcher.Created += OnVersionDirectoryCreated;
                     _watchers.Add(rootWatcher);
                     
-                    watchedDirs.Add($"{Directory.GetDirectories(testingRoot).Length} testing versions");
                 }
                 
                 _isMonitoring = true;
@@ -156,7 +150,10 @@ public class ScreenshotMonitorService : IDisposable
     
     private void CreateWatcherForDirectory(string directory)
     {
-        if (!Directory.Exists(directory))
+        if (!Directory.Exists(directory)
+            || PathResolver.DirectoryPathsEqual(directory, DestinationPath)
+            || _watchers.Any(watcher => watcher.Filter == "Screenshot_*.png"
+                && PathResolver.DirectoryPathsEqual(watcher.Path, directory)))
             return;
             
         var watcher = new FileSystemWatcher(directory)
@@ -175,14 +172,17 @@ public class ScreenshotMonitorService : IDisposable
     
     private void OnVersionDirectoryCreated(object sender, FileSystemEventArgs e)
     {
-        // New testing version directory created, start watching it
-        if (Directory.Exists(e.FullPath))
+        // Installation folders appear before extraction writes the executable.
+        // Observe either event and discover only the configured monitoring scope.
+        if (!PathResolver.IsZandronumExecutableFileName(Path.GetFileName(e.FullPath))
+            && !PathResolver.DirectoryPathsEqual(Path.GetDirectoryName(e.FullPath), GetTestingRootPath()))
+            return;
+        lock (_lock)
         {
-            lock (_lock)
-            {
-                CreateWatcherForDirectory(e.FullPath);
-            }
-            _logger.Verbose($"Started watching new version directory: {e.FullPath}");
+            if (!_isMonitoring)
+                return;
+            foreach (var directory in GetScreenshotSourceDirectories(SettingsService.Instance.Settings))
+                CreateWatcherForDirectory(directory);
         }
     }
     
@@ -371,9 +371,7 @@ public class ScreenshotMonitorService : IDisposable
             if (!Directory.Exists(directory)) return;
 
             // Don't move from the destination folder itself
-            if (Path.GetFullPath(directory).Equals(
-                    Path.GetFullPath(destPath),
-                    StringComparison.OrdinalIgnoreCase))
+            if (PathResolver.DirectoryPathsEqual(directory, destPath))
                 return;
 
             var screenshots = Directory.GetFiles(
@@ -389,22 +387,8 @@ public class ScreenshotMonitorService : IDisposable
 
         try
         {
-            // Move from stable Zandronum folder
-            var stableDir = GetStableZandronumDir();
-            if (!string.IsNullOrEmpty(stableDir))
-            {
-                QueueScreenshotsFromDirectory(stableDir);
-            }
-
-            // Move from testing version subdirectories
-            var testingRoot = GetTestingRootPath();
-            if (!string.IsNullOrEmpty(testingRoot) && Directory.Exists(testingRoot))
-            {
-                foreach (var versionDir in Directory.GetDirectories(testingRoot))
-                {
-                    QueueScreenshotsFromDirectory(versionDir);
-                }
-            }
+            foreach (var directory in GetScreenshotSourceDirectories(SettingsService.Instance.Settings))
+                QueueScreenshotsFromDirectory(directory);
 
             if (queued > 0)
             {
@@ -427,10 +411,26 @@ public class ScreenshotMonitorService : IDisposable
     
     private static string? GetTestingRootPath() => PathResolver.GetTestingVersionsPath();
     
-    /// <summary>
-    /// Gets the stable Zandronum directory (where the main exe lives).
-    /// </summary>
-    private static string? GetStableZandronumDir() => PathResolver.GetZandronumDirectory();
+    internal static IReadOnlyList<string> GetScreenshotSourceDirectories(
+        AppSettings settings,
+        ZandronumExecutablePlatform? platform = null)
+    {
+        var directories = new List<string>();
+        var stableDirectory = PathResolver.GetZandronumDirectory(settings);
+        if (stableDirectory != null)
+            directories.Add(stableDirectory);
+        // Saved/last launch paths and archived stable installs are deliberately
+        // outside monitoring policy. Version folders can contain existing PNGs
+        // even if their executable is temporarily missing during replacement.
+        foreach (var version in PathResolver.GetManagedZandronumVersions(
+            PathResolver.GetTestingVersionsPath(settings), includeIncomplete: true, platform: platform))
+        {
+            directories.Add(version.DirectoryPath);
+            if (version.ExecutableDirectory != null)
+                directories.Add(version.ExecutableDirectory);
+        }
+        return PathResolver.DistinctDirectoryPaths(directories);
+    }
     
     public void Dispose()
     {

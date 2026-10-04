@@ -549,18 +549,7 @@ public sealed class ZandronumStableReleaseService
 
     private static string? TryFindExecutablePath(string installDirectory, string executableName)
     {
-        if (!Directory.Exists(installDirectory))
-        {
-            return null;
-        }
-
-        var executablePath = Directory
-            .EnumerateFiles(installDirectory, "*", SearchOption.AllDirectories)
-            .Where(path => string.Equals(Path.GetFileName(path), executableName, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(path => path.Count(character => character is '\\' or '/'))
-            .FirstOrDefault();
-
-        return executablePath;
+        return PathResolver.FindZandronumExecutable(installDirectory, executableName: executableName);
     }
 
     private static (int Major, int Minor, int Patch) ParseStableVersion(string versionText)

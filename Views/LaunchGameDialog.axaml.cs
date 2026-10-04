@@ -13,6 +13,7 @@ using System.Linq;
 using ZScape.Controls;
 using ZScape.Models;
 using ZScape.Services;
+using ZScape.Utilities;
 
 namespace ZScape.Views;
 
@@ -201,20 +202,15 @@ public partial class LaunchGameDialog : Window
         }
 
         var testingRoot = GameLauncher.Instance.GetTestingRootPath();
-        if (!string.IsNullOrEmpty(testingRoot) && Directory.Exists(testingRoot))
+        if (!string.IsNullOrEmpty(testingRoot))
         {
-            foreach (var dir in Directory.GetDirectories(testingRoot).OrderDescending())
+            foreach (var version in PathResolver.GetManagedZandronumVersions(testingRoot).OrderByDescending(version => version.Name, StringComparer.OrdinalIgnoreCase))
             {
-                var exePath = Path.Combine(dir, "zandronum.exe");
-                if (File.Exists(exePath))
+                VersionComboBox.Items.Add(new ComboBoxItem
                 {
-                    var versionName = Path.GetFileName(dir);
-                    VersionComboBox.Items.Add(new ComboBoxItem
-                    {
-                        Content = versionName,
-                        Tag = exePath
-                    });
-                }
+                    Content = version.Name,
+                    Tag = version.ExecutablePath
+                });
             }
         }
 

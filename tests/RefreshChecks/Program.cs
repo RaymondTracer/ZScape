@@ -31,6 +31,7 @@ internal static class Program
         NotificationChecks.Run();
         ServerFilterChecks.Run();
         SettingsPreviewChecks.Run();
+        VersionDiscoveryChecks.Run();
         ArchiveExtractionChecks.Run();
         var list = new ResizableListView();
         list.AddColumn(new ListViewColumn { Key = "text", Header = "Text", BindingPath = "Text", Width = 250 });
