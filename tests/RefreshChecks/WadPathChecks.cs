@@ -54,5 +54,15 @@ internal static class WadPathChecks
         RegressionAssert.That(reloaded.Settings.WadSearchPaths.SequenceEqual(
                 new[] { second, fixture.GetPath("disconnected"), first }),
             "Settings round-trip retains root order and unavailable paths, normalizing duplicates");
+
+        settings.Settings.WadSearchPaths.Clear();
+        settings.Settings.WadDownloadPath = first;
+        settings.Save();
+        RegressionAssert.That(new SettingsService(fixture.Path).Settings.WadSearchPaths.Count == 0,
+            "An intentionally empty search-path list stays empty even with a configured download folder");
+        manager.SetSearchPaths([]);
+        manager.RefreshCache();
+        RegressionAssert.That(manager.SearchPaths.Count == 0,
+            "Refreshing effective WAD discovery cannot repopulate an empty configured list");
     }
 }

@@ -5301,16 +5301,6 @@ public partial class MainWindow : Window
             }
         }
 
-        // Auto-detect WAD folders if not configured
-        if (settings.WadSearchPaths == null || settings.WadSearchPaths.Count == 0)
-        {
-            var detectedWadPaths = AutoDetectWadSearchPaths();
-            if (detectedWadPaths.Count > 0)
-            {
-                settings.WadSearchPaths = detectedWadPaths;
-                _logger.Info($"Auto-detected WAD folders: {string.Join(", ", detectedWadPaths)}");
-            }
-        }
     }
 
     private static string? AutoDetectZandronumPath()
@@ -5350,49 +5340,6 @@ public partial class MainWindow : Window
         }
 
         return null;
-    }
-
-    private static List<string> AutoDetectWadSearchPaths()
-    {
-        var foundPaths = new List<string>();
-        var documentsFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-
-        var commonPaths = new[]
-        {
-            Path.Combine(documentsFolder, "WADs"),
-            Path.Combine(documentsFolder, "Doom", "WADs"),
-            Path.Combine(documentsFolder, "Zandronum", "WADs"),
-            Path.Combine(documentsFolder, "Doom"),
-            Path.Combine(localAppData, "Zandronum"),
-            Path.Combine(homeDir, ".config", "zandronum"),
-            Path.Combine(AppContext.BaseDirectory, "WADs"),
-            @"C:\Zandronum",
-            @"C:\Games\Zandronum",
-            @"C:\Games\Doom",
-        };
-
-        foreach (var path in commonPaths)
-        {
-            try
-            {
-                var fullPath = Path.GetFullPath(path);
-                if (Directory.Exists(fullPath) && !foundPaths.Contains(fullPath))
-                {
-                    // Check if folder contains any WAD files
-                    var hasWads = Directory.EnumerateFiles(fullPath, "*.*", SearchOption.TopDirectoryOnly)
-                        .Any(f => WadExtensions.IsSupportedExtension(Path.GetExtension(f)));
-                    if (hasWads)
-                    {
-                        foundPaths.Add(fullPath);
-                    }
-                }
-            }
-            catch { }
-        }
-
-        return foundPaths;
     }
 
     private async Task<UpdateServerState?> ShowFirstTimeSetupAsync()
