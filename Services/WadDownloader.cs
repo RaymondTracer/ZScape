@@ -2494,18 +2494,12 @@ public partial class WadDownloader : IDisposable
         }
     }
 
-    private static async Task<bool> HasExpectedFileSignatureAsync(
+    internal static async Task<bool> HasExpectedFileSignatureAsync(
         string filePath,
         CancellationToken ct)
     {
         var extension = Path.GetExtension(filePath).ToLowerInvariant();
-        if (extension is not (
-            ".wad"
-            or ".pk3"
-            or ".ipk3"
-            or ".pke"
-            or ".pk7"
-            or ".ipk7"))
+        if (!WadExtensions.IsWadExtension(extension))
         {
             return true;
         }
@@ -2518,38 +2512,31 @@ public partial class WadDownloader : IDisposable
             FileShare.Read,
             header.Length,
             useAsync: true);
-        var bytesRead = await stream.ReadAsync(header, ct);
+        var bytesRead = await stream.ReadAtLeastAsync(
+            header, minimumBytes: 6, throwOnEndOfStream: false, cancellationToken: ct);
 
-        if (extension == ".wad")
-        {
-            return bytesRead >= 4
-                   && ((header[0] == (byte)'I'
-                        && header[1] == (byte)'W'
-                        && header[2] == (byte)'A'
-                        && header[3] == (byte)'D')
-                       || (header[0] == (byte)'P'
-                           && header[1] == (byte)'W'
-                           && header[2] == (byte)'A'
-                           && header[3] == (byte)'D'));
-        }
+        // Zandronum detects resource containers by their contents, regardless
+        // of the filename extension (for example, PWAD data named .pk3).
+        var signature = header.AsSpan(0, bytesRead);
+        var isWad = signature.StartsWith("IWAD"u8)
+                    || signature.StartsWith("PWAD"u8);
 
-        if (extension is ".pk7" or ".ipk7")
-        {
-            return bytesRead >= 6
-                   && header[0] == 0x37
-                   && header[1] == 0x7A
-                   && header[2] == 0xBC
-                   && header[3] == 0xAF
-                   && header[4] == 0x27
-                   && header[5] == 0x1C;
-        }
+        var isSevenZip = bytesRead >= 6
+                         && header[0] == 0x37
+                         && header[1] == 0x7A
+                         && header[2] == 0xBC
+                         && header[3] == 0xAF
+                         && header[4] == 0x27
+                         && header[5] == 0x1C;
 
-        return bytesRead >= 4
-               && header[0] == 0x50
-               && header[1] == 0x4B
-               && ((header[2] == 0x03 && header[3] == 0x04)
-                   || (header[2] == 0x05 && header[3] == 0x06)
-                   || (header[2] == 0x07 && header[3] == 0x08));
+        var isZip = bytesRead >= 4
+                    && header[0] == 0x50
+                    && header[1] == 0x4B
+                    && ((header[2] == 0x03 && header[3] == 0x04)
+                        || (header[2] == 0x05 && header[3] == 0x06)
+                        || (header[2] == 0x07 && header[3] == 0x08));
+
+        return isWad || isZip || isSevenZip;
     }
 
     private static void TryDeleteFile(string filePath)

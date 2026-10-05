@@ -34,6 +34,7 @@ internal static class Program
         VersionDiscoveryChecks.Run();
         HashActionChecks.Run();
         ArchiveExtractionChecks.Run();
+        WadDownloadChecks.Run();
         var list = new ResizableListView();
         list.AddColumn(new ListViewColumn { Key = "text", Header = "Text", BindingPath = "Text", Width = 250 });
         list.Build(ListViewOverflowMode.AutoScroll);
