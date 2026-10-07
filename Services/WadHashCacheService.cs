@@ -123,12 +123,37 @@ public sealed class WadHashCacheService
     /// captured at hash time. A filename on its own is never sufficient.
     /// </summary>
     public string? TryGetCachedHash(string? filePath)
+        => TryGetCachedHashResult(filePath)?.Hash;
+
+    internal WadHashResult? TryGetCachedHashResult(string? filePath)
     {
         if (!IsEnabled)
             return null;
 
         var snapshot = TryCreateSnapshot(filePath);
-        return snapshot == null ? null : TryGetCachedHash(snapshot);
+        var hash = snapshot == null ? null : TryGetCachedHash(snapshot);
+        return hash == null ? null : new WadHashResult(hash, true, snapshot!.Length, null)
+        {
+            Snapshot = snapshot
+        };
+    }
+
+    internal static bool IsHashResultCurrent(WadHashResult result) =>
+        result.Snapshot is { } original
+        && TryCreateSnapshot(original.Path) is { } current
+        && original.Matches(current);
+
+    // Historical full-path entries also let discovery recognize a disappeared
+    // matching copy after restart. They are hints only, never validated hashes.
+    internal IReadOnlyList<string> GetRecordedPathsForHash(string expectedHash)
+    {
+        if (!IsEnabled)
+            return [];
+
+        lock (_entriesLock)
+            return _entries.Where(pair => !_excludedPaths.Contains(pair.Key)
+                && string.Equals(pair.Value.Md5, expectedHash, StringComparison.OrdinalIgnoreCase))
+                .Select(pair => pair.Key).ToArray();
     }
 
     /// <summary>
@@ -231,11 +256,18 @@ public sealed class WadHashCacheService
             forceRefresh: true).ConfigureAwait(false);
     }
 
+    // Download staging files are transient. Reuse the snapshot-checked hash
+    // calculation without persisting their temporary paths in the cache.
+    internal Task<WadHashResult> CalculateUncachedHashAsync(
+        string filePath, Action<long>? progress, CancellationToken cancellationToken) =>
+        GetHashCoreAsync(filePath, progress, cancellationToken, forceRefresh: true, cacheResult: false);
+
     private async Task<WadHashResult> GetHashCoreAsync(
         string filePath,
         Action<long>? progress,
         CancellationToken cancellationToken,
-        bool forceRefresh)
+        bool forceRefresh,
+        bool cacheResult = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var initialSnapshot = TryCreateSnapshot(filePath);
@@ -254,7 +286,10 @@ public sealed class WadHashCacheService
             && TryGetCachedHash(initialSnapshot) is { } cachedHash)
         {
             progress?.Invoke(initialSnapshot.Length);
-            return new WadHashResult(cachedHash, FromCache: true, initialSnapshot.Length, ErrorMessage: null);
+            return new WadHashResult(cachedHash, FromCache: true, initialSnapshot.Length, ErrorMessage: null)
+            {
+                Snapshot = initialSnapshot
+            };
         }
 
         var computedHash = await ComputeFileHashAsync(filePath, progress, cancellationToken,
@@ -275,27 +310,31 @@ public sealed class WadHashCacheService
                 ErrorMessage: "The file changed while its MD5 was being calculated. Try again.");
         }
 
-        var canCacheResult = IsEnabled && !IsHashCachingExcluded(initialSnapshot.Path);
+        var canCacheResult = cacheResult && IsEnabled && !IsHashCachingExcluded(initialSnapshot.Path);
         if (canCacheResult)
         {
             StoreHash(finalSnapshot, computedHash);
             await PersistIfDirtyAsync().ConfigureAwait(false);
         }
-        return new WadHashResult(computedHash, FromCache: false, initialSnapshot.Length, ErrorMessage: null);
+        return new WadHashResult(computedHash, FromCache: false, initialSnapshot.Length, ErrorMessage: null)
+        {
+            Snapshot = finalSnapshot
+        };
     }
 
     /// <summary>
-    /// Records a full MD5 that another trusted ZScape operation has just
-    /// calculated, such as a downloaded WAD whose server hash was verified.
-    /// The same unchanged-file snapshot rule applies before it is saved.
+    /// Records a verified full MD5 after a staged file is installed. The
+    /// installed file must still have the verified identity and metadata;
+    /// a prior hash must never be attached to a replacement file's snapshot.
     /// </summary>
-    public async Task RecordHashAsync(string filePath, string hash)
+    internal async Task RecordHashAsync(string filePath, WadHashResult verifiedResult)
     {
-        if (!IsEnabled || !IsValidMd5(hash))
+        if (!IsEnabled || verifiedResult.Hash is not { } hash || !IsValidMd5(hash)
+            || verifiedResult.Snapshot is not { } original)
             return;
 
         var snapshot = TryCreateSnapshot(filePath);
-        if (snapshot == null)
+        if (snapshot == null || !original.Matches(snapshot))
             return;
 
         StoreHash(snapshot, hash);
@@ -776,6 +815,7 @@ public sealed record WadHashResult(
     string? ErrorMessage)
 {
     public bool IsSuccess => !string.IsNullOrWhiteSpace(Hash);
+    internal WadHashFileSnapshot? Snapshot { get; init; }
 }
 
 /// <summary>Filesystem-free presentation and eligibility for WAD hash actions.</summary>

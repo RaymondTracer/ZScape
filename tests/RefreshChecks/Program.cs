@@ -26,6 +26,7 @@ internal static class Program
         ServerRefreshChecks.Run();
         ThemeChecks.Run();
         WadHashChecks.Run();
+        WadResolutionChecks.Run();
         WadPathPresentationChecks.Run();
         JoinPreparationChecks.Run();
         NotificationChecks.Run();

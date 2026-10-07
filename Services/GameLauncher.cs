@@ -43,7 +43,8 @@ public class GameLauncher : IDisposable
         string? connectPassword = null,
         string? joinPassword = null,
         ISet<string>? excludedOptionalPwads = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         
@@ -68,10 +69,9 @@ public class GameLauncher : IDisposable
             return false;
         }
 
-        var args = BuildCommandLine(server, connectPassword, joinPassword, excludedOptionalPwads, cancellationToken);
-        
         try
         {
+            var args = BuildCommandLine(server, connectPassword, joinPassword, excludedOptionalPwads, cancellationToken, resolvedWads);
             var startInfo = new ProcessStartInfo
             {
                 FileName = exePath,
@@ -114,16 +114,18 @@ public class GameLauncher : IDisposable
 
     /// <summary>
     /// Validates if all required WADs are available for the server.
-    /// Checks exe folder first, then WAD manager paths.
+    /// Uses the shared search-folder priority and retains paths for the join.
     /// Optional PWADs do not block joins and are skipped here.
     /// </summary>
     /// <param name="server">The server to check.</param>
     /// <returns>A tuple with (allFound, missingWads) where each missing WAD includes name and expected hash.</returns>
     public (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckRequiredWads(
         ServerInfo server,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
-        return CheckPwads(server, pwad => !pwad.IsOptional, includeIwad: true, WadManager.Instance, cancellationToken);
+        return CheckPwads(server, pwad => !pwad.IsOptional, includeIwad: true, WadManager.Instance,
+            cancellationToken, resolvedWads: resolvedWads);
     }
 
     /// <summary>
@@ -132,9 +134,11 @@ public class GameLauncher : IDisposable
     /// </summary>
     public (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckOptionalWads(
         ServerInfo server,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
-        return CheckPwads(server, pwad => pwad.IsOptional, includeIwad: false, WadManager.Instance, cancellationToken);
+        return CheckPwads(server, pwad => pwad.IsOptional, includeIwad: false, WadManager.Instance,
+            cancellationToken, resolvedWads: resolvedWads);
     }
 
     private static (bool AllFound, List<(string Name, string? Hash)> MissingWads) CheckPwads(
@@ -143,7 +147,8 @@ public class GameLauncher : IDisposable
         bool includeIwad,
         WadManager wadManager,
         CancellationToken cancellationToken,
-        IProgress<SaveStateProgress>? progress = null)
+        IProgress<SaveStateProgress>? progress = null,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
         var missing = new List<(string Name, string? Hash)>();
         cancellationToken.ThrowIfCancellationRequested();
@@ -151,17 +156,34 @@ public class GameLauncher : IDisposable
         var total = pwads.Count + (includeIwad && !string.IsNullOrEmpty(server.IWAD) ? 1 : 0);
         var current = 0;
 
-        string? Find(string name)
+        string? Find(string name, string? expectedHash)
         {
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Report(new SaveStateProgress { Status = $"Checking {name}", Current = current++, Total = total });
-            return wadManager.FindWad(name);
+            if (resolvedWads != null
+                && resolvedWads.TryGetValue(name, out var previous)
+                && CanReuseJoinResolution(wadManager, previous, expectedHash))
+            {
+                return previous.LocalPath;
+            }
+
+            var result = wadManager.ResolveWadAsync(name, expectedHash, WadHashLookupMode.FileNameOnly,
+                cancellationToken).GetAwaiter().GetResult();
+            // A presence check must not erase a completed hash verdict. The
+            // downloaded replacement is resolved again when building the
+            // command, while optional mismatches remain excluded by the join.
+            if (resolvedWads != null
+                && (!resolvedWads.TryGetValue(name, out previous)
+                    || previous.LookupMode == WadHashLookupMode.FileNameOnly
+                    || !string.Equals(previous.ExpectedHash, expectedHash, StringComparison.OrdinalIgnoreCase)))
+                resolvedWads[name] = result;
+            return result.LocalPath;
         }
         
         // Check IWAD (IWADs don't have server-provided hashes)
         if (includeIwad && !string.IsNullOrEmpty(server.IWAD))
         {
-            var iwadPath = Find(server.IWAD);
+            var iwadPath = Find(server.IWAD, null);
             if (string.IsNullOrEmpty(iwadPath))
             {
                 missing.Add((server.IWAD, null));
@@ -170,7 +192,7 @@ public class GameLauncher : IDisposable
         
         foreach (var pwad in pwads)
         {
-            var pwadPath = Find(pwad.Name);
+            var pwadPath = Find(pwad.Name, pwad.Hash);
             if (string.IsNullOrEmpty(pwadPath))
             {
                 missing.Add((pwad.Name, pwad.Hash));
@@ -181,6 +203,14 @@ public class GameLauncher : IDisposable
         return (missing.Count == 0, missing);
     }
 
+    private static bool CanReuseJoinResolution(
+        WadManager wadManager, WadResolutionResult resolution, string? expectedHash) =>
+        resolution.IsUsable
+        && (resolution.LookupMode == WadHashLookupMode.FileNameOnly
+            || resolution.Status == WadResolutionStatus.Matched)
+        && string.Equals(resolution.ExpectedHash, expectedHash, StringComparison.OrdinalIgnoreCase)
+        && wadManager.IsResolutionCurrent(resolution);
+
     public sealed record WadJoinPreparationResult(
         List<(string Name, string? Hash)> MissingWads,
         List<WadInfo> NeedsDownload);
@@ -189,18 +219,20 @@ public class GameLauncher : IDisposable
         ServerInfo server,
         bool optional,
         IProgress<SaveStateProgress>? progress,
-        CancellationToken cancellationToken) =>
-        PrepareWadsForJoinAsync(server, WadManager.Instance, optional, progress, cancellationToken);
+        CancellationToken cancellationToken,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null) =>
+        PrepareWadsForJoinAsync(server, WadManager.Instance, optional, progress, cancellationToken, resolvedWads);
 
     internal static Task<WadJoinPreparationResult> PrepareWadsForJoinAsync(
         ServerInfo server,
         WadManager wadManager,
         bool optional,
         IProgress<SaveStateProgress>? progress,
-        CancellationToken cancellationToken) => Task.Run(() =>
+        CancellationToken cancellationToken,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null) => Task.Run(() =>
         {
             var (_, missing) = CheckPwads(server, pwad => pwad.IsOptional == optional,
-                includeIwad: !optional, wadManager, cancellationToken, progress);
+                includeIwad: !optional, wadManager, cancellationToken, progress, resolvedWads);
             // Commercial IWADs must be supplied locally. Do not begin archive
             // work or change local files before the caller shows that gate.
             if (missing.Any(wad => WadManager.IsForbiddenWad(wad.Name)))
@@ -212,6 +244,9 @@ public class GameLauncher : IDisposable
             {
                 progress?.Report(new SaveStateProgress { Status = "Refreshing local WAD files..." });
                 wadManager.RefreshCache(cancellationToken);
+                if (resolvedWads != null)
+                    CheckPwads(server, pwad => pwad.IsOptional == optional, includeIwad: !optional,
+                        wadManager, cancellationToken, progress, resolvedWads);
             }
             cancellationToken.ThrowIfCancellationRequested();
             return new WadJoinPreparationResult(missing, needsDownload);
@@ -343,9 +378,11 @@ public class GameLauncher : IDisposable
     public async Task<List<WadHashMismatch>> VerifyWadHashesAsync(
         ServerInfo server, 
         IProgress<HashVerificationProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
-        return await Task.Run(() => VerifyWadHashesCoreAsync(server, progress, cancellationToken, _ => true), cancellationToken);
+        return await Task.Run(() => VerifyWadHashesCoreAsync(server, WadManager.Instance,
+            WadHashCacheService.Instance, progress, cancellationToken, _ => true, resolvedWads), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -355,9 +392,11 @@ public class GameLauncher : IDisposable
     public async Task<List<WadHashMismatch>> VerifyOptionalWadHashesAsync(
         ServerInfo server,
         IProgress<HashVerificationProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
-        return await Task.Run(() => VerifyWadHashesCoreAsync(server, progress, cancellationToken, pwad => pwad.IsOptional), cancellationToken);
+        return await Task.Run(() => VerifyWadHashesCoreAsync(server, WadManager.Instance,
+            WadHashCacheService.Instance, progress, cancellationToken, pwad => pwad.IsOptional, resolvedWads), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -366,22 +405,30 @@ public class GameLauncher : IDisposable
     /// only when all required local files are present, their cache snapshots are
     /// still valid, and their full cached MD5 values match the server.
     /// </summary>
-    public CachedWadHashVerificationResult CheckCachedWadHashes(ServerInfo server)
+    public CachedWadHashVerificationResult CheckCachedWadHashes(
+        ServerInfo server,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
-        return CheckCachedWadHashes(server, _ => true);
+        return CheckCachedWadHashes(server, WadManager.Instance, WadHashCacheService.Instance, _ => true, resolvedWads);
     }
 
     /// <summary>
     /// Checks the cache-only fast path for server PWADs marked optional.
     /// </summary>
-    public CachedWadHashVerificationResult CheckCachedOptionalWadHashes(ServerInfo server)
+    public CachedWadHashVerificationResult CheckCachedOptionalWadHashes(
+        ServerInfo server,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
-        return CheckCachedWadHashes(server, pwad => pwad.IsOptional);
+        return CheckCachedWadHashes(server, WadManager.Instance, WadHashCacheService.Instance,
+            pwad => pwad.IsOptional, resolvedWads);
     }
 
-    private CachedWadHashVerificationResult CheckCachedWadHashes(
+    internal static CachedWadHashVerificationResult CheckCachedWadHashes(
         ServerInfo server,
-        Func<PWadInfo, bool> predicate)
+        WadManager wadManager,
+        WadHashCacheService hashCache,
+        Func<PWadInfo, bool> predicate,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
         var pwadsWithHashes = server.PWADs
             .Where(pwad => predicate(pwad) && !string.IsNullOrEmpty(pwad.Hash))
@@ -389,23 +436,32 @@ public class GameLauncher : IDisposable
         if (pwadsWithHashes.Count == 0)
             return new CachedWadHashVerificationResult(false, 0);
 
-        var hashCache = WadHashCacheService.Instance;
         if (!hashCache.IsEnabled)
             return new CachedWadHashVerificationResult(false, 0);
 
         var verifiedFileCount = 0;
         foreach (var pwad in pwadsWithHashes)
         {
-            var localPath = WadManager.Instance.FindWad(pwad.Name);
-            if (string.IsNullOrEmpty(localPath))
-                return new CachedWadHashVerificationResult(false, verifiedFileCount);
-
-            var cachedHash = hashCache.TryGetCachedHash(localPath);
-            if (string.IsNullOrEmpty(cachedHash)
-                || !string.Equals(cachedHash, pwad.Hash, StringComparison.OrdinalIgnoreCase))
+            var previous = resolvedWads != null && resolvedWads.TryGetValue(pwad.Name, out var selected)
+                ? selected : null;
+            WadResolutionResult result;
+            if (previous is { Status: WadResolutionStatus.Matched }
+                && CanReuseJoinResolution(wadManager, previous, pwad.Hash))
             {
-                return new CachedWadHashVerificationResult(false, verifiedFileCount);
+                var cachedHash = hashCache.TryGetCachedHashResult(previous.LocalPath);
+                if (cachedHash == null || !string.Equals(cachedHash.Hash, pwad.Hash, StringComparison.OrdinalIgnoreCase))
+                    return new CachedWadHashVerificationResult(false, verifiedFileCount);
+                result = previous with { HashResult = cachedHash };
             }
+            else
+            {
+                result = wadManager.ResolveWadAsync(pwad.Name, pwad.Hash, WadHashLookupMode.CachedOnly,
+                    hashCache).GetAwaiter().GetResult();
+            }
+            if (resolvedWads != null)
+                resolvedWads[pwad.Name] = result;
+            if (result.Status != WadResolutionStatus.Matched)
+                return new CachedWadHashVerificationResult(false, verifiedFileCount);
 
             verifiedFileCount++;
         }
@@ -413,15 +469,16 @@ public class GameLauncher : IDisposable
         return new CachedWadHashVerificationResult(true, verifiedFileCount);
     }
 
-    private async Task<List<WadHashMismatch>> VerifyWadHashesCoreAsync(
+    internal static async Task<List<WadHashMismatch>> VerifyWadHashesCoreAsync(
         ServerInfo server,
+        WadManager wadManager,
+        WadHashCacheService hashCache,
         IProgress<HashVerificationProgress>? progress,
         CancellationToken cancellationToken,
-        Func<PWadInfo, bool> predicate)
+        Func<PWadInfo, bool> predicate,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
         var mismatches = new System.Collections.Concurrent.ConcurrentBag<WadHashMismatch>();
-        var wadManager = WadManager.Instance;
-        var hashCache = WadHashCacheService.Instance;
         var settings = SettingsService.Instance.Settings;
         
         // Verify only the PWADs requested by the caller that advertise hashes.
@@ -448,34 +505,14 @@ public class GameLauncher : IDisposable
         var completedCount = 0;
         
         // Prepare verification tasks
-        var verificationItems = new List<(PWadInfo Pwad, string LocalPath, long FileSize)>();
+        var verificationItems = new List<PWadInfo>();
         foreach (var pwad in pwadsWithHashes)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var localPath = wadManager.FindWad(pwad.Name);
-            if (string.IsNullOrEmpty(localPath))
-                continue;
-            
-            var fileSize = 0L;
-            try { fileSize = new FileInfo(localPath).Length; } catch { }
-            
-            verificationItems.Add((pwad, localPath, fileSize));
-            fileProgress[pwad.Name] = (0, fileSize);
+            verificationItems.Add(pwad);
+            fileProgress[pwad.Name] = (0, 0);
         }
 
-        if (verificationItems.Count == 0)
-        {
-            progress?.Report(new HashVerificationProgress
-            {
-                CurrentFile = string.Empty,
-                CurrentIndex = 0,
-                TotalFiles = 0,
-                Status = "No local WADs with server hashes are available to verify.",
-                FileSize = 0
-            });
-            return [];
-        }
-        
         // Report initial state
         progress?.Report(new HashVerificationProgress
         {
@@ -492,7 +529,7 @@ public class GameLauncher : IDisposable
         if (maxConcurrency <= 0)
             maxConcurrency = verificationItems.Count; // Unlimited = all at once
         
-        var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        using var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         
         // Throttle progress updates to prevent UI thread overload
         var lastProgressUpdate = DateTime.MinValue;
@@ -513,85 +550,61 @@ public class GameLauncher : IDisposable
         // Create verification tasks - run entirely on thread pool
         var tasks = verificationItems.Select(item => Task.Run(async () =>
         {
-            await semaphore.WaitAsync(cancellationToken);
+            await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 
-                // Progress callback for this file - uses throttled updates
-                Action<long> fileProgressCallback = bytesProcessed =>
+                void ReportCandidateProgress(WadCandidateHashProgress candidate)
                 {
-                    fileProgress[item.Pwad.Name] = (bytesProcessed, item.FileSize);
-                    
-                    // Report aggregate progress (throttled)
+                    fileProgress[item.Name] = (candidate.BytesProcessed, candidate.TotalBytes);
                     ThrottledProgress(new HashVerificationProgress
                     {
-                        CurrentFile = item.Pwad.Name,
+                        CurrentFile = item.Name,
                         CurrentIndex = completedCount,
                         TotalFiles = verificationItems.Count,
-                        Status = $"Hashing {item.Pwad.Name}... ({FormatUtils.FormatBytes(bytesProcessed)} / {FormatUtils.FormatBytes(item.FileSize)})",
-                        FileSize = item.FileSize,
-                        BytesProcessed = bytesProcessed,
+                        Status = $"Hashing {item.Name} (location {candidate.CandidateIndex}/{candidate.CandidateCount})...",
+                        FileSize = candidate.TotalBytes,
+                        BytesProcessed = candidate.BytesProcessed,
                         FileProgress = new Dictionary<string, (long, long)>(fileProgress)
                     });
-                };
-                
-                // Reuse a verified full MD5 only when the local file snapshot
-                // still matches. The cache never decides a server match on its
-                // own; the full value below is still compared to the server's
-                // advertised full MD5.
-                var hashResult = await hashCache.GetHashAsync(
-                    item.LocalPath,
-                    fileProgressCallback,
-                    cancellationToken);
-                var localHash = hashResult.Hash;
-                if (string.IsNullOrEmpty(localHash))
-                {
-                    LoggingService.Instance.Warning(
-                        $"Could not verify the hash for {item.Pwad.Name}: {hashResult.ErrorMessage ?? "unknown read error"}");
-                    return;
                 }
-                
-                // Mark file as complete in progress tracking
-                fileProgress[item.Pwad.Name] = (item.FileSize, item.FileSize);
 
-                if (hashResult.FromCache)
+                WadResolutionResult? previous = null;
+                if (resolvedWads != null)
                 {
-                    progress?.Report(new HashVerificationProgress
-                    {
-                        CurrentFile = item.Pwad.Name,
-                        CurrentIndex = completedCount,
-                        TotalFiles = verificationItems.Count,
-                        Status = $"Using cached hash: {item.Pwad.Name}",
-                        FileSize = item.FileSize,
-                        BytesProcessed = item.FileSize,
-                        FileProgress = new Dictionary<string, (long, long)>(fileProgress)
-                    });
+                    lock (resolvedWads)
+                        resolvedWads.TryGetValue(item.Name, out previous);
                 }
-                
-                // Compare hashes
-                if (!string.Equals(localHash, item.Pwad.Hash, StringComparison.OrdinalIgnoreCase))
+                var resolution = previous is { Status: WadResolutionStatus.Matched }
+                    && CanReuseJoinResolution(wadManager, previous, item.Hash)
+                    ? previous
+                    : await wadManager.ResolveWadAsync(item.Name, item.Hash, WadHashLookupMode.Verify,
+                        hashCache, cancellationToken, ReportCandidateProgress).ConfigureAwait(false);
+                if (resolvedWads != null)
                 {
-                    var baseName = Path.GetFileNameWithoutExtension(item.Pwad.Name);
-                    var extension = Path.GetExtension(item.Pwad.Name);
-                    var matchingPath = wadManager.FindWadByHash(item.Pwad.Hash!, baseName, extension, cancellationToken);
-                    var expectedHash = item.Pwad.Hash!;
-                    
+                    lock (resolvedWads)
+                        resolvedWads[item.Name] = resolution;
+                }
+                if (resolution.Status == WadResolutionStatus.Unavailable)
+                {
+                    throw new IOException($"Could not verify {item.Name}: {resolution.ErrorMessage ?? "the local file could not be read"}");
+                }
+
+                var fileSize = resolution.HashResult?.FileSize ?? 0;
+                fileProgress[item.Name] = (fileSize, fileSize);
+                if (resolution.Status != WadResolutionStatus.Matched)
+                {
                     mismatches.Add(new WadHashMismatch
                     {
-                        WadName = item.Pwad.Name,
-                        IsOptional = item.Pwad.IsOptional,
-                        LocalPath = item.LocalPath,
-                        LocalHash = localHash,
-                        ExpectedHash = expectedHash,
-                        MatchingVersionPath = matchingPath
+                        WadName = item.Name,
+                        IsOptional = item.IsOptional,
+                        LocalPath = resolution.LocalPath ?? string.Empty,
+                        LocalHash = resolution.LocalHash ?? string.Empty,
+                        ExpectedHash = item.Hash!
                     });
-                    
-                    var localTrunc = localHash[..Math.Min(12, localHash.Length)];
-                    var expectedTrunc = expectedHash[..Math.Min(12, expectedHash.Length)];
                     LoggingService.Instance.Warning(
-                        $"Hash mismatch for {item.Pwad.Name}: local={localTrunc}..., expected={expectedTrunc}..." +
-                        (matchingPath != null ? " (found matching version)" : " (needs download)"));
+                        $"No matching local file for {item.Name} in the configured WAD folders.");
                 }
                 
                 Interlocked.Increment(ref completedCount);
@@ -599,12 +612,14 @@ public class GameLauncher : IDisposable
                 // Report file completed
                 progress?.Report(new HashVerificationProgress
                 {
-                    CurrentFile = item.Pwad.Name,
+                    CurrentFile = item.Name,
                     CurrentIndex = completedCount,
                     TotalFiles = verificationItems.Count,
-                    Status = $"Verified: {item.Pwad.Name}",
-                    FileSize = item.FileSize,
-                    BytesProcessed = item.FileSize,
+                    Status = resolution.Status == WadResolutionStatus.Matched
+                        ? resolution.FromCache ? $"Using cached hash: {item.Name}" : $"Verified: {item.Name}"
+                        : $"No matching version: {item.Name}",
+                    FileSize = fileSize,
+                    BytesProcessed = fileSize,
                     FileProgress = new Dictionary<string, (long, long)>(fileProgress)
                 });
             }
@@ -615,7 +630,7 @@ public class GameLauncher : IDisposable
         }, cancellationToken)).ToList();
         
         // Wait for all tasks
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
         
         var result = mismatches.ToList();
         
@@ -636,87 +651,63 @@ public class GameLauncher : IDisposable
     }
 
     /// <summary>
-    /// Resolves hash mismatches by swapping WAD versions or preparing for download.
+    /// Selects a matching local version without changing other search folders.
+    /// The downloader replaces its destination only after a verified transfer.
     /// </summary>
     /// <param name="mismatches">List of WAD hash mismatches to resolve.</param>
     /// <returns>List of WADs that need to be downloaded (no local version with matching hash).</returns>
     public List<WadInfo> ResolveHashMismatches(
         List<WadHashMismatch> mismatches,
         CancellationToken cancellationToken = default,
-        IProgress<SaveStateProgress>? progress = null)
+        IProgress<SaveStateProgress>? progress = null,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null) =>
+        ResolveHashMismatches(mismatches, WadManager.Instance, WadHashCacheService.Instance,
+            cancellationToken, progress, resolvedWads);
+
+    internal static List<WadInfo> ResolveHashMismatches(
+        List<WadHashMismatch> mismatches,
+        WadManager wadManager,
+        WadHashCacheService hashCache,
+        CancellationToken cancellationToken = default,
+        IProgress<SaveStateProgress>? progress = null,
+        IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
         var needsDownload = new List<WadInfo>();
-        var wadManager = WadManager.Instance;
-        
+
         foreach (var mismatch in mismatches)
         {
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Report(new SaveStateProgress { Status = $"Resolving version of {mismatch.WadName}" });
-            if (!string.IsNullOrEmpty(mismatch.MatchingVersionPath))
+            var resolution = wadManager.ResolveWadAsync(mismatch.WadName, mismatch.ExpectedHash,
+                WadHashLookupMode.Verify, hashCache, cancellationToken).GetAwaiter().GetResult();
+            if (resolution.Status != WadResolutionStatus.Matched)
             {
-                // We have a local version with matching hash - swap them
-                LoggingService.Instance.Info($"Swapping WAD versions for {mismatch.WadName}");
-                
-                // Archive the current (mismatched) file
-                var archived = wadManager.ArchiveWadWithHash(mismatch.LocalPath, cancellationToken);
-                if (archived == null)
+                var matchingPath = wadManager.FindWadByHash(mismatch.ExpectedHash,
+                    Path.GetFileNameWithoutExtension(mismatch.WadName), Path.GetExtension(mismatch.WadName),
+                    cancellationToken, file => progress?.Report(new SaveStateProgress
+                    {
+                        Status = $"Checking local version of {Path.GetFileName(file)}"
+                    }));
+                if (!string.IsNullOrEmpty(matchingPath))
                 {
-                    LoggingService.Instance.Error($"Failed to archive {mismatch.WadName}");
-                    needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
-                    continue;
-                }
-                
-                // If matching version is not already in the expected location, copy/move it
-                var targetDir = Path.GetDirectoryName(mismatch.LocalPath);
-                var matchingDir = Path.GetDirectoryName(mismatch.MatchingVersionPath);
-                
-                if (!string.Equals(targetDir, matchingDir, StringComparison.OrdinalIgnoreCase))
-                {
-                    // Copy to target directory with standard name
-                    var targetPath = Path.Combine(targetDir!, mismatch.WadName);
-                    try
+                    var hash = hashCache.GetHashAsync(matchingPath, null, cancellationToken)
+                        .GetAwaiter().GetResult();
+                    if (string.Equals(hash.Hash, mismatch.ExpectedHash, StringComparison.OrdinalIgnoreCase))
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        File.Copy(mismatch.MatchingVersionPath, targetPath, overwrite: true);
-                        LoggingService.Instance.Info($"Copied matching version to {targetPath}");
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        LoggingService.Instance.Error($"Failed to copy matching version: {ex.Message}");
-                        needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
-                    }
-                }
-                else
-                {
-                    // Activate the archived version (rename to standard name)
-                    var activated = wadManager.ActivateArchivedWad(mismatch.MatchingVersionPath, mismatch.WadName, cancellationToken);
-                    if (activated == null)
-                    {
-                        LoggingService.Instance.Error($"Failed to activate archived version of {mismatch.WadName}");
-                        needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
+                        resolution = new WadResolutionResult(mismatch.WadName, mismatch.ExpectedHash,
+                            WadResolutionStatus.Matched, matchingPath, hash)
+                        {
+                            IsArchived = true,
+                            LookupMode = WadHashLookupMode.Verify
+                        };
                     }
                 }
             }
-            else
-            {
-                // No local version with matching hash - need to download
-                // First, archive the current file
-                var archived = wadManager.ArchiveWadWithHash(mismatch.LocalPath, cancellationToken);
-                if (archived != null)
-                {
-                    LoggingService.Instance.Info($"Archived mismatched {mismatch.WadName} as {Path.GetFileName(archived)}");
-                }
-                else
-                {
-                    LoggingService.Instance.Warning($"Failed to archive mismatched {mismatch.WadName} before download.");
-                }
 
+            if (resolvedWads != null)
+                resolvedWads[mismatch.WadName] = resolution;
+            if (resolution.Status != WadResolutionStatus.Matched)
                 needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
-            }
         }
         
         cancellationToken.ThrowIfCancellationRequested();
@@ -1363,8 +1354,10 @@ public class GameLauncher : IDisposable
         string? connectPassword,
         string? joinPassword,
         ISet<string>? excludedOptionalPwads = null,
-        CancellationToken cancellationToken = default) =>
-        BuildConnectArguments(server, WadManager.Instance, connectPassword, joinPassword, excludedOptionalPwads, cancellationToken);
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, WadResolutionResult>? resolvedWads = null) =>
+        BuildConnectArguments(server, WadManager.Instance, connectPassword, joinPassword,
+            excludedOptionalPwads, cancellationToken, resolvedWads);
 
     internal static string BuildConnectArguments(
         ServerInfo server,
@@ -1372,10 +1365,32 @@ public class GameLauncher : IDisposable
         string? connectPassword,
         string? joinPassword,
         ISet<string>? excludedOptionalPwads = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var args = new List<string>();
+
+        string? ResolveLaunchPath(string name, string? expectedHash)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (resolvedWads == null || !resolvedWads.TryGetValue(name, out var selected))
+                return wadManager.FindWad(name);
+
+            if (CanReuseJoinResolution(wadManager, selected, expectedHash))
+            {
+                return selected.LocalPath;
+            }
+
+            var mode = selected.LookupMode == WadHashLookupMode.FileNameOnly
+                ? WadHashLookupMode.FileNameOnly
+                : WadHashLookupMode.Verify;
+            var replacement = wadManager.ResolveWadAsync(name, expectedHash, mode, cancellationToken)
+                .GetAwaiter().GetResult();
+            if (!replacement.IsUsable)
+                throw new IOException($"No usable local file for {name}. {replacement.ErrorMessage ?? "The file changed or is no longer available; try joining again."}");
+            return replacement.LocalPath;
+        }
         
         // Connection
         args.Add($"-connect {server.Address}:{server.Port}");
@@ -1383,7 +1398,7 @@ public class GameLauncher : IDisposable
         // IWAD
         if (!string.IsNullOrEmpty(server.IWAD))
         {
-            var iwadPath = wadManager.FindWad(server.IWAD);
+            var iwadPath = ResolveLaunchPath(server.IWAD, null);
             if (!string.IsNullOrEmpty(iwadPath))
             {
                 args.Add($"-iwad \"{iwadPath}\"");
@@ -1400,7 +1415,7 @@ public class GameLauncher : IDisposable
                 continue;
             }
 
-            var path = wadManager.FindWad(pwad.Name);
+            var path = ResolveLaunchPath(pwad.Name, pwad.Hash);
             if (!string.IsNullOrEmpty(path))
             {
                 pwadPaths.Add($"\"{path}\"");

@@ -2270,9 +2270,9 @@ public partial class WadDownloader : IDisposable
         var uri = new Uri(task.SourceUrl);
         var domain = uri.Host;
         var archivedFilesToRestore = new List<(string OriginalPath, string ArchivedPath)>();
+        var stagedFiles = new List<string>();
         var downloadSucceeded = false;
-        var downloadOutputOwned = false;
-        string? outputPath = null;
+        string? installedPath = null;
         
         try
         {
@@ -2284,7 +2284,7 @@ public partial class WadDownloader : IDisposable
             
             // Use the actual filename from the download (may differ from requested if found as different extension)
             var downloadFileName = GetLowercaseFileName(task.DownloadedFileName ?? task.Wad.FileName);
-            outputPath = Path.Combine(downloadPath, downloadFileName);
+            var outputPath = Path.Combine(downloadPath, downloadFileName);
             
             // Ensure directory exists
             var directory = Path.GetDirectoryName(outputPath);
@@ -2293,79 +2293,51 @@ public partial class WadDownloader : IDisposable
                 Directory.CreateDirectory(directory);
             }
 
+            var sourcePath = outputPath;
+            var usingExistingFile = false;
             if (!string.IsNullOrEmpty(task.Wad.ExpectedHash) && File.Exists(outputPath))
             {
                 var existingHash = await ComputeDownloadedContentHashAsync(task, outputPath, ct);
                 if (string.Equals(existingHash, task.Wad.ExpectedHash, StringComparison.OrdinalIgnoreCase))
                 {
-                    var existingPath = ExtractArchiveIfNeeded(task, downloadPath, outputPath, archivedFilesToRestore);
-                    if (existingPath == null)
-                    {
-                        LogWarning($"Failed to prepare existing archive for {task.Wad.FileName}, downloading again");
-                    }
-                    else
-                    {
-                        var existingSize = 0L;
-                        try { existingSize = new FileInfo(existingPath).Length; } catch { }
-
-                        task.Status = WadDownloadStatus.AlreadyExists;
-                        task.StatusMessage = "Already exists";
-                        task.TotalBytes = existingSize;
-                        task.BytesDownloaded = existingSize;
-                        task.BytesPerSecond = 0;
-                        ProgressUpdated?.Invoke(this, task);
-
-                        LogSuccess($"Using existing file for {task.Wad.FileName}: {existingPath}");
-                        downloadSucceeded = true;
-                        DownloadCompleted?.Invoke(this, task);
-                        return true;
-                    }
+                    usingExistingFile = true;
                 }
             }
 
-            if (!ArchiveExistingFile(outputPath, "download", out var archivedOutputPath))
+            if (!usingExistingFile)
             {
-                task.Status = WadDownloadStatus.Failed;
-                task.StatusMessage = "Archive failed";
-                task.ErrorMessage = "Could not rename existing file before download";
-                task.SkipSourceRetry = true;
-                return false;
-            }
+                sourcePath = CreateDownloadStagingPath(outputPath, stagedFiles);
+                if (supportsRange && task.TotalBytes > 0 && task.ThreadCount > 1)
+                {
+                    await MultiThreadedDownloadAsync(task, sourcePath, ct);
+                }
+                else
+                {
+                    await SingleThreadDownloadAsync(task, sourcePath, ct);
+                }
 
-            if (!string.IsNullOrEmpty(archivedOutputPath))
-            {
-                archivedFilesToRestore.Add((outputPath, archivedOutputPath));
-            }
-            downloadOutputOwned = true;
-            
-            if (supportsRange && task.TotalBytes > 0 && task.ThreadCount > 1)
-            {
-                await MultiThreadedDownloadAsync(task, outputPath, ct);
-            }
-            else
-            {
-                await SingleThreadDownloadAsync(task, outputPath, ct);
-            }
-
-            var downloadedLength = new FileInfo(outputPath).Length;
-            if (task.TotalBytes > 0
-                && downloadedLength != task.TotalBytes)
-            {
-                task.Status = WadDownloadStatus.Failed;
-                task.StatusMessage = "Incomplete download";
-                task.ErrorMessage =
-                    $"Expected {task.TotalBytes} bytes but received "
-                    + $"{downloadedLength}";
-                LogWarning(
-                    $"Incomplete download for {task.Wad.FileName} from "
-                    + $"{task.SourceUrl}: expected {task.TotalBytes} bytes, "
-                    + $"received {downloadedLength}");
-                return false;
+                var downloadedLength = new FileInfo(sourcePath).Length;
+                if (task.TotalBytes > 0
+                    && downloadedLength != task.TotalBytes)
+                {
+                    task.Status = WadDownloadStatus.Failed;
+                    task.StatusMessage = "Incomplete download";
+                    task.ErrorMessage =
+                        $"Expected {task.TotalBytes} bytes but received "
+                        + $"{downloadedLength}";
+                    LogWarning(
+                        $"Incomplete download for {task.Wad.FileName} from "
+                        + $"{task.SourceUrl}: expected {task.TotalBytes} bytes, "
+                        + $"received {downloadedLength}");
+                    return false;
+                }
             }
             
             // Extract archive if needed and find the WAD file inside
-            var finalPath = ExtractArchiveIfNeeded(task, downloadPath, outputPath, archivedFilesToRestore);
-            if (finalPath == null)
+            ct.ThrowIfCancellationRequested();
+            var prepared = ExtractArchiveIfNeeded(task, downloadPath, sourcePath, stagedFiles);
+            ct.ThrowIfCancellationRequested();
+            if (prepared == null)
             {
                 task.Status = WadDownloadStatus.Failed;
                 task.StatusMessage = "Extraction failed";
@@ -2373,9 +2345,9 @@ public partial class WadDownloader : IDisposable
                 task.SkipSourceRetry = true;
                 return false;
             }
+            var finalPath = prepared.FilePath;
             if (!await HasExpectedFileSignatureAsync(finalPath, ct))
             {
-                TryDeleteFile(finalPath);
                 task.Status = WadDownloadStatus.Failed;
                 task.StatusMessage = "Invalid download";
                 task.ErrorMessage =
@@ -2388,27 +2360,20 @@ public partial class WadDownloader : IDisposable
             }
 
             // Verify hash against the final usable file (after extraction when needed).
+            WadHashResult? verifiedHashResult = null;
             if (!string.IsNullOrEmpty(task.Wad.ExpectedHash))
             {
                 task.StatusMessage = "Verifying hash...";
                 ProgressUpdated?.Invoke(this, task);
 
-                var actualHash = await ComputeFileHashAsync(finalPath, ct);
+                var hashResult = await WadHashCacheService.Instance.CalculateUncachedHashAsync(finalPath, null, ct);
+                var actualHash = hashResult.Hash;
                 var expectedHash = task.Wad.ExpectedHash;
                 if (actualHash == null || !string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
                 {
                     var actualTrunc = actualHash?[..Math.Min(12, actualHash.Length)] ?? "null";
                     var expectedTrunc = expectedHash[..Math.Min(12, expectedHash.Length)];
                     LogWarning($"Hash mismatch for {task.Wad.FileName} from {task.SourceUrl}: expected={expectedTrunc}..., got={actualTrunc}...");
-
-                    try
-                    {
-                        if (File.Exists(finalPath))
-                        {
-                            File.Delete(finalPath);
-                        }
-                    }
-                    catch { }
 
                     task.Status = WadDownloadStatus.Failed;
                     task.StatusMessage = "Hash mismatch";
@@ -2418,16 +2383,47 @@ public partial class WadDownloader : IDisposable
                 }
 
                 LogVerbose($"Hash verified for {task.Wad.FileName}: {finalPath}");
-                await WadHashCacheService.Instance.RecordHashAsync(finalPath, actualHash);
+                verifiedHashResult = hashResult;
             }
 
-            var completedBytes = task.BytesDownloaded;
+            // Only a fully prepared, validated file may replace the user's
+            // destination. Staging beside it makes the install a file rename.
+            var destinationPath = Path.Combine(downloadPath, prepared.FileName);
+            ct.ThrowIfCancellationRequested();
+            if (!string.Equals(finalPath, destinationPath, StringComparison.Ordinal))
+            {
+                if (!ArchiveExistingFile(destinationPath, "download replacement", out var archivedOutputPath, ct))
+                {
+                    task.Status = WadDownloadStatus.Failed;
+                    task.StatusMessage = "Archive failed";
+                    task.ErrorMessage = "Could not archive existing file before installing download";
+                    task.SkipSourceRetry = true;
+                    return false;
+                }
+
+                if (!string.IsNullOrEmpty(archivedOutputPath))
+                {
+                    archivedFilesToRestore.Add((destinationPath, archivedOutputPath));
+                }
+
+                ct.ThrowIfCancellationRequested();
+                File.Move(finalPath, destinationPath);
+                installedPath = destinationPath;
+                finalPath = destinationPath;
+            }
+
+            if (verifiedHashResult != null)
+            {
+                await WadHashCacheService.Instance.RecordHashAsync(finalPath, verifiedHashResult);
+            }
+
+            var completedBytes = usingExistingFile ? new FileInfo(finalPath).Length : task.BytesDownloaded;
             if (completedBytes <= 0)
             {
                 try { completedBytes = new FileInfo(finalPath).Length; } catch { }
             }
 
-            if (task.TotalBytes <= 0 && completedBytes > 0)
+            if ((usingExistingFile || task.TotalBytes <= 0) && completedBytes > 0)
             {
                 task.TotalBytes = completedBytes;
             }
@@ -2436,15 +2432,17 @@ public partial class WadDownloader : IDisposable
             var speedBytes = completedBytes > 0 ? completedBytes : task.TotalBytes;
             var speed = speedBytes / Math.Max(1, sw.Elapsed.TotalSeconds);
             
-            task.Status = WadDownloadStatus.Completed;
-            task.StatusMessage = "Complete";
+            task.Status = usingExistingFile ? WadDownloadStatus.AlreadyExists : WadDownloadStatus.Completed;
+            task.StatusMessage = usingExistingFile ? "Already exists" : "Complete";
             task.BytesDownloaded = completedBytes > 0 ? completedBytes : task.TotalBytes;
-            task.BytesPerSecond = speed;
+            task.BytesPerSecond = usingExistingFile ? 0 : speed;
             
             // Notify UI of final speed update
             ProgressUpdated?.Invoke(this, task);
             
-            LogSuccess($"Downloaded {task.Wad.FileName} from {task.SourceUrl} in {sw.Elapsed.TotalSeconds:F1}s ({FormatBytes((long)speed)}/s)");
+            LogSuccess(usingExistingFile
+                ? $"Using existing file for {task.Wad.FileName}: {finalPath}"
+                : $"Downloaded {task.Wad.FileName} from {task.SourceUrl} in {sw.Elapsed.TotalSeconds:F1}s ({FormatBytes((long)speed)}/s)");
             
             downloadSucceeded = true;
             DownloadCompleted?.Invoke(this, task);
@@ -2478,12 +2476,16 @@ public partial class WadDownloader : IDisposable
         }
         finally
         {
+            foreach (var stagedPath in stagedFiles)
+            {
+                TryDeleteFile(stagedPath);
+            }
+
             if (!downloadSucceeded)
             {
-                if (downloadOutputOwned
-                    && !string.IsNullOrEmpty(outputPath))
+                if (installedPath != null)
                 {
-                    TryDeleteFile(outputPath);
+                    TryDeleteFile(installedPath);
                 }
 
                 if (archivedFilesToRestore.Count > 0)
@@ -2492,6 +2494,17 @@ public partial class WadDownloader : IDisposable
                 }
             }
         }
+    }
+
+    private sealed record PreparedDownload(string FilePath, string FileName);
+
+    private static string CreateDownloadStagingPath(string destinationPath, List<string> stagedFiles)
+    {
+        var path = Path.Combine(
+            Path.GetDirectoryName(destinationPath) ?? string.Empty,
+            $".zscape-download-{Guid.NewGuid():N}{Path.GetExtension(destinationPath)}");
+        stagedFiles.Add(path);
+        return path;
     }
 
     internal static async Task<bool> HasExpectedFileSignatureAsync(
@@ -2957,13 +2970,14 @@ public partial class WadDownloader : IDisposable
     
     /// <summary>
     /// Extracts archive if downloaded file is a zip/7z/rar and looks for the requested WAD inside.
-    /// Returns the path to the extracted WAD file, or null if extraction failed or file not found.
+    /// Prepares the selected WAD in a staging file; only ExecuteDownloadAsync
+    /// installs it after signature and hash validation.
     /// </summary>
-    private string? ExtractArchiveIfNeeded(
+    private PreparedDownload? ExtractArchiveIfNeeded(
         WadDownloadTask task,
         string downloadPath,
         string archivePath,
-        List<(string OriginalPath, string ArchivedPath)> archivedFilesToRestore)
+        List<string> stagedFiles)
     {
         var archiveExt = Path.GetExtension(archivePath).ToLowerInvariant();
 
@@ -2973,17 +2987,17 @@ public partial class WadDownloader : IDisposable
                 task,
                 downloadPath,
                 archivePath,
-                archivedFilesToRestore);
+                stagedFiles);
         }
         
         // Only process archive files (pk3/pk7/wad are already usable directly)
         if (!WadExtensions.IsArchiveExtension(archiveExt))
-            return archivePath;
+            return new PreparedDownload(archivePath, GetLowercaseFileName(task.DownloadedFileName ?? task.Wad.FileName));
         
         // Check if the requested file is the zip itself (some servers serve pk3 as zip)
         var requestedExt = Path.GetExtension(task.Wad.FileName).ToLowerInvariant();
         if (requestedExt == archiveExt)
-            return archivePath;
+            return new PreparedDownload(archivePath, GetLowercaseFileName(task.DownloadedFileName ?? task.Wad.FileName));
 
         try
         {
@@ -2997,27 +3011,13 @@ public partial class WadDownloader : IDisposable
             if (matchingEntry != null)
             {
                 var outputFileName = Path.GetFileName(matchingEntry.Key ?? "unknown.wad");
-                var outputPath = Path.Combine(downloadPath, outputFileName);
-                
-                // Extract the file
-                if (!ArchiveExistingFile(outputPath, "extraction", out var archivedOutputPath))
-                {
-                    return null;
-                }
-
-                if (!string.IsNullOrEmpty(archivedOutputPath))
-                {
-                    archivedFilesToRestore.Add((outputPath, archivedOutputPath));
-                }
+                var outputPath = CreateDownloadStagingPath(Path.Combine(downloadPath, outputFileName), stagedFiles);
                 
                 matchingEntry.WriteToFile(outputPath, new ExtractionOptions { Overwrite = true });
                 
                 LogSuccess($"Extracted {outputFileName} from archive {archivePath}");
                 
-                // Clean up the archive
-                try { File.Delete(archivePath); } catch { }
-                
-                return outputPath;
+                return new PreparedDownload(outputPath, outputFileName);
             }
             else
             {
@@ -3034,32 +3034,19 @@ public partial class WadDownloader : IDisposable
         }
     }
 
-    private string? ExtractGzipDownload(
+    private PreparedDownload? ExtractGzipDownload(
         WadDownloadTask task,
         string downloadPath,
         string archivePath,
-        List<(string OriginalPath, string ArchivedPath)> archivedFilesToRestore)
+        List<string> stagedFiles)
     {
         var outputFileName = GetLowercaseFileName(task.Wad.FileName);
-        var outputPath = Path.Combine(downloadPath, outputFileName);
+        var outputPath = CreateDownloadStagingPath(Path.Combine(downloadPath, outputFileName), stagedFiles);
 
         try
         {
             task.StatusMessage = "Decompressing archive...";
             ProgressUpdated?.Invoke(this, task);
-
-            if (!ArchiveExistingFile(
-                    outputPath,
-                    "gzip extraction",
-                    out var archivedOutputPath))
-            {
-                return null;
-            }
-            if (!string.IsNullOrEmpty(archivedOutputPath))
-            {
-                archivedFilesToRestore.Add(
-                    (outputPath, archivedOutputPath));
-            }
 
             using var input = File.OpenRead(archivePath);
             using var gzip =
@@ -3071,17 +3058,9 @@ public partial class WadDownloader : IDisposable
                 FileShare.None);
             gzip.CopyTo(output);
 
-            try
-            {
-                File.Delete(archivePath);
-            }
-            catch
-            {
-            }
-
             LogSuccess(
                 $"Decompressed {task.Wad.FileName} from WAD Archive");
-            return outputPath;
+            return new PreparedDownload(outputPath, outputFileName);
         }
         catch (Exception ex)
         {
@@ -3187,7 +3166,7 @@ public partial class WadDownloader : IDisposable
     private static Task<string?> ComputeFileHashAsync(string filePath, CancellationToken ct) =>
         WadHashCacheService.ComputeFileHashAsync(filePath, progress: null, ct);
 
-    private bool ArchiveExistingFile(string filePath, string operation, out string? archivedPath)
+    private bool ArchiveExistingFile(string filePath, string operation, out string? archivedPath, CancellationToken ct)
     {
         archivedPath = null;
         if (!File.Exists(filePath))
@@ -3195,7 +3174,7 @@ public partial class WadDownloader : IDisposable
             return true;
         }
 
-        archivedPath = WadManager.Instance.ArchiveWadWithHash(filePath);
+        archivedPath = WadManager.Instance.ArchiveWadWithHash(filePath, ct);
         if (archivedPath == null)
         {
             LogError($"Failed to archive existing file before {operation}: {filePath}");

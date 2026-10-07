@@ -78,5 +78,24 @@ internal static class WadHashChecks
         }, CancellationToken.None);
         RegressionAssert.That(unstable.Hash is null && unstable.ErrorMessage?.Contains("changed") == true,
             "A file changed during calculation is neither verified nor cached as a stable hash");
+
+        var stagedFile = fixture.GetPath("staged.pk3");
+        await File.WriteAllTextAsync(stagedFile, "abc");
+        var stagedHash = await cache.CalculateUncachedHashAsync(stagedFile, null, CancellationToken.None);
+        RegressionAssert.That(stagedHash.Hash == AbcMd5 && !cache.HasCachedEntryForPath(stagedFile),
+            "Staged download verification uses shared snapshot checks without caching disposable paths");
+        var installedFile = fixture.GetPath("installed.pk3");
+        File.Move(stagedFile, installedFile);
+        await cache.RecordHashAsync(installedFile, stagedHash);
+        RegressionAssert.That(cache.TryGetCachedHash(installedFile) == AbcMd5,
+            "A verified staged hash follows the unchanged file into its installed path");
+
+        await File.WriteAllTextAsync(stagedFile, "abc");
+        var beforeReplacement = await cache.CalculateUncachedHashAsync(stagedFile, null, CancellationToken.None);
+        await File.WriteAllTextAsync(stagedFile, "abd");
+        File.SetLastWriteTimeUtc(stagedFile, DateTime.UtcNow.AddHours(2));
+        await cache.RecordHashAsync(stagedFile, beforeReplacement);
+        RegressionAssert.That(cache.TryGetCachedHash(stagedFile) is null && !cache.HasCachedEntryForPath(stagedFile),
+            "An earlier hash cannot be recorded against a file changed after verification");
     }
 }

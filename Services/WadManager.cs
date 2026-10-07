@@ -7,7 +7,7 @@ namespace ZScape.Services;
 /// <summary>
 /// Manages WAD file discovery across configured search paths.
 /// </summary>
-public class WadManager
+public partial class WadManager
 {
     private static WadManager? _instance;
     public static WadManager Instance => _instance ??= new WadManager();
@@ -86,7 +86,11 @@ public class WadManager
         set
         {
             lock (_searchPathsLock)
+            {
+                if (!PathResolver.DirectoryPathsEqual(_downloadPath, value))
+                    InvalidateWadResolutionHints();
                 _downloadPath = value;
+            }
         }
     }
     
@@ -105,7 +109,10 @@ public class WadManager
             lock (_searchPathsLock)
             {
                 if (!_searchPaths.Any(existing => PathResolver.DirectoryPathsEqual(existing, path)))
+                {
                     _searchPaths.Add(path);
+                    InvalidateWadResolutionHints();
+                }
             }
         }
     }
@@ -116,7 +123,10 @@ public class WadManager
     public void RemoveSearchPath(string path)
     {
         lock (_searchPathsLock)
-            _searchPaths.RemoveAll(existing => PathResolver.DirectoryPathsEqual(existing, path));
+        {
+            if (_searchPaths.RemoveAll(existing => PathResolver.DirectoryPathsEqual(existing, path)) > 0)
+                InvalidateWadResolutionHints();
+        }
     }
     
     /// <summary>
@@ -125,7 +135,11 @@ public class WadManager
     public void ClearSearchPaths()
     {
         lock (_searchPathsLock)
+        {
+            if (_searchPaths.Count > 0)
+                InvalidateWadResolutionHints();
             _searchPaths.Clear();
+        }
     }
     
     /// <summary>
@@ -136,10 +150,7 @@ public class WadManager
         var configuredPaths = PathResolver.DistinctDirectoryPaths(paths);
 
         lock (_searchPathsLock)
-        {
-            _searchPaths.Clear();
-            _searchPaths.AddRange(configuredPaths);
-        }
+            ReplaceSearchRoots(_searchPaths, configuredPaths);
     }
     
     /// <summary>
@@ -170,10 +181,7 @@ public class WadManager
         }
 
         lock (_searchPathsLock)
-        {
-            _executableFolders.Clear();
-            _executableFolders.AddRange(folders);
-        }
+            ReplaceSearchRoots(_executableFolders, folders);
     }
     
     /// <summary>
@@ -186,7 +194,10 @@ public class WadManager
             lock (_searchPathsLock)
             {
                 if (!_executableFolders.Any(existing => PathResolver.DirectoryPathsEqual(existing, folder)))
+                {
                     _executableFolders.Add(folder);
+                    InvalidateWadResolutionHints();
+                }
             }
         }
     }
@@ -311,6 +322,21 @@ public class WadManager
                 $"WAD scan skipped {scanResult.SkippedDirectories} inaccessible folder(s) and {scanResult.SkippedReparsePoints} reparse-point folder(s) under {path}.");
         }
     }
+
+    // Called under _searchPathsLock. Reapplying the same configuration must
+    // not discard relocation history or force already cached files to hash again.
+    private void ReplaceSearchRoots(List<string> target, List<string> paths)
+    {
+        if (target.Count == paths.Count
+            && target.Zip(paths).All(pair => PathResolver.DirectoryPathsEqual(pair.First, pair.Second)))
+            return;
+
+        target.Clear();
+        target.AddRange(paths);
+        InvalidateWadResolutionHints();
+    }
+
+    private void InvalidateWadResolutionHints() => _matchedWadPaths.Clear();
     
     /// <summary>
     /// Finds a WAD file by name.
@@ -319,51 +345,16 @@ public class WadManager
     /// <returns>Full path to the WAD if found, null otherwise.</returns>
     public string? FindWad(string wadName)
     {
-        if (string.IsNullOrWhiteSpace(wadName))
-            return null;
-
-        // Server requirements are filenames, not relative paths. Keep all
-        // lookups bounded to the top level of each configured WAD directory.
-        var fileName = Path.GetFileName(wadName);
-        if (string.IsNullOrWhiteSpace(fileName))
-            return null;
-
-        foreach (var searchRoot in GetSearchRootsInPriorityOrder(requireExistingDirectories: false))
+        var path = EnumerateWadCandidates(wadName, CancellationToken.None).FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(wadName))
         {
-            var rootKey = PathResolver.NormalizeDirectoryPath(searchRoot);
-            var directPath = Path.Combine(searchRoot, fileName);
-
-            // The root index uses OrdinalIgnoreCase, so differently-cased
-            // filenames work on case-sensitive filesystems too. The index is
-            // top-level only and File.Exists invalidates stale entries.
-            if (_rootFileNameIndex.TryGetValue(rootKey, out var filesInRoot)
-                && filesInRoot.TryGetValue(fileName, out var indexedPath))
-            {
-                if (File.Exists(indexedPath))
-                {
-                    _wadCache[fileName] = indexedPath;
-                    return indexedPath;
-                }
-
-                filesInRoot.TryRemove(fileName, out _);
-            }
-
-            // Check for a newly-added exact-name file that arrived since the
-            // last cache refresh. Missing names cost one direct probe per root;
-            // we never recursively enumerate folders while resolving a WAD.
-            if (File.Exists(directPath))
-            {
-                var rootIndex = _rootFileNameIndex.GetOrAdd(
-                    rootKey,
-                    _ => new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-                rootIndex[fileName] = directPath;
-                _wadCache[fileName] = directPath;
-                return directPath;
-            }
+            var fileName = Path.GetFileName(wadName);
+            if (path == null)
+                _wadCache.TryRemove(fileName, out _);
+            else
+                _wadCache[fileName] = path;
         }
-
-        _wadCache.TryRemove(fileName, out _);
-        return null;
+        return path;
     }
     
     /// <summary>

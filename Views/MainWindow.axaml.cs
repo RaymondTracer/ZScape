@@ -2405,14 +2405,8 @@ public partial class MainWindow : Window
                 }
 
                 var requirement = requirements[index];
-                var resolved = await Task.Run(() =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    var hashCache = WadHashCacheService.Instance;
-                    var path = _wadManager.FindWad(requirement.Name);
-                    var cachedHash = path == null ? null : hashCache.TryGetCachedHash(path);
-                    return new ResolvedWad(requirement, path, cachedHash);
-                }, token);
+                var resolved = await _wadManager.ResolveWadAsync(
+                    requirement.Name, requirement.ExpectedHash, WadHashLookupMode.CachedOnly, token);
 
                 var resultApplied = await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -2420,14 +2414,16 @@ public partial class MainWindow : Window
                         return false;
 
                     var result = WadViewModel.Create(
-                        resolved.Requirement.Name,
-                        resolved.IsAvailable,
-                        resolved.Requirement.IsIwad,
-                        isForbiddenIwad: resolved.Requirement.IsForbiddenIwad && !resolved.IsAvailable,
-                        cachedHash: resolved.CachedHash,
-                        expectedHash: resolved.Requirement.ExpectedHash,
+                        requirement.Name,
+                        resolved.LocalPath != null,
+                        requirement.IsIwad,
+                        isForbiddenIwad: requirement.IsForbiddenIwad && resolved.LocalPath == null,
+                        cachedHash: resolved.LocalHash,
+                        expectedHash: requirement.ExpectedHash,
                         localPath: resolved.LocalPath);
                     checkingWads[index].UpdateFrom(result);
+                    if (resolved.Status == WadResolutionStatus.Unavailable)
+                        checkingWads[index].SetCheckStatus(isChecking: false, failed: true);
                     return true;
                 });
                 if (!resultApplied)
@@ -2484,14 +2480,6 @@ public partial class MainWindow : Window
         bool IsIwad,
         bool IsForbiddenIwad,
         string? ExpectedHash);
-
-    private sealed record ResolvedWad(
-        WadListRequirement Requirement,
-        string? LocalPath,
-        string? CachedHash)
-    {
-        public bool IsAvailable => LocalPath != null;
-    }
 
     private void DisplayPlayerList(ServerInfo server)
     {
@@ -3704,6 +3692,7 @@ public partial class MainWindow : Window
         try
         {
             var launcher = GameLauncher.Instance;
+            var resolvedWads = new Dictionary<string, WadResolutionResult>(StringComparer.OrdinalIgnoreCase);
             StatusLabel.Text = "Checking game installation...";
 
             // Check if executable is configured
@@ -3880,7 +3869,7 @@ public partial class MainWindow : Window
                 var resolved = await RunJoinPreparationWithDialogAsync(
                     "Resolving optional WAD versions...", (progress, token) =>
                     {
-                        var wads = launcher.ResolveHashMismatches(selectedMismatches, token, progress);
+                        var wads = launcher.ResolveHashMismatches(selectedMismatches, token, progress, resolvedWads);
                         _wadManager.RefreshCache(token);
                         return Task.FromResult(wads);
                     }, joinToken);
@@ -3890,7 +3879,7 @@ public partial class MainWindow : Window
 
         var requiredPreparation = await RunJoinPreparationWithDialogAsync(
             "Checking required WADs...",
-            (progress, token) => launcher.PrepareWadsForJoinAsync(server, optional: false, progress, token),
+            (progress, token) => launcher.PrepareWadsForJoinAsync(server, optional: false, progress, token, resolvedWads),
             joinToken);
         var missingWads = requiredPreparation.MissingWads;
         var missingRestrictedIwads = missingWads
@@ -3919,7 +3908,7 @@ public partial class MainWindow : Window
         var hashVerificationEnabled = _settings.Settings.EnableWadHashVerification;
         if (hasHashedPwads && hashVerificationEnabled)
         {
-            var hashVerification = await VerifyWadHashesWithDialogAsync(server);
+            var hashVerification = await VerifyWadHashesWithDialogAsync(server, resolvedWads);
             if (hashVerification.Action == HashVerificationDialogAction.Cancelled)
             {
                 _logger.Info("Server join cancelled during WAD hash verification.");
@@ -3927,7 +3916,10 @@ public partial class MainWindow : Window
             }
 
             if (hashVerification.Action == HashVerificationDialogAction.Skipped)
+            {
+                resolvedWads.Clear();
                 _logger.Info("WAD hash verification skipped; continuing server join.");
+            }
 
             var hashMismatches = hashVerification.Mismatches;
             var requiredHashMismatches = hashMismatches.Where(mismatch => !mismatch.IsOptional).ToList();
@@ -3936,7 +3928,7 @@ public partial class MainWindow : Window
                 var resolved = await RunJoinPreparationWithDialogAsync(
                     "Resolving required WAD versions...", (progress, token) =>
                     {
-                        var wads = launcher.ResolveHashMismatches(requiredHashMismatches, token, progress);
+                        var wads = launcher.ResolveHashMismatches(requiredHashMismatches, token, progress, resolvedWads);
                         _wadManager.RefreshCache(token);
                         return Task.FromResult(wads);
                     }, joinToken);
@@ -3965,7 +3957,7 @@ public partial class MainWindow : Window
         {
             var optionalPreparation = await RunJoinPreparationWithDialogAsync(
                 "Checking optional WADs...",
-                (progress, token) => launcher.PrepareWadsForJoinAsync(server, optional: true, progress, token),
+                (progress, token) => launcher.PrepareWadsForJoinAsync(server, optional: true, progress, token, resolvedWads),
                 joinToken);
             AddOptionalCandidateWads(optionalPreparation.NeedsDownload);
         }
@@ -4084,7 +4076,7 @@ public partial class MainWindow : Window
                     "Checking downloaded WADs...", (_, token) =>
                     {
                         _wadManager.RefreshCache(token);
-                        return Task.FromResult(launcher.CheckRequiredWads(server, token).MissingWads);
+                        return Task.FromResult(launcher.CheckRequiredWads(server, token, resolvedWads).MissingWads);
                     }, joinToken);
                 if (stillMissing.Count > 0)
                 {
@@ -4096,7 +4088,7 @@ public partial class MainWindow : Window
 
         if (hashVerificationEnabled && hasOptionalServerHashes && optionalHashStateChanged)
         {
-            var optionalHashVerification = await VerifyOptionalWadHashesWithDialogAsync(server);
+            var optionalHashVerification = await VerifyOptionalWadHashesWithDialogAsync(server, resolvedWads);
             if (optionalHashVerification.Action == HashVerificationDialogAction.Cancelled)
             {
                 _logger.Info("Server join cancelled during optional WAD hash verification.");
@@ -4104,7 +4096,11 @@ public partial class MainWindow : Window
             }
 
             if (optionalHashVerification.Action == HashVerificationDialogAction.Skipped)
+            {
+                foreach (var pwad in server.PWADs.Where(pwad => pwad.IsOptional))
+                    resolvedWads.Remove(pwad.Name);
                 _logger.Info("Optional WAD hash verification skipped; continuing server join.");
+            }
 
             optionalWadsExcludedFromLaunch = optionalHashVerification.Mismatches
                 .Select(mismatch => mismatch.WadName)
@@ -4130,7 +4126,7 @@ public partial class MainWindow : Window
             // Launch the game
             if (await RunJoinPreparationWithDialogAsync(
                     "Preparing connection...", (_, token) => Task.FromResult(
-                        launcher.LaunchGame(server, connectPassword, joinPassword, optionalWadsExcludedFromLaunch, token)),
+                        launcher.LaunchGame(server, connectPassword, joinPassword, optionalWadsExcludedFromLaunch, token, resolvedWads)),
                     joinToken))
             {
                 _logger.Success($"Launched connection to {server.Name}");
@@ -4188,22 +4184,24 @@ public partial class MainWindow : Window
         List<GameLauncher.WadHashMismatch> Mismatches,
         HashVerificationDialogAction Action);
 
-    private Task<HashVerificationDialogResult> VerifyOptionalWadHashesWithDialogAsync(ServerInfo server)
+    private Task<HashVerificationDialogResult> VerifyOptionalWadHashesWithDialogAsync(
+        ServerInfo server, IDictionary<string, WadResolutionResult> resolvedWads)
     {
         return VerifyWadHashesWithDialogAsync(
             server,
             "Verifying Optional PWAD Hashes",
-            GameLauncher.Instance.VerifyOptionalWadHashesAsync,
-            GameLauncher.Instance.CheckCachedOptionalWadHashes);
+            (currentServer, progress, token) => GameLauncher.Instance.VerifyOptionalWadHashesAsync(currentServer, progress, token, resolvedWads),
+            currentServer => GameLauncher.Instance.CheckCachedOptionalWadHashes(currentServer, resolvedWads));
     }
 
-    private async Task<HashVerificationDialogResult> VerifyWadHashesWithDialogAsync(ServerInfo server)
+    private async Task<HashVerificationDialogResult> VerifyWadHashesWithDialogAsync(
+        ServerInfo server, IDictionary<string, WadResolutionResult> resolvedWads)
     {
         return await VerifyWadHashesWithDialogAsync(
             server,
             "Verifying WAD Hashes",
-            GameLauncher.Instance.VerifyWadHashesAsync,
-            GameLauncher.Instance.CheckCachedWadHashes);
+            (currentServer, progress, token) => GameLauncher.Instance.VerifyWadHashesAsync(currentServer, progress, token, resolvedWads),
+            currentServer => GameLauncher.Instance.CheckCachedWadHashes(currentServer, resolvedWads));
     }
 
     private async Task<HashVerificationDialogResult> VerifyWadHashesWithDialogAsync(
@@ -4366,6 +4364,7 @@ public partial class MainWindow : Window
         var mismatches = new List<GameLauncher.WadHashMismatch>();
         var dialogAction = HashVerificationDialogAction.Completed;
         var verificationFinished = false;
+        Exception? verificationError = null;
 
         void RequestDialogAction(HashVerificationDialogAction action)
         {
@@ -4509,6 +4508,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
+                verificationError = ex;
                 dialogAction = HashVerificationDialogAction.Cancelled;
                 _logger.Error($"Hash verification failed: {ex.Message}");
             }
@@ -4529,6 +4529,11 @@ public partial class MainWindow : Window
         await progressWindow.ShowDialog(this);
         await verificationCompleted.Task;
         cts.Dispose();
+        if (verificationError != null)
+        {
+            StatusLabel.Text = "WAD verification failed.";
+            await ShowMessageAsync("WAD Hash Verification Failed", verificationError.Message);
+        }
 
         // A skipped verification intentionally contributes no mismatch data:
         // continue with the local files exactly as they are.
