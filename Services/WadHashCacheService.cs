@@ -16,7 +16,10 @@ namespace ZScape.Services;
 public sealed class WadHashCacheService
 {
     private const int CurrentSchemaVersion = 1;
-    private const int BufferSize = 1024 * 1024;
+    private const int FileBufferSize = 1024 * 1024;
+    // Sub-MiB hashing reads give progress real fractional values while the
+    // larger sequential file buffer and presentation throttles remain intact.
+    private const int HashReadBufferSize = 256 * 1024;
 
     private static readonly Lazy<WadHashCacheService> InstanceFactory =
         new(() => new WadHashCacheService());
@@ -611,7 +614,7 @@ public sealed class WadHashCacheService
                 FileMode.Open,
                 FileAccess.Read,
                 fileShare,
-                BufferSize,
+                FileBufferSize,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
             return await ComputeStreamHashAsync(stream, progress, cancellationToken).ConfigureAwait(false);
         }
@@ -635,7 +638,7 @@ public sealed class WadHashCacheService
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var md5 = MD5.Create();
-        var buffer = new byte[BufferSize];
+        var buffer = new byte[HashReadBufferSize];
         long bytesProcessed = 0;
         int bytesRead;
         while ((bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
