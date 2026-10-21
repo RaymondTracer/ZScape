@@ -629,17 +629,14 @@ public partial class WadDownloader
         LogError(
             $"All {task.ExhaustedUrls.Count} source(s) failed for "
             + task.Wad.FileName);
-        DownloadCompleted?.Invoke(this, task);
+        ReportDownloadCompleted(task);
     }
 
     private void MarkPendingTasksCancelled(IEnumerable<WadDownloadTask> tasks)
     {
         foreach (var task in tasks)
         {
-            if (task.Status is WadDownloadStatus.Completed
-                or WadDownloadStatus.AlreadyExists
-                or WadDownloadStatus.Failed
-                or WadDownloadStatus.Cancelled)
+            if (task.IsFinished)
             {
                 continue;
             }
@@ -648,7 +645,7 @@ public partial class WadDownloader
             task.StatusMessage = "Cancelled";
             task.BytesPerSecond = 0;
             ProgressUpdated?.Invoke(this, task);
-            DownloadCompleted?.Invoke(this, task);
+            ReportDownloadCompleted(task);
         }
     }
 }

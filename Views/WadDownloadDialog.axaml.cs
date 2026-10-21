@@ -30,9 +30,10 @@ public partial class WadDownloadDialog : Window
     private readonly ObservableCollection<WadDisplayItem> _displayItems = new();
     private readonly ObservableCollection<LogEntry> _logEntries = new();
     private readonly bool _isServerJoinContext;
+    private readonly OverallProgressEstimator _overallProgressEstimator = new();
     
-    private int _completedCount;
-    private int _failedCount;
+    private bool _progressFinished;
+    private bool _downloadStopped;
 
     public WadDownloadDialog() : this(new List<WadInfo>(), "", new WadDownloader()) { }
 
@@ -79,7 +80,7 @@ public partial class WadDownloadDialog : Window
         }
         
         StatusLabel.Text = $"Downloading {_tasks.Count} file(s)...";
-        OverallProgressBar.Maximum = _tasks.Count > 0 ? _tasks.Count : 1;
+        UpdateOverallProgress();
         
         // Subscribe to downloader events
         _downloader.ProgressUpdated += OnProgressUpdated;
@@ -259,10 +260,12 @@ public partial class WadDownloadDialog : Window
         }
         catch (OperationCanceledException)
         {
+            _downloadStopped = true;
             Log(WadDownloader.LogLevel.Info, "Download cancelled by user.");
         }
         catch (Exception ex)
         {
+            _downloadStopped = true;
             Log(WadDownloader.LogLevel.Error, $"Error: {ex.Message}");
         }
         finally
@@ -275,8 +278,10 @@ public partial class WadDownloadDialog : Window
     {
         Dispatcher.UIThread.Post(() =>
         {
+            if (_progressFinished) return;
             UpdateTaskDisplay(task);
             SortByStatus();
+            UpdateOverallProgress();
         });
     }
 
@@ -286,19 +291,16 @@ public partial class WadDownloadDialog : Window
         {
             if (task.Status == WadDownloadStatus.Completed)
             {
-                _completedCount++;
                 var sizeInfo = task.TotalBytes > 0 ? $" ({FormatUtils.FormatBytes(task.TotalBytes)})" : "";
                 var threadInfo = task.ThreadCount > 1 ? $" [{task.ThreadCount} threads]" : "";
                 Log(WadDownloader.LogLevel.Success, $"Downloaded: {task.Wad.FileName}{sizeInfo}{threadInfo}");
             }
             else if (task.Status == WadDownloadStatus.Failed)
             {
-                _failedCount++;
                 Log(WadDownloader.LogLevel.Error, $"{task.Wad.FileName}: {task.ErrorMessage}");
             }
             else if (task.Status == WadDownloadStatus.AlreadyExists)
             {
-                _completedCount++;
                 var sizeInfo = task.TotalBytes > 0 ? $" ({FormatUtils.FormatBytes(task.TotalBytes)})" : "";
                 Log(WadDownloader.LogLevel.Success, $"Already present: {task.Wad.FileName}{sizeInfo}");
             }
@@ -306,10 +308,13 @@ public partial class WadDownloadDialog : Window
             {
                 Log(WadDownloader.LogLevel.Warning, $"Cancelled: {task.Wad.FileName}");
             }
-            
-            OverallProgressBar.Value = Math.Min(_completedCount + _failedCount, OverallProgressBar.Maximum);
+
+            // Preserve completion logs already queued when finalization ran,
+            // without allowing those callbacks to change the final display.
+            if (_progressFinished) return;
             UpdateTaskDisplay(task);
             SortByStatus();
+            UpdateOverallProgress();
         });
     }
 
@@ -320,6 +325,15 @@ public partial class WadDownloadDialog : Window
         {
             item.Refresh();
         }
+    }
+
+    private void UpdateOverallProgress(bool isStopped = false)
+    {
+        // Original indexes remain stable when status sorting moves display rows,
+        // and keep identically named download tasks distinct.
+        var files = _tasks.Select((task, index) => (Key: $"download:{index}", Task: task))
+            .ToDictionary(item => item.Key, item => FileOperationProgress.FromDownload(item.Task));
+        OverallProgress.UpdateProgress(_overallProgressEstimator.Update(files, isStopped || _downloadStopped));
     }
 
     private void SortByStatus()
@@ -372,12 +386,18 @@ public partial class WadDownloadDialog : Window
 
     private async void UpdateFinalStatus()
     {
-        _completedCount = _tasks.Count(t => t.Status is WadDownloadStatus.Completed or WadDownloadStatus.AlreadyExists);
-        _failedCount = _tasks.Count(t => t.Status == WadDownloadStatus.Failed);
+        var completedCount = _tasks.Count(t => t.Status is WadDownloadStatus.Completed or WadDownloadStatus.AlreadyExists);
+        var failedCount = _tasks.Count(t => t.Status == WadDownloadStatus.Failed);
         var cancelledCount = _tasks.Count(t => t.Status == WadDownloadStatus.Cancelled);
 
-        OverallProgressBar.Value = Math.Min(_completedCount + _failedCount + cancelledCount, OverallProgressBar.Maximum);
-        StatusLabel.Text = $"Complete: {_completedCount} downloaded, {_failedCount} failed";
+        _progressFinished = true;
+        foreach (var item in _displayItems)
+        {
+            item.Refresh();
+        }
+        SortByStatus();
+        UpdateOverallProgress(_cts.IsCancellationRequested || failedCount > 0 || cancelledCount > 0);
+        StatusLabel.Text = $"Complete: {completedCount} downloaded, {failedCount} failed";
         if (cancelledCount > 0)
         {
             StatusLabel.Text += $", {cancelledCount} cancelled";
@@ -455,9 +475,11 @@ public partial class WadDownloadDialog : Window
 
     private void CancelButton_Click(object? sender, RoutedEventArgs e)
     {
+        _downloadStopped = true;
         _cts.Cancel();
         CancelButton.IsEnabled = false;
         StatusLabel.Text = "Cancelling...";
+        UpdateOverallProgress(isStopped: true);
     }
 
     private void CloseButton_Click(object? sender, RoutedEventArgs e)

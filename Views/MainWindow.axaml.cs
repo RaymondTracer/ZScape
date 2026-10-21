@@ -4271,14 +4271,12 @@ public partial class MainWindow : Window
         mainPanel.Children.Add(fileLabel);
 
         // Overall progress bar
-        var progressBar = new ProgressBar
+        var progressBar = new OverallProgressControl
         {
-            Height = 20,
-            Minimum = 0,
-            Maximum = 100,
             Margin = new Thickness(0, 0, 0, 4)
         };
         mainPanel.Children.Add(progressBar);
+        var latestOverallProgress = OverallOperationProgress.Initial;
 
         // Count and file size row
         var infoRow = new Grid();
@@ -4372,6 +4370,11 @@ public partial class MainWindow : Window
                 return;
 
             dialogAction = action;
+            progressBar.UpdateProgress(latestOverallProgress with
+            {
+                EstimatedTimeRemaining = null,
+                IsStopped = true
+            });
             cts.Cancel();
             progressWindow.Close();
         }
@@ -4424,21 +4427,17 @@ public partial class MainWindow : Window
 
         var progress = new Progress<GameLauncher.HashVerificationProgress>(p =>
         {
+            if (verificationFinished || dialogAction != HashVerificationDialogAction.Completed)
+                return;
+
             if (!isConcurrent)
             {
                 statusLabel.Text = p.Status;
                 fileLabel.Text = p.CurrentFile;
             }
 
-            // Show file-level progress when hashing a single file, overall progress otherwise
-            if (!isConcurrent && p.FileSize > 0 && p.BytesProcessed > 0 && p.BytesProcessed < p.FileSize)
-            {
-                progressBar.Value = Math.Min(100, p.FilePercentComplete);
-            }
-            else
-            {
-                progressBar.Value = Math.Min(100, p.OverallPercentComplete);
-            }
+            latestOverallProgress = p.OverallProgress;
+            progressBar.UpdateProgress(latestOverallProgress);
 
             countLabel.Text = $"{p.CurrentIndex} / {p.TotalFiles}";
 
@@ -4451,7 +4450,7 @@ public partial class MainWindow : Window
                     {
                         Key = kv.Key,
                         Value = kv.Value,
-                        Percent = kv.Value.TotalBytes > 0 ? (int)(kv.Value.BytesProcessed * 100 / kv.Value.TotalBytes) : 0
+                        Percent = (int)(kv.Value.ReadFraction * 100)
                     })
                     .OrderByDescending(x => x.Percent)
                     .ToList();
@@ -4466,11 +4465,11 @@ public partial class MainWindow : Window
                     if (i < displayedItems.Count)
                     {
                         var item = displayedItems[i];
-                        var fileName = Path.GetFileName(item.Key);
+                        var fileName = Path.GetFileName(item.Value.FileName ?? item.Key);
                         var processed = item.Value.BytesProcessed / 1024.0 / 1024.0;
                         var total = item.Value.TotalBytes / 1024.0 / 1024.0;
                         miniBar.Value = Math.Min(100, item.Percent);
-                        label.Text = $"{fileName}: {item.Percent}% ({processed:F1} / {total:F1} MB)";
+                        label.Text = $"{fileName}: {item.Percent}% ({processed:0.##} / {total:0.##} MB)";
                         panel.IsVisible = true;
                     }
                     else
@@ -4483,7 +4482,7 @@ public partial class MainWindow : Window
             }
             else if (p.FileSize > 0)
             {
-                fileSizeLabel.Text = $"{p.BytesProcessed / 1024.0 / 1024.0:F2} / {p.FileSize / 1024.0 / 1024.0:F2} MB";
+                fileSizeLabel.Text = $"{p.BytesProcessed / 1024.0 / 1024.0:0.##} / {p.FileSize / 1024.0 / 1024.0:0.##} MB";
             }
             else
             {
@@ -4618,7 +4617,7 @@ public partial class MainWindow : Window
                     : string.Empty;
 
                 etaLabel.Text = e.EstimatedTimeRemaining.HasValue
-                    ? $"ETA: {FormatDownloadEta(e.EstimatedTimeRemaining.Value)}"
+                    ? $"ETA: {FormatUtils.FormatEta(e.EstimatedTimeRemaining.Value)}"
                     : string.Empty;
 
                 threadsLabel.Text = e.ThreadCount > 1
@@ -4839,7 +4838,7 @@ public partial class MainWindow : Window
                     : string.Empty;
 
                 etaLabel.Text = update.EstimatedTimeRemaining.HasValue
-                    ? $"ETA: {FormatDownloadEta(update.EstimatedTimeRemaining.Value)}"
+                    ? $"ETA: {FormatUtils.FormatEta(update.EstimatedTimeRemaining.Value)}"
                     : string.Empty;
             });
         });
@@ -4876,26 +4875,6 @@ public partial class MainWindow : Window
         }
 
         return cancelled ? null : result;
-    }
-
-    private static string FormatDownloadEta(TimeSpan eta)
-    {
-        if (eta < TimeSpan.Zero)
-        {
-            eta = TimeSpan.Zero;
-        }
-
-        if (eta.TotalHours >= 1)
-        {
-            return $"{(int)eta.TotalHours}:{eta.Minutes:D2}:{eta.Seconds:D2}";
-        }
-
-        if (eta.TotalMinutes >= 1)
-        {
-            return $"{(int)eta.TotalMinutes}:{eta.Seconds:D2}";
-        }
-
-        return $"{Math.Max(1, (int)Math.Ceiling(eta.TotalSeconds))}s";
     }
 
     private async Task ShowMessageAsync(string title, string message)
@@ -4963,6 +4942,9 @@ public partial class MainWindow : Window
         var passwordBox = new TextBox { PasswordChar = '\u2022', Width = 300 };
         string? result = null;
 
+        var okButton = new Button { Content = "OK", Width = 80, IsDefault = true };
+        var cancelButton = new Button { Content = "Cancel", Width = 80, IsCancel = true };
+
         var dialog = new Window
         {
             Title = title,
@@ -4985,19 +4967,42 @@ public partial class MainWindow : Window
                         Spacing = 10,
                         Children =
                         {
-                            new Button { Content = "OK", Width = 80 },
-                            new Button { Content = "Cancel", Width = 80 }
+                            okButton,
+                            cancelButton
                         }
                     }
                 }
             }
         };
 
-        if (dialog.Content is StackPanel sp && sp.Children.LastOrDefault() is StackPanel buttons)
+        void AcceptPassword()
         {
-            if (buttons.Children[0] is Button okBtn) okBtn.Click += (_, _) => { result = passwordBox.Text; dialog.Close(); };
-            if (buttons.Children[1] is Button cancelBtn) cancelBtn.Click += (_, _) => dialog.Close();
+            result = passwordBox.Text;
+            dialog.Close();
         }
+
+        void CancelPrompt()
+        {
+            result = null;
+            dialog.Close();
+        }
+
+        okButton.Click += (_, _) => AcceptPassword();
+        cancelButton.Click += (_, _) => CancelPrompt();
+        dialog.Opened += (_, _) => passwordBox.Focus();
+        dialog.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
+            {
+                AcceptPassword();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                CancelPrompt();
+                e.Handled = true;
+            }
+        };
 
         await dialog.ShowDialog(this);
         return result;

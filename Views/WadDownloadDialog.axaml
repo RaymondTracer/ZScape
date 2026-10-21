@@ -9,7 +9,7 @@
         MinWidth="760" MinHeight="450"
         ExtendClientAreaToDecorationsHint="False">
     
-    <Grid Margin="10" RowDefinitions="30,*,30,*,40">
+    <Grid Margin="10" RowDefinitions="30,*,Auto,*,40">
         <!-- Status label -->
         <TextBlock Grid.Row="0" x:Name="StatusLabel" Text="Downloading..." 
                    VerticalAlignment="Center"/>
@@ -17,8 +17,9 @@
         <!-- Shared, resizable table control keeps headers and progress rows aligned. -->
         <controls:ResizableListView Grid.Row="1" x:Name="WadListControl" />
         
-        <!-- Overall progress bar -->
-        <ProgressBar Grid.Row="2" x:Name="OverallProgressBar" Minimum="0" Maximum="100" Value="0" Height="20"/>
+        <!-- Shared aggregate progress includes pending and queued files. -->
+        <controls:OverallProgressControl Grid.Row="2" x:Name="OverallProgress"
+                                         Margin="0,6,0,8"/>
         
         <!-- Log panel -->
         <Border Grid.Row="3" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="2">

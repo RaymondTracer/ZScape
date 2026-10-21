@@ -344,14 +344,15 @@ public class GameLauncher : IDisposable
         public string Status { get; init; } = string.Empty;
         public long FileSize { get; init; }
         public long BytesProcessed { get; init; }
-        public int FilePercentComplete => FileSize > 0 ? (int)((BytesProcessed * 100) / FileSize) : 0;
-        public int OverallPercentComplete => TotalFiles > 0 ? (CurrentIndex * 100) / TotalFiles : 0;
+        public int FilePercentComplete => (int)(new FileOperationProgress(BytesProcessed, FileSize).ReadFraction * 100);
+        public double OverallPercentComplete => OverallProgress.PercentComplete;
+        public OverallOperationProgress OverallProgress { get; init; } = OverallOperationProgress.Initial;
         
         /// <summary>
         /// Per-file progress info for concurrent verification.
-        /// Key = filename, Value = (bytesProcessed, totalBytes)
+        /// Key = stable requirement index, including queued and completed files.
         /// </summary>
-        public Dictionary<string, (long BytesProcessed, long TotalBytes)>? FileProgress { get; init; }
+        public IReadOnlyDictionary<string, FileOperationProgress>? FileProgress { get; init; }
     }
 
     /// <summary>
@@ -495,14 +496,16 @@ public class GameLauncher : IDisposable
                 CurrentIndex = 0,
                 TotalFiles = 0,
                 Status = "No hashes to verify.",
-                FileSize = 0
+                FileSize = 0,
+                OverallProgress = new OverallOperationProgress(100, TimeSpan.Zero, true)
             });
             return [];
         }
         
         // Track per-file progress for concurrent display
-        var fileProgress = new System.Collections.Concurrent.ConcurrentDictionary<string, (long BytesProcessed, long TotalBytes)>();
+        var fileProgress = new System.Collections.Concurrent.ConcurrentDictionary<string, FileOperationProgress>();
         var completedCount = 0;
+        var overallEstimator = new OverallProgressEstimator();
         
         // Prepare verification tasks
         var verificationItems = new List<PWadInfo>();
@@ -510,7 +513,8 @@ public class GameLauncher : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             verificationItems.Add(pwad);
-            fileProgress[pwad.Name] = (0, 0);
+            fileProgress[(verificationItems.Count - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)] =
+                new FileOperationProgress(0, 0, FileName: pwad.Name);
         }
 
         // Report initial state
@@ -521,7 +525,8 @@ public class GameLauncher : IDisposable
             TotalFiles = verificationItems.Count,
             Status = $"Verifying {verificationItems.Count} file(s)...",
             FileSize = 0,
-            FileProgress = new Dictionary<string, (long, long)>(fileProgress)
+            FileProgress = new Dictionary<string, FileOperationProgress>(fileProgress),
+            OverallProgress = overallEstimator.Update(new Dictionary<string, FileOperationProgress>(fileProgress))
         });
         
         // Determine concurrency level
@@ -531,25 +536,33 @@ public class GameLauncher : IDisposable
         
         using var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         
-        // Throttle progress updates to prevent UI thread overload
-        var lastProgressUpdate = DateTime.MinValue;
         var progressLock = new object();
+        var latestCurrentFile = string.Empty;
+        var latestStatus = $"Verifying {verificationItems.Count} file(s)...";
         
-        void ThrottledProgress(HashVerificationProgress p)
+        void ReportProgress()
         {
             lock (progressLock)
             {
-                var now = DateTime.UtcNow;
-                if ((now - lastProgressUpdate).TotalMilliseconds < AppConstants.UiIntervals.ProgressReportThrottleMs)
-                    return;
-                lastProgressUpdate = now;
+                var snapshot = new Dictionary<string, FileOperationProgress>(fileProgress);
+                progress?.Report(new HashVerificationProgress
+                {
+                    CurrentFile = Volatile.Read(ref latestCurrentFile),
+                    CurrentIndex = Volatile.Read(ref completedCount),
+                    TotalFiles = verificationItems.Count,
+                    Status = Volatile.Read(ref latestStatus),
+                    FileSize = 0,
+                    BytesProcessed = 0,
+                    FileProgress = snapshot,
+                    OverallProgress = overallEstimator.Update(snapshot)
+                });
             }
-            progress?.Report(p);
         }
         
         // Create verification tasks - run entirely on thread pool
-        var tasks = verificationItems.Select(item => Task.Run(async () =>
+        var tasks = verificationItems.Select((item, index) => Task.Run(async () =>
         {
+            var progressKey = index.ToString(System.Globalization.CultureInfo.InvariantCulture);
             await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
@@ -557,17 +570,11 @@ public class GameLauncher : IDisposable
                 
                 void ReportCandidateProgress(WadCandidateHashProgress candidate)
                 {
-                    fileProgress[item.Name] = (candidate.BytesProcessed, candidate.TotalBytes);
-                    ThrottledProgress(new HashVerificationProgress
-                    {
-                        CurrentFile = item.Name,
-                        CurrentIndex = completedCount,
-                        TotalFiles = verificationItems.Count,
-                        Status = $"Hashing {item.Name} (location {candidate.CandidateIndex}/{candidate.CandidateCount})...",
-                        FileSize = candidate.TotalBytes,
-                        BytesProcessed = candidate.BytesProcessed,
-                        FileProgress = new Dictionary<string, (long, long)>(fileProgress)
-                    });
+                    fileProgress[progressKey] =
+                        new FileOperationProgress(candidate.BytesProcessed, candidate.TotalBytes, FileName: item.Name);
+                    Volatile.Write(ref latestCurrentFile, item.Name);
+                    Volatile.Write(ref latestStatus,
+                        $"Hashing {item.Name} (location {candidate.CandidateIndex}/{candidate.CandidateCount})...");
                 }
 
                 WadResolutionResult? previous = null;
@@ -592,7 +599,8 @@ public class GameLauncher : IDisposable
                 }
 
                 var fileSize = resolution.HashResult?.FileSize ?? 0;
-                fileProgress[item.Name] = (fileSize, fileSize);
+                fileProgress[progressKey] =
+                    new FileOperationProgress(fileSize, fileSize, IsComplete: true, FileName: item.Name);
                 if (resolution.Status != WadResolutionStatus.Matched)
                 {
                     mismatches.Add(new WadHashMismatch
@@ -608,20 +616,10 @@ public class GameLauncher : IDisposable
                 }
                 
                 Interlocked.Increment(ref completedCount);
-                
-                // Report file completed
-                progress?.Report(new HashVerificationProgress
-                {
-                    CurrentFile = item.Name,
-                    CurrentIndex = completedCount,
-                    TotalFiles = verificationItems.Count,
-                    Status = resolution.Status == WadResolutionStatus.Matched
-                        ? resolution.FromCache ? $"Using cached hash: {item.Name}" : $"Verified: {item.Name}"
-                        : $"No matching version: {item.Name}",
-                    FileSize = fileSize,
-                    BytesProcessed = fileSize,
-                    FileProgress = new Dictionary<string, (long, long)>(fileProgress)
-                });
+                Volatile.Write(ref latestCurrentFile, item.Name);
+                Volatile.Write(ref latestStatus, resolution.Status == WadResolutionStatus.Matched
+                    ? resolution.FromCache ? $"Using cached hash: {item.Name}" : $"Verified: {item.Name}"
+                    : $"No matching version: {item.Name}");
             }
             finally
             {
@@ -629,23 +627,41 @@ public class GameLauncher : IDisposable
             }
         }, cancellationToken)).ToList();
         
-        // Wait for all tasks
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        // Sample the latest byte counts independently of the file-read callbacks.
+        using var progressSamplerCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var progressSamplerTask = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(
+                TimeSpan.FromMilliseconds(AppConstants.UiIntervals.ProgressDisplayRefreshMs));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(progressSamplerCancellation.Token).ConfigureAwait(false))
+                    ReportProgress();
+            }
+            catch (OperationCanceledException) when (progressSamplerCancellation.IsCancellationRequested)
+            {
+                // The verification batch ended; stop sampling its final state.
+            }
+        });
+
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        finally
+        {
+            progressSamplerCancellation.Cancel();
+            await progressSamplerTask.ConfigureAwait(false);
+        }
         
         var result = mismatches.ToList();
         
         // Final progress report
-        progress?.Report(new HashVerificationProgress
-        {
-            CurrentFile = string.Empty,
-            CurrentIndex = verificationItems.Count,
-            TotalFiles = verificationItems.Count,
-            Status = result.Count > 0 
-                ? $"Verification complete. {result.Count} mismatch(es) found." 
-                : "All WAD hashes verified successfully.",
-            FileSize = 0,
-            FileProgress = new Dictionary<string, (long, long)>(fileProgress)
-        });
+        Volatile.Write(ref latestCurrentFile, string.Empty);
+        Volatile.Write(ref latestStatus, result.Count > 0
+            ? $"Verification complete. {result.Count} mismatch(es) found."
+            : "All WAD hashes verified successfully.");
+        ReportProgress();
         
         return result;
     }

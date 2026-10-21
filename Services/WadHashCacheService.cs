@@ -17,9 +17,9 @@ public sealed class WadHashCacheService
 {
     private const int CurrentSchemaVersion = 1;
     private const int FileBufferSize = 1024 * 1024;
-    // Sub-MiB hashing reads give progress real fractional values while the
-    // larger sequential file buffer and presentation throttles remain intact.
-    private const int HashReadBufferSize = 256 * 1024;
+    // Smaller hashing reads keep the latest byte count current; the UI samples
+    // that state at a fixed interval while sequential file I/O stays buffered.
+    private const int HashReadBufferSize = 64 * 1024;
 
     private static readonly Lazy<WadHashCacheService> InstanceFactory =
         new(() => new WadHashCacheService());

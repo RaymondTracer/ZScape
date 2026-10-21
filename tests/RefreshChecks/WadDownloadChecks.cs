@@ -98,8 +98,14 @@ internal static class WadDownloadChecks
         var valid = new WadDownloadTask { Wad = new WadInfo("wad-named-package.pk3", matchingHash) };
         var mismatch = new WadDownloadTask { Wad = new WadInfo("wrong-hash.pk3", new string('0', 32)) };
         var html = new WadDownloadTask { Wad = new WadInfo("error-page.pk3") };
+        var terminalNotifications = new System.Collections.Concurrent.ConcurrentDictionary<WadDownloadTask, bool>();
+        downloader.DownloadCompleted += (_, completedTask) =>
+            terminalNotifications[completedTask] = completedTask.IsFinished;
         await downloader.DownloadWadsAsync([valid, mismatch, html], destination, ct);
         ct.ThrowIfCancellationRequested();
+        RegressionAssert.That(terminalNotifications.Count == 3 && terminalNotifications.Values.All(finished => finished)
+            && new[] { valid, mismatch, html }.All(task => task.IsFinished),
+            "The real downloader marks successful and exhausted failed tasks finished before terminal notifications");
 
         var savedPath = Path.Combine(destination, valid.Wad.FileName);
         RegressionAssert.That(valid.Status == WadDownloadStatus.Completed && File.Exists(savedPath)
@@ -147,6 +153,9 @@ internal static class WadDownloadChecks
         using var downloader = new WadDownloader([server.Site]) { IdgamesEnabled = false, WebSearchEnabled = false };
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var task = new WadDownloadTask { Wad = new WadInfo("cancel.pk3") };
+        var finishedAtCancellationNotification = false;
+        downloader.DownloadCompleted += (_, completedTask) =>
+            finishedAtCancellationNotification = completedTask.IsFinished;
         var downloading = downloader.DownloadWadsAsync([task], destination, cancellation.Token);
         try
         {
@@ -155,6 +164,8 @@ internal static class WadDownloadChecks
                 "An in-progress replacement retains the existing destination while waiting for network bytes");
             cancellation.Cancel();
             await downloading.WaitAsync(ct);
+            RegressionAssert.That(task.IsFinished && finishedAtCancellationNotification,
+                "The real downloader marks cancelled tasks finished before their terminal notification");
             RegressionAssert.That(task.Status == WadDownloadStatus.Cancelled
                 && File.ReadAllBytes(originalPath).SequenceEqual(previous)
                 && Directory.EnumerateFiles(destination).Count() == 1,

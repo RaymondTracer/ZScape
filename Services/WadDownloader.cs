@@ -161,6 +161,12 @@ public partial class WadDownloader : IDisposable
     /// Event fired when a download completes (success or failure).
     /// </summary>
     public event EventHandler<WadDownloadTask>? DownloadCompleted;
+
+    private void ReportDownloadCompleted(WadDownloadTask task)
+    {
+        task.IsFinished = true;
+        DownloadCompleted?.Invoke(this, task);
+    }
     
     /// <summary>
     /// Event fired for log messages (displayed in download dialog only).
@@ -382,7 +388,7 @@ public partial class WadDownloader : IDisposable
         task.StatusMessage = message;
         task.ErrorMessage = errorMessage;
         LogWarning($"Not found: {task.Wad.FileName}");
-        DownloadCompleted?.Invoke(this, task);
+        ReportDownloadCompleted(task);
     }
 
     private void AddAlternateSource(
@@ -793,6 +799,7 @@ public partial class WadDownloader : IDisposable
 
         foreach (var task in taskList)
         {
+            task.IsFinished = false;
             task.TotalSitesToSearch = GetTotalSourcePhases(
                 IdgamesEnabled,
                 WebSearchEnabled,
@@ -2445,7 +2452,7 @@ public partial class WadDownloader : IDisposable
                 : $"Downloaded {task.Wad.FileName} from {task.SourceUrl} in {sw.Elapsed.TotalSeconds:F1}s ({FormatBytes((long)speed)}/s)");
             
             downloadSucceeded = true;
-            DownloadCompleted?.Invoke(this, task);
+            ReportDownloadCompleted(task);
             return true;
         }
         catch (TooManyConnectionsException)
@@ -2463,7 +2470,7 @@ public partial class WadDownloader : IDisposable
         {
             task.Status = WadDownloadStatus.Cancelled;
             task.StatusMessage = "Cancelled";
-            DownloadCompleted?.Invoke(this, task);
+            ReportDownloadCompleted(task);
             return false;
         }
         catch (Exception ex)

@@ -843,7 +843,7 @@ public partial class FirstTimeSetupDialog : Window
                     : string.Empty;
 
                 etaLabel.Text = update.EstimatedTimeRemaining.HasValue
-                    ? $"ETA: {FormatDownloadEta(update.EstimatedTimeRemaining.Value)}"
+                    ? $"ETA: {FormatUtils.FormatEta(update.EstimatedTimeRemaining.Value)}"
                     : string.Empty;
             });
         });
@@ -1090,26 +1090,6 @@ public partial class FirstTimeSetupDialog : Window
 
         await dialog.ShowDialog(this);
         return result;
-    }
-
-    private static string FormatDownloadEta(TimeSpan eta)
-    {
-        if (eta < TimeSpan.Zero)
-        {
-            eta = TimeSpan.Zero;
-        }
-
-        if (eta.TotalHours >= 1)
-        {
-            return $"{(int)eta.TotalHours}:{eta.Minutes:D2}:{eta.Seconds:D2}";
-        }
-
-        if (eta.TotalMinutes >= 1)
-        {
-            return $"{(int)eta.TotalMinutes}:{eta.Seconds:D2}";
-        }
-
-        return $"{Math.Max(1, (int)Math.Ceiling(eta.TotalSeconds))}s";
     }
 
     private async Task ShowMessageAsync(string title, string message)

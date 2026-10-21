@@ -118,6 +118,11 @@ public static class AppConstants
         /// Throttle interval for progress reporting during operations (50ms).
         /// </summary>
         public const int ProgressReportThrottleMs = 50;
+
+        /// <summary>
+        /// Fixed sampling interval for visible operation progress (100ms).
+        /// </summary>
+        public const int ProgressDisplayRefreshMs = 100;
     }
     
     /// <summary>

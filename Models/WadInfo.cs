@@ -67,6 +67,11 @@ public class WadDownloadTask
 {
     public WadInfo Wad { get; set; } = new();
     public WadDownloadStatus Status { get; set; } = WadDownloadStatus.Pending;
+    /// <summary>
+    /// Whether the downloader has finished this task, including exhausted sources or cancellation.
+    /// A failed transfer attempt alone is not final while retrying other sources.
+    /// </summary>
+    public bool IsFinished { get; internal set; }
     public string StatusMessage { get; set; } = "Pending";
     public long BytesDownloaded { get; set; }
     public long TotalBytes { get; set; }

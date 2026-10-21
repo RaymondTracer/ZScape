@@ -1,3 +1,5 @@
+using System;
+
 namespace ZScape.Utilities;
 
 /// <summary>
@@ -63,5 +65,28 @@ public static class FormatUtils
             return string.Empty;
             
         return $"{FormatBytes((long)bytesPerSecond)}/s";
+    }
+
+    /// <summary>
+    /// Formats an estimated remaining duration consistently across progress displays.
+    /// </summary>
+    public static string FormatEta(TimeSpan eta)
+    {
+        if (eta < TimeSpan.Zero)
+        {
+            eta = TimeSpan.Zero;
+        }
+
+        if (eta.TotalHours >= 1)
+        {
+            return $"{(int)eta.TotalHours}:{eta.Minutes:D2}:{eta.Seconds:D2}";
+        }
+
+        if (eta.TotalMinutes >= 1)
+        {
+            return $"{(int)eta.TotalMinutes}:{eta.Seconds:D2}";
+        }
+
+        return $"{(int)Math.Ceiling(eta.TotalSeconds)}s";
     }
 }
