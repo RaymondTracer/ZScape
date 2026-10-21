@@ -316,15 +316,7 @@ public partial class LaunchGameDialog : Window
     private void UpdatePwadListState()
     {
         PwadEmptyLabel.IsVisible = _pwads.Count == 0;
-        if (_pwads.Count == 0)
-        {
-            RemovePwadButton.IsEnabled = false;
-            MoveUpPwadButton.IsEnabled = false;
-            MoveDownPwadButton.IsEnabled = false;
-            _updatingPwadEditor = true;
-            PwadEditTextBox.Text = string.Empty;
-            _updatingPwadEditor = false;
-        }
+        UpdatePwadEditorState();
     }
 
     // ── PWAD picker ──────────────────────────────────────────────────
@@ -338,20 +330,13 @@ public partial class LaunchGameDialog : Window
         {
             Title = "Select PWAD Files",
             AllowMultiple = true,
-            FileTypeFilter =
-            [
-                new FilePickerFileType("WAD/PK3 Files")
-                {
-                    Patterns = ["*.wad", "*.pk3", "*.pk7", "*.zip", "*.7z"]
-                }
-            ]
+            FileTypeFilter = GetPwadFileTypeFilter()
         });
 
         foreach (var file in files)
         {
             var path = file.Path.LocalPath;
-            if (_pwads.All(entry =>
-                    !entry.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
+            if (!IsDuplicatePwadPath(path))
             {
                 _pwads.Add(new LaunchPwadEntry(path));
             }
@@ -369,19 +354,63 @@ public partial class LaunchGameDialog : Window
         return _pwads.IndexOf(entry);
     }
 
-    private void PwadsListView_SelectionChanged(object? sender, EventArgs e)
+    private static FilePickerFileType[] GetPwadFileTypeFilter() =>
+    [
+        new FilePickerFileType("WAD/PK3 Files")
+        {
+            Patterns = ["*.wad", "*.pk3", "*.pk7", "*.zip", "*.7z"]
+        }
+    ];
+
+    private bool IsDuplicatePwadPath(string path, LaunchPwadEntry? except = null) =>
+        _pwads.Any(entry => !ReferenceEquals(entry, except)
+            && entry.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+
+    private void UpdatePwadEditorState()
     {
         var idx = GetSelectedPwadIndex();
-        var count = _pwads.Count;
-        RemovePwadButton.IsEnabled = idx >= 0;
-        MoveUpPwadButton.IsEnabled = idx > 0;
-        MoveDownPwadButton.IsEnabled = idx >= 0 && idx < count - 1;
+        var hasSelection = idx >= 0 && idx < _pwads.Count;
+        RemovePwadButton.IsEnabled = hasSelection;
+        MoveUpPwadButton.IsEnabled = hasSelection && idx > 0;
+        MoveDownPwadButton.IsEnabled = hasSelection && idx < _pwads.Count - 1;
+        PwadEditTextBox.IsEnabled = hasSelection;
+        BrowsePwadButton.IsEnabled = hasSelection;
 
         _updatingPwadEditor = true;
-        PwadEditTextBox.Text = idx >= 0 && idx < _pwads.Count
-            ? _pwads[idx].Path
-            : "";
+        PwadEditTextBox.Text = hasSelection ? _pwads[idx].Path : string.Empty;
         _updatingPwadEditor = false;
+    }
+
+    private void PwadsListView_SelectionChanged(object? sender, EventArgs e)
+    {
+        UpdatePwadEditorState();
+    }
+
+    private async void BrowsePwadButton_Click(object? sender, RoutedEventArgs e)
+    {
+        if (PwadsListView.SelectedItem is not LaunchPwadEntry selectedEntry
+            || StorageProvider is not { } storageProvider)
+        {
+            return;
+        }
+
+        var files = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Replace Selected PWAD",
+            AllowMultiple = false,
+            FileTypeFilter = GetPwadFileTypeFilter()
+        });
+
+        if (files.Count == 0
+            || !ReferenceEquals(PwadsListView.SelectedItem, selectedEntry)
+            || !_pwads.Contains(selectedEntry))
+        {
+            return;
+        }
+
+        // Route the replacement through the same editable-path rule used for
+        // manual changes, including duplicate-path validation.
+        PwadEditTextBox.Text = files[0].Path.LocalPath;
     }
 
     private void RemovePwadButton_Click(object? sender, RoutedEventArgs e)
@@ -422,12 +451,12 @@ public partial class LaunchGameDialog : Window
         if (string.IsNullOrWhiteSpace(newPath)) return;
         if (_pwads[idx].Path == newPath) return;
 
-        // Don't allow duplicate entries
-        for (int i = 0; i < _pwads.Count; i++)
+        if (IsDuplicatePwadPath(newPath, _pwads[idx]))
         {
-            if (i != idx
-                && _pwads[i].Path.Equals(newPath, StringComparison.OrdinalIgnoreCase))
-                return;
+            _updatingPwadEditor = true;
+            PwadEditTextBox.Text = _pwads[idx].Path;
+            _updatingPwadEditor = false;
+            return;
         }
 
         _pwads[idx].Path = newPath;

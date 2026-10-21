@@ -132,11 +132,15 @@
                             </Grid>
                         </Border>
 
-                        <Grid ColumnDefinitions="Auto,*">
+                        <Grid ColumnDefinitions="Auto,*,Auto">
                             <TextBlock Grid.Column="0" Text="Selected path" VerticalAlignment="Center" Foreground="Gray"/>
                             <TextBox Grid.Column="1" x:Name="PwadEditTextBox"
+                                     IsEnabled="False"
                                      HorizontalAlignment="Stretch"
                                      TextChanged="PwadEditTextBox_TextChanged"/>
+                            <Button Grid.Column="2" x:Name="BrowsePwadButton" Content="Browse..."
+                                    Margin="8,0,0,0" IsEnabled="False"
+                                    Click="BrowsePwadButton_Click"/>
                         </Grid>
                         <TextBlock x:Name="HostOptionalHint"
                                    Text="Optional files use -optfile; clients may join without them."
