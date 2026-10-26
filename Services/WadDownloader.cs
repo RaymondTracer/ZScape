@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using SharpCompress.Archives;
 using SharpCompress.Common;
@@ -94,7 +95,6 @@ public partial class WadDownloader : IDisposable
         ("DuckDuckGo HTML", "https://html.duckduckgo.com/html/"),
     ];
 
-    private const int TargetWebSourceDomains = 2;
     private const int MaxWebResultPagesPerWad = 8;
     private const int WebSearchRequestIntervalMs = 750;
     
@@ -104,11 +104,6 @@ public partial class WadDownloader : IDisposable
     private static Dictionary<string, (string Path, long Size)>? _idgamesIndex;
     private static readonly SemaphoreSlim _idgamesIndexLock = new(1, 1);
     private static DateTime _idgamesIndexExpiry = DateTime.MinValue;
-    
-    /// <summary>
-    /// Supported WAD file extensions to search for (uses centralized WadExtensions).
-    /// </summary>
-    private static string[] SupportedExtensions => Utilities.WadExtensions.AllSupportedExtensions;
     
     // Static HttpClient instances - reused across all WadDownloader instances for connection pooling
     // HttpClient is thread-safe and designed to be reused
@@ -303,13 +298,9 @@ public partial class WadDownloader : IDisposable
     private void LogError(string message) => Log(LogLevel.Error, message);
     private void LogSuccess(string message) => Log(LogLevel.Success, message);
 
-    // Failed is intentionally not terminal here. ExecuteDownloadAsync uses it
-    // transiently while the scheduler decides whether to retry or change
-    // source; discovery must remain able to add an alternate during that gap.
-    // Once a source is actively downloading, stop probing that file. The
-    // scheduler already owns the transfer and any later source would only be
-    // useful after this attempt fails and the task returns to a retry/search
-    // state.
+    // Failed remains eligible for scheduler fallback checks while an attempt
+    // is being resolved. Source discovery itself resumes only after the
+    // scheduler moves the task back to Searching.
     private static bool IsEligibleForSourceDiscovery(WadDownloadTask task) =>
         task.Status is not (
             WadDownloadStatus.Completed
@@ -318,10 +309,9 @@ public partial class WadDownloader : IDisposable
             or WadDownloadStatus.Cancelled);
 
     /// <summary>
-    /// Determines whether a task should actively search for sources on mirror sites.
-    /// Active downloads, completed files, and cancelled tasks are never searched.
-    /// Queued tasks with a known source only search for alternate sources if multi-source
-    /// downloading is allowed and the target domain count has not been reached.
+    /// A task with a source is left alone while that source is queued or being
+    /// validated. The scheduler moves it back to Searching only after exhausting
+    /// the current source, which is the point at which another source is useful.
     /// </summary>
     private static bool NeedsSourceDiscovery(
         WadDownloadTask task,
@@ -332,24 +322,15 @@ public partial class WadDownloader : IDisposable
             return false;
         }
 
-        // Searching or failed (needs an initial source)
-        if (task.Status is WadDownloadStatus.Searching or WadDownloadStatus.Failed
-            || string.IsNullOrEmpty(task.SourceUrl))
+        if (task.Status == WadDownloadStatus.Searching)
         {
             return true;
         }
 
-        // Queued with an existing source: check if multi-source downloading is configured
-        var settings = SettingsService.Instance.Settings;
-        var allowsMultipleSources = settings.MaxConcurrentDownloads != 1
-            && (settings.MaxConcurrentDomains == 0 || settings.MaxConcurrentDomains > 1);
-
-        if (!allowsMultipleSources)
+        lock (discoveryState.SyncRoot)
         {
-            return false;
+            return string.IsNullOrEmpty(task.SourceUrl);
         }
-
-        return GetDiscoveredDomainCount(task, discoveryState) < TargetWebSourceDomains;
     }
 
     private static int GetTotalSourcePhases(
@@ -423,30 +404,27 @@ public partial class WadDownloader : IDisposable
         LogVerbose(logMessage);
     }
 
-    private static int GetDiscoveredDomainCount(
+    private static bool NeedsWebSourceDiscovery(
         WadDownloadTask task,
         SourceDiscoveryState discoveryState)
     {
+        if (!IsEligibleForSourceDiscovery(task))
+        {
+            return false;
+        }
+
+        // Web search is a last-resort fallback, not a way to collect extra
+        // mirrors. Wait until every discovered source has actually failed.
         lock (discoveryState.SyncRoot)
         {
-            return task.AlternateUrls
-                .Select(alternate => alternate.Url)
+            return !task.AlternateUrls
+                .Select(source => source.Url)
                 .Prepend(task.SourceUrl)
-                .Where(url => Uri.TryCreate(
-                    url,
-                    UriKind.Absolute,
-                    out _))
-                .Select(url => new Uri(url!).Host)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count();
+                .Any(url => !string.IsNullOrWhiteSpace(url)
+                            && !task.ExhaustedUrls.Contains(url)
+                            && TryGetSupportedDownloadUri(url, out _));
         }
     }
-
-    private static bool NeedsWebSourceDiscovery(
-        WadDownloadTask task,
-        SourceDiscoveryState discoveryState) =>
-        NeedsSourceDiscovery(task, discoveryState)
-        && GetDiscoveredDomainCount(task, discoveryState) < TargetWebSourceDomains;
 
     private void RecordDiscoveredSource(
         WadDownloadTask task,
@@ -464,6 +442,7 @@ public partial class WadDownloader : IDisposable
         }
 
         var isFirstSource = false;
+        var isNextSource = false;
         lock (discoveryState.SyncRoot)
         {
             if (task.ExhaustedUrls.Contains(url)
@@ -489,10 +468,15 @@ public partial class WadDownloader : IDisposable
             else
             {
                 task.AlternateUrls.Add((url, size, downloadedFileName));
+                if (task.Status == WadDownloadStatus.Searching)
+                {
+                    task.Status = WadDownloadStatus.Queued;
+                    task.StatusMessage = $"Queued ({queuedStatus})";
+                    task.SkipSourceRetry = false;
+                    isNextSource = true;
+                }
             }
         }
-
-        discoveryState.NotifySourceChanged();
 
         if (isFirstSource)
         {
@@ -502,10 +486,17 @@ public partial class WadDownloader : IDisposable
             ProgressUpdated?.Invoke(this, task);
             LogSuccess(successMessage);
         }
+        else if (isNextSource)
+        {
+            ProgressUpdated?.Invoke(this, task);
+            LogSuccess(successMessage);
+        }
         else
         {
             LogVerbose(alternateMessage);
         }
+
+        discoveryState.NotifySourceChanged();
     }
 
     private static string? ExtractDownloadFileName(string urlOrPath)
@@ -670,9 +661,10 @@ public partial class WadDownloader : IDisposable
 
         foreach (var task in tasks.Where(t => NeedsSourceDiscovery(t, discoveryState)))
         {
-            foreach (var variant in GetFilenameVariants(task.Wad.FileName))
+            var requestedFileName = Path.GetFileName(task.Wad.FileName);
+            if (!string.IsNullOrWhiteSpace(requestedFileName))
             {
-                lookup.TryAdd(variant, task);
+                lookup.TryAdd(requestedFileName, task);
             }
         }
 
@@ -846,6 +838,51 @@ public partial class WadDownloader : IDisposable
         LogInfo($"Download complete: {completed} succeeded, {failed} failed");
     }
 
+    private async Task WaitForSourceAttemptCompletionAsync(
+        IReadOnlyCollection<WadDownloadTask> tasks,
+        SourceDiscoveryState discoveryState,
+        CancellationToken ct)
+    {
+        while (true)
+        {
+            if (tasks.Any(task => NeedsSourceDiscovery(task, discoveryState))
+                || !tasks.Any(task => HasUnresolvedSourceAttempt(task, discoveryState)))
+            {
+                return;
+            }
+
+            var observedVersion = discoveryState.CaptureVersion();
+            if (tasks.Any(task => NeedsSourceDiscovery(task, discoveryState))
+                || !tasks.Any(task => HasUnresolvedSourceAttempt(task, discoveryState)))
+            {
+                continue;
+            }
+
+            await discoveryState.WaitForChangeAsync(observedVersion, ct);
+        }
+    }
+
+    private static bool HasUnresolvedSourceAttempt(
+        WadDownloadTask task,
+        SourceDiscoveryState discoveryState)
+    {
+        if (task.Status is WadDownloadStatus.Completed
+            or WadDownloadStatus.AlreadyExists
+            or WadDownloadStatus.Cancelled)
+        {
+            return false;
+        }
+
+        lock (discoveryState.SyncRoot)
+        {
+            return task.AlternateUrls
+                       .Select(source => source.Url)
+                       .Prepend(task.SourceUrl)
+                       .Any(url => !string.IsNullOrWhiteSpace(url)
+                                   && !task.ExhaustedUrls.Contains(url));
+        }
+    }
+
     private async Task DiscoverSourcesAsync(
         List<WadDownloadTask> tasks,
         SourceDiscoveryState discoveryState,
@@ -854,53 +891,105 @@ public partial class WadDownloader : IDisposable
         try
         {
             await SearchOfficialFreedoomAsync(tasks, discoveryState, ct);
+            await WaitForSourceAttemptCompletionAsync(tasks, discoveryState, ct);
 
             var serverGroups = tasks
                 .Where(task => !string.IsNullOrEmpty(task.Wad.ServerUrl))
                 .GroupBy(task => task.Wad.ServerUrl!)
                 .ToList();
+            var dynamicServerGroups = serverGroups
+                .Where(group => TryBuildPizzaDoomServerInfoApiUri(group.Key, out _))
+                .ToList();
+            var dynamicServerUrls = dynamicServerGroups
+                .Select(group => group.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            if (serverGroups.Count > 0)
+            foreach (var group in serverGroups.Where(group =>
+                         !dynamicServerUrls.Contains(group.Key)))
             {
-                await Task.WhenAll(serverGroups.Select(group =>
+                ct.ThrowIfCancellationRequested();
+                await SearchServerUrlAsync(
+                    group.Key,
+                    group.ToList(),
+                    discoveryState,
+                    ct);
+                await WaitForSourceAttemptCompletionAsync(tasks, discoveryState, ct);
+            }
+
+            var templatesSearchedAlongsideDynamicPage = false;
+            if (dynamicServerGroups.Count > 0)
+            {
+                using var dynamicPageCts =
+                    CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var dynamicPageTask = Task.WhenAll(dynamicServerGroups.Select(group =>
                     SearchServerUrlAsync(
                         group.Key,
                         group.ToList(),
                         discoveryState,
-                        ct)));
+                        dynamicPageCts.Token)));
+                var templateSearchTask = SearchTemplateSitesWhilePageLoadsAsync(
+                    tasks,
+                    discoveryState,
+                    dynamicPageTask,
+                    ct);
+
+                await templateSearchTask;
+
+                if (!tasks.Any(task => NeedsSourceDiscovery(task, discoveryState))
+                    && !tasks.Any(task =>
+                        HasUnresolvedSourceAttempt(task, discoveryState)))
+                {
+                    // A valid source completed before the dynamic page data was
+                    // needed. Do not keep its request alive pointlessly.
+                    dynamicPageCts.Cancel();
+                }
+
+                try
+                {
+                    await dynamicPageTask;
+                }
+                catch (OperationCanceledException)
+                    when (dynamicPageCts.IsCancellationRequested
+                          && !ct.IsCancellationRequested)
+                {
+                    // All requested files already completed from another source.
+                }
+
+                await SearchDeferredServerSourcesAsync(
+                    tasks,
+                    discoveryState,
+                    ct);
+                await WaitForSourceAttemptCompletionAsync(
+                    tasks,
+                    discoveryState,
+                    ct);
+                templatesSearchedAlongsideDynamicPage = true;
             }
 
             foreach (var site in _downloadSites)
             {
                 ct.ThrowIfCancellationRequested();
+                if (templatesSearchedAlongsideDynamicPage
+                    && site.Contains("%WadName%", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 if (!tasks.Any(task => NeedsSourceDiscovery(task, discoveryState)))
                 {
                     break;
                 }
 
-                await SearchSiteAsync(
-                    site,
-                    tasks,
-                    discoveryState,
-                    ct);
+                await SearchSiteAsync(site, tasks, discoveryState, ct);
+                await WaitForSourceAttemptCompletionAsync(tasks, discoveryState, ct);
             }
 
-            if (IdgamesEnabled && tasks.Any(task => NeedsSourceDiscovery(task, discoveryState)))
+            if (IdgamesEnabled
+                && tasks.Any(task => NeedsSourceDiscovery(task, discoveryState)))
             {
                 ct.ThrowIfCancellationRequested();
-                await SearchIdgamesAsync(
-                    tasks,
-                    discoveryState,
-                    ct);
-            }
-
-            if (WebSearchEnabled && tasks.Any(task => NeedsSourceDiscovery(task, discoveryState)))
-            {
-                ct.ThrowIfCancellationRequested();
-                await SearchWebAsync(
-                    tasks,
-                    discoveryState,
-                    ct);
+                await SearchIdgamesAsync(tasks, discoveryState, ct);
+                await WaitForSourceAttemptCompletionAsync(tasks, discoveryState, ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -915,6 +1004,82 @@ public partial class WadDownloader : IDisposable
         finally
         {
             discoveryState.MarkComplete();
+        }
+    }
+
+    private async Task SearchTemplateSitesWhilePageLoadsAsync(
+        List<WadDownloadTask> tasks,
+        SourceDiscoveryState discoveryState,
+        Task dynamicPageTask,
+        CancellationToken ct)
+    {
+        foreach (var site in _downloadSites.Where(site =>
+                     site.Contains("%WadName%", StringComparison.OrdinalIgnoreCase)))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!tasks.Any(task => NeedsSourceDiscovery(task, discoveryState)))
+            {
+                break;
+            }
+
+            await SearchSiteAsync(site, tasks, discoveryState, ct);
+            await WaitForSourceAttemptCompletionAsync(tasks, discoveryState, ct);
+
+            if (dynamicPageTask.IsCompleted)
+            {
+                await dynamicPageTask;
+                await SearchDeferredServerSourcesAsync(
+                    tasks,
+                    discoveryState,
+                    ct);
+                await WaitForSourceAttemptCompletionAsync(
+                    tasks,
+                    discoveryState,
+                    ct);
+            }
+        }
+    }
+
+    private async Task SearchDeferredServerSourcesAsync(
+        IEnumerable<WadDownloadTask> tasks,
+        SourceDiscoveryState discoveryState,
+        CancellationToken ct)
+    {
+        foreach (var task in tasks)
+        {
+            while (NeedsSourceDiscovery(task, discoveryState)
+                   && discoveryState.TryTakeDeferredServerSource(
+                       task,
+                       out var deferredSource))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!NeedsSourceDiscovery(task, discoveryState))
+                {
+                    break;
+                }
+
+                LogInfo(
+                    $"Checking server-listed WAD source for {task.Wad.FileName}: "
+                    + deferredSource.Url);
+                var size = await GetFileSizeAsync(deferredSource.Url, ct);
+                if (size < 0)
+                {
+                    continue;
+                }
+
+                var host = new Uri(deferredSource.Url).Host;
+                RecordDiscoveredSource(
+                    task,
+                    deferredSource.Url,
+                    size,
+                    host,
+                    $"Found {task.Wad.FileName} in the server's dynamic WAD list at "
+                    + $"{deferredSource.Url} ({FormatSizeOrUnknown(size)})",
+                    $"Added server-listed source for {task.Wad.FileName}: "
+                    + deferredSource.Url,
+                    deferredSource.FileName,
+                    discoveryState);
+            }
         }
     }
 
@@ -1000,11 +1165,13 @@ public partial class WadDownloader : IDisposable
         SourceDiscoveryState discoveryState,
         CancellationToken ct)
     {
+        var isDynamicServerInfo =
+            TryBuildPizzaDoomServerInfoApiUri(serverUrl, out _);
         var tasksToCheck = tasks
             .Where(task => NeedsSourceDiscovery(task, discoveryState))
             .ToList();
 
-        if (tasksToCheck.Count == 0)
+        if (tasksToCheck.Count == 0 && !isDynamicServerInfo)
         {
             return;
         }
@@ -1013,11 +1180,32 @@ public partial class WadDownloader : IDisposable
         {
             LogInfo($"Checking server URL: {serverUrl}");
 
+            if (await TryQueuePizzaDoomServerInfoSourcesAsync(
+                    serverUrl,
+                    tasks,
+                    discoveryState,
+                    ct))
+            {
+                return;
+            }
+
+            tasksToCheck = tasks
+                .Where(task => NeedsSourceDiscovery(task, discoveryState))
+                .ToList();
+            if (tasksToCheck.Count == 0)
+            {
+                return;
+            }
+
             await SearchPageForWadsAsync(
                 serverUrl,
                 tasksToCheck,
                 discoveryState,
                 ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -1063,42 +1251,40 @@ public partial class WadDownloader : IDisposable
             var siteHost = siteUri.Host;
             LogVerbose($"Searching site: {site}");
             
-            // Check for %WadName% template URLs - direct download links
+            // Check for %WadName% template URLs - direct download links.
             if (site.Contains("%WadName%", StringComparison.OrdinalIgnoreCase))
             {
-                // Check each WAD with HEAD request and GET fallback - try multiple extensions if needed.
+                // Probe only the requested filename. The lookup is case-
+                // insensitive when matching links from pages; direct template
+                // URLs preserve the requested casing for case-sensitive hosts.
                 var checkTasks = tasksToCheck.Select(async task =>
                 {
-                    // Build list of filenames to try
-                    var filenamesToTry = GetFilenameVariants(task.Wad.FileName);
-                    
-                    foreach (var filename in filenamesToTry)
+                    var fileName = Path.GetFileName(task.Wad.FileName);
+                    if (string.IsNullOrWhiteSpace(fileName)
+                        || !NeedsSourceDiscovery(task, discoveryState))
                     {
-                        // A source may have been found while this site's
-                        // filename variants were being prepared. Avoid issuing
-                        // more HEAD/GET probes once the scheduler starts it.
-                        if (!NeedsSourceDiscovery(task, discoveryState))
-                        {
-                            break;
-                        }
-
-                        var url = site.Replace("%WadName%", Uri.EscapeDataString(filename), StringComparison.OrdinalIgnoreCase);
-                        var size = await GetFileSizeAsync(url, ct);
-                        
-                        if (size < 0) continue;
-
-                        var foundAs = filename != task.Wad.FileName ? $" (as {filename})" : string.Empty;
-                        RecordDiscoveredSource(
-                            task,
-                            url,
-                            size,
-                            siteHost,
-                            $"Found {task.Wad.FileName}{foundAs} at {url} ({FormatSizeOrUnknown(size)})",
-                            $"Added alternate source for {task.Wad.FileName}: {url}",
-                            filename,
-                            discoveryState);
-                        break;
+                        return;
                     }
+
+                    var url = site.Replace(
+                        "%WadName%",
+                        Uri.EscapeDataString(fileName),
+                        StringComparison.OrdinalIgnoreCase);
+                    var size = await GetFileSizeAsync(url, ct);
+                    if (size < 0)
+                    {
+                        return;
+                    }
+
+                    RecordDiscoveredSource(
+                        task,
+                        url,
+                        size,
+                        siteHost,
+                        $"Found {task.Wad.FileName} at {url} ({FormatSizeOrUnknown(size)})",
+                        $"Added alternate source for {task.Wad.FileName}: {url}",
+                        fileName,
+                        discoveryState);
                 });
                 
                 await Task.WhenAll(checkTasks);
@@ -1423,9 +1609,8 @@ public partial class WadDownloader : IDisposable
         || path.StartsWith("newstuff/", StringComparison.OrdinalIgnoreCase);
     
     /// <summary>
-    /// Searches the web as a last-resort fallback. Uses both maintained
-    /// DuckDuckGo HTML surfaces with several filename-aware query forms, then
-    /// crawls a bounded, de-duplicated set of result pages.
+    /// Searches the web as a last-resort fallback with filename-aware queries,
+    /// then crawls a bounded, de-duplicated set of result pages.
     /// </summary>
     private async Task SearchWebAsync(
         List<WadDownloadTask> tasks,
@@ -1440,13 +1625,13 @@ public partial class WadDownloader : IDisposable
             if (sourceDiscoveryTasks.Count == 0)
             {
                 LogVerbose(
-                    "Web search: every WAD already has sources on at least "
-                    + $"{TargetWebSourceDomains} domains, skipping");
+                    "Web search fallback: no unresolved WAD without an untried "
+                    + "source remains, skipping");
                 return;
             }
             
             LogInfo(
-                $"Web search: looking for extra sources for "
+                $"Web search fallback: looking for unresolved WADs among "
                 + $"{sourceDiscoveryTasks.Count} WAD(s)...");
 
             var unavailableProviders = new HashSet<string>(
@@ -1598,6 +1783,158 @@ public partial class WadDownloader : IDisposable
                     ProgressUpdated?.Invoke(this, task);
                 }
             }
+        }
+    }
+
+    private static bool TryBuildPizzaDoomServerInfoApiUri(
+        string serverUrl,
+        out Uri apiUri)
+    {
+        apiUri = null!;
+        if (!Uri.TryCreate(serverUrl, UriKind.Absolute, out var pageUri)
+            || !pageUri.Host.Equals(
+                "panel.pizza-doom.it",
+                StringComparison.OrdinalIgnoreCase)
+            || !pageUri.AbsolutePath.Equals(
+                "/serverinfo.html",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var id = GetQueryParameter(pageUri, "id");
+        if (string.IsNullOrWhiteSpace(id) || !long.TryParse(id, out _))
+        {
+            return false;
+        }
+
+        var builder = new UriBuilder(pageUri)
+        {
+            Path = "/api/public/server-info",
+            Query = "id=" + Uri.EscapeDataString(id),
+            Fragment = string.Empty
+        };
+        apiUri = builder.Uri;
+        return true;
+    }
+
+    private static string? GetQueryParameter(Uri uri, string name)
+    {
+        foreach (var part in uri.Query.TrimStart('?').Split(
+                     '&',
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = part.IndexOf('=');
+            var key = separator < 0 ? part : part[..separator];
+            key = Uri.UnescapeDataString(key.Replace('+', ' '));
+            if (!key.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = separator < 0 ? string.Empty : part[(separator + 1)..];
+            return Uri.UnescapeDataString(value.Replace('+', ' '));
+        }
+
+        return null;
+    }
+
+    private async Task<bool> TryQueuePizzaDoomServerInfoSourcesAsync(
+        string serverUrl,
+        List<WadDownloadTask> tasks,
+        SourceDiscoveryState discoveryState,
+        CancellationToken ct)
+    {
+        if (!TryBuildPizzaDoomServerInfoApiUri(serverUrl, out var apiUri))
+        {
+            return false;
+        }
+
+        var requestedWads = new Dictionary<string, WadDownloadTask>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var task in tasks)
+        {
+            var fileName = Path.GetFileName(task.Wad.FileName);
+            if (!string.IsNullOrWhiteSpace(fileName))
+            {
+                requestedWads.TryAdd(fileName, task);
+            }
+        }
+
+        if (requestedWads.Count == 0)
+        {
+            return true;
+        }
+
+        LogInfo($"Reading dynamic server WAD list: {apiUri}");
+        try
+        {
+            using var response = await HttpClient.GetAsync(apiUri, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                LogWarning(
+                    $"Dynamic server WAD list returned HTTP "
+                    + $"{(int)response.StatusCode} {response.ReasonPhrase}");
+                return false;
+            }
+
+            await using var responseStream = await response.Content.ReadAsStreamAsync(ct);
+            using var document = await JsonDocument.ParseAsync(
+                responseStream,
+                cancellationToken: ct);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("wad_files", out var wadFiles)
+                && !root.TryGetProperty("wads", out wadFiles))
+            {
+                LogWarning("Dynamic server WAD list did not contain a WAD filename array");
+                return false;
+            }
+
+            if (wadFiles.ValueKind != JsonValueKind.Array)
+            {
+                LogWarning("Dynamic server WAD list returned an invalid filename array");
+                return false;
+            }
+
+            var hostId = root.TryGetProperty("host_id", out var hostElement)
+                ? hostElement.GetString() ?? string.Empty
+                : string.Empty;
+            var wadBaseUrl = hostId.Equals("uk", StringComparison.OrdinalIgnoreCase)
+                ? "https://wads-uk.pizza-doom.it/"
+                : "https://wads.pizza-doom.it/";
+            var queuedCount = 0;
+
+            foreach (var value in wadFiles.EnumerateArray())
+            {
+                if (value.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var fileName = Path.GetFileName(value.GetString()?.Trim());
+                if (string.IsNullOrWhiteSpace(fileName)
+                    || !requestedWads.TryGetValue(fileName, out var task))
+                {
+                    continue;
+                }
+
+                var downloadUrl = wadBaseUrl + Uri.EscapeDataString(fileName);
+                discoveryState.AddDeferredServerSource(task, downloadUrl, fileName);
+                queuedCount++;
+            }
+
+            LogVerbose(
+                $"Dynamic server WAD list contained {queuedCount} requested file(s)");
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogWarning($"Dynamic server WAD list request failed: {ex.Message}");
+            return false;
         }
     }
 
@@ -2024,7 +2361,6 @@ public partial class WadDownloader : IDisposable
     private async Task<List<string>> CrawlPageForWadDownloads(string pageUrl, string wadFileName, CancellationToken ct)
     {
         var downloadUrls = new List<string>();
-        var baseName = Path.GetFileNameWithoutExtension(wadFileName).ToLowerInvariant();
         pageUrl = NormalizeKnownDownloadUrl(pageUrl);
         
         try
@@ -2056,7 +2392,7 @@ public partial class WadDownloader : IDisposable
                 if (TryGetDirectDownloadFileName(
                         pageUrl,
                         out var directFileName)
-                    && IsWebCandidateNameMatch(directFileName, baseName))
+                    && IsRequestedFileNameMatch(directFileName, wadFileName))
                 {
                     downloadUrls.Add(pageUrl);
                 }
@@ -2079,7 +2415,7 @@ public partial class WadDownloader : IDisposable
                 var matchedFileName = ExtractDownloadFileName(absoluteUrl);
                 if (string.IsNullOrWhiteSpace(matchedFileName)) continue;
 
-                if (!IsWebCandidateNameMatch(matchedFileName, baseName))
+                if (!IsRequestedFileNameMatch(matchedFileName, wadFileName))
                 {
                     continue;
                 }
@@ -2098,17 +2434,16 @@ public partial class WadDownloader : IDisposable
         return downloadUrls;
     }
 
-    private static bool IsWebCandidateNameMatch(
+    private static bool IsRequestedFileNameMatch(
         string candidateFileName,
-        string targetBaseName)
+        string requestedFileName)
     {
-        var candidateBaseName = Path
-            .GetFileNameWithoutExtension(candidateFileName)
-            .ToLowerInvariant();
-        return candidateBaseName.Length > 0
-               && targetBaseName.Length > 0
-               && candidateBaseName.Equals(
-                   targetBaseName,
+        var candidateName = Path.GetFileName(candidateFileName);
+        var requestedName = Path.GetFileName(requestedFileName);
+        return !string.IsNullOrWhiteSpace(candidateName)
+               && !string.IsNullOrWhiteSpace(requestedName)
+               && candidateName.Equals(
+                   requestedName,
                    StringComparison.OrdinalIgnoreCase);
     }
 
@@ -2905,74 +3240,6 @@ public partial class WadDownloader : IDisposable
                    || mediaType.Equals(
                        "application/xhtml+xml",
                        StringComparison.OrdinalIgnoreCase));
-    }
-    
-    /// <summary>
-    /// Gets filename variants to try when searching.
-    /// Returns lowercase variants for direct source querying.
-    /// When the file has a supported WAD extension, includes both the WAD filename and potential archive formats.
-    /// When the file has an archive extension, includes both the archive and potential WAD formats.
-    /// When a file has no extension or an unsupported one, tries all supported extensions.
-    /// </summary>
-    private static List<string> GetFilenameVariants(string filename)
-    {
-        var variants = new List<string>();
-        var normalizedFileName = GetLowercaseFileName(filename);
-        var baseName = Path.GetFileNameWithoutExtension(normalizedFileName);
-        var originalExt = Path.GetExtension(normalizedFileName);
-        
-        // If no extension, try all supported extensions (prioritize common WAD formats)
-        if (string.IsNullOrEmpty(originalExt))
-        {
-            // Priority order: .wad, .pk3, .pk7, .zip, then others
-            var priorityOrder = new[] { ".wad", ".pk3", ".pk7", ".zip", ".7z", ".rar" };
-            foreach (var ext in priorityOrder)
-            {
-                if (SupportedExtensions.Contains(ext))
-                    variants.Add(baseName + ext);
-            }
-            // Add any remaining supported extensions
-            foreach (var ext in SupportedExtensions)
-            {
-                var variant = baseName + ext;
-                if (!variants.Contains(variant, StringComparer.OrdinalIgnoreCase))
-                    variants.Add(variant);
-            }
-        }
-        // If the file has a supported WAD extension, try the exact filename AND archives that might contain it
-        else if (WadExtensions.IsWadExtension(originalExt))
-        {
-            variants.Add(normalizedFileName);
-            foreach (var archiveExt in WadExtensions.ArchiveExtensions)
-            {
-                var archiveVariant = baseName + archiveExt;
-                if (!variants.Contains(archiveVariant, StringComparer.OrdinalIgnoreCase))
-                    variants.Add(archiveVariant);
-            }
-        }
-        // If the file is an archive, try the archive filename AND WAD formats inside it
-        else if (WadExtensions.IsArchiveExtension(originalExt))
-        {
-            variants.Add(normalizedFileName);
-            foreach (var wadExt in WadExtensions.WadFileExtensions)
-            {
-                var wadVariant = baseName + wadExt;
-                if (!variants.Contains(wadVariant, StringComparer.OrdinalIgnoreCase))
-                    variants.Add(wadVariant);
-            }
-        }
-        // If unsupported extension, try all supported extensions
-        else
-        {
-            foreach (var ext in SupportedExtensions)
-            {
-                var variant = baseName + ext;
-                if (!variants.Contains(variant, StringComparer.OrdinalIgnoreCase))
-                    variants.Add(variant);
-            }
-        }
-        
-        return variants;
     }
     
     /// <summary>

@@ -12,6 +12,8 @@ public partial class WadDownloader
     private sealed class SourceDiscoveryState
     {
         private readonly object _syncRoot = new();
+        private readonly Dictionary<WadDownloadTask, Queue<DeferredServerSource>>
+            _deferredServerSources = new();
         private long _version;
         private bool _isComplete;
         private TaskCompletionSource<bool> _changed = CreateSignal();
@@ -68,6 +70,51 @@ public partial class WadDownloader
             changed.TrySetResult(true);
         }
 
+        public void AddDeferredServerSource(
+            WadDownloadTask task,
+            string url,
+            string fileName)
+        {
+            lock (_syncRoot)
+            {
+                if (!_deferredServerSources.TryGetValue(task, out var sources))
+                {
+                    sources = new Queue<DeferredServerSource>();
+                    _deferredServerSources.Add(task, sources);
+                }
+
+                if (!sources.Any(source => source.Url.Equals(
+                        url,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    sources.Enqueue(new DeferredServerSource(url, fileName));
+                }
+            }
+        }
+
+        public bool TryTakeDeferredServerSource(
+            WadDownloadTask task,
+            out DeferredServerSource source)
+        {
+            lock (_syncRoot)
+            {
+                if (_deferredServerSources.TryGetValue(task, out var sources)
+                    && sources.Count > 0)
+                {
+                    source = sources.Dequeue();
+                    if (sources.Count == 0)
+                    {
+                        _deferredServerSources.Remove(task);
+                    }
+
+                    return true;
+                }
+            }
+
+            source = null!;
+            return false;
+        }
+
         public void MarkComplete()
         {
             TaskCompletionSource<bool> changed;
@@ -90,6 +137,8 @@ public partial class WadDownloader
         private static TaskCompletionSource<bool> CreateSignal() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
+
+    private sealed record DeferredServerSource(string Url, string FileName);
 
     private sealed record DownloadSource(
         string Url,
@@ -139,6 +188,10 @@ public partial class WadDownloader
         var activeUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var rangeSupportByUrl =
             new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var webFallbackAttempted = new HashSet<WadDownloadTask>();
+        using var webFallbackCts =
+            CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task? webFallbackTask = null;
 
         LogInfo(
             $"Scheduler limits: {maxActiveFiles} file(s), "
@@ -233,6 +286,44 @@ public partial class WadDownloader
 
                 ct.ThrowIfCancellationRequested();
 
+                if (webFallbackTask?.IsCompleted == true)
+                {
+                    await webFallbackTask;
+                    webFallbackTask = null;
+                }
+
+                if (WebSearchEnabled
+                    && discoveryState.IsComplete
+                    && webFallbackTask == null)
+                {
+                    var fallbackTasks = remaining
+                        .Where(task => !active.ContainsKey(task)
+                                       && !webFallbackAttempted.Contains(task)
+                                       && NeedsWebSourceDiscovery(
+                                           task,
+                                           discoveryState))
+                        .ToList();
+                    if (fallbackTasks.Count > 0)
+                    {
+                        foreach (var task in fallbackTasks)
+                        {
+                            webFallbackAttempted.Add(task);
+                            task.Status = WadDownloadStatus.Searching;
+                            task.StatusMessage =
+                                $"Searching ({task.SitesSearched}/{task.TotalSitesToSearch})...";
+                            ProgressUpdated?.Invoke(this, task);
+                        }
+
+                        LogInfo(
+                            $"No untried primary source remains for "
+                            + $"{fallbackTasks.Count} WAD(s); starting web-search fallback");
+                        webFallbackTask = SearchWebAsync(
+                            fallbackTasks,
+                            discoveryState,
+                            webFallbackCts.Token);
+                    }
+                }
+
                 if (active.Count == 0)
                 {
                     if (!discoveryState.IsComplete)
@@ -243,9 +334,20 @@ public partial class WadDownloader
                         continue;
                     }
 
+                    if (webFallbackTask != null)
+                    {
+                        await WaitForSchedulerActivityAsync(
+                            active.Values,
+                            discoveryState,
+                            observedSourceVersion,
+                            ct,
+                            webFallbackTask);
+                        continue;
+                    }
+
                     // Discovery is finished and nothing can release capacity.
                     // Tasks without a source were not found; tasks with only
-                    // exhausted sources have genuinely failed every option.
+                    // exhausted sources have failed every available option.
                     foreach (var task in remaining.ToArray())
                     {
                         if (BuildSourcePool(task, discoveryState).Count == 0)
@@ -268,7 +370,8 @@ public partial class WadDownloader
                     active.Values,
                     discoveryState,
                     observedSourceVersion,
-                    ct);
+                    ct,
+                    webFallbackTask);
 
                 foreach (var (task, download) in active
                              .Where(pair => pair.Value.Operation.IsCompleted)
@@ -295,12 +398,14 @@ public partial class WadDownloader
                     if (succeeded)
                     {
                         remaining.Remove(task);
+                        discoveryState.NotifySourceChanged();
                         continue;
                     }
 
                     if (task.Status == WadDownloadStatus.Cancelled)
                     {
                         remaining.Remove(task);
+                        discoveryState.NotifySourceChanged();
                         continue;
                     }
 
@@ -316,10 +421,14 @@ public partial class WadDownloader
                         LogWarning(
                             $"Retrying {task.Wad.FileName} from {download.Source.Url} "
                             + $"(attempt {task.RetryCount}/{WadDownloadTask.MaxRetriesPerSource})");
+                        discoveryState.NotifySourceChanged();
                         continue;
                     }
 
-                    task.ExhaustedUrls.Add(download.Source.Url);
+                    lock (discoveryState.SyncRoot)
+                    {
+                        task.ExhaustedUrls.Add(download.Source.Url);
+                    }
                     task.RetryCount = 0;
                     task.SkipSourceRetry = false;
 
@@ -347,11 +456,24 @@ public partial class WadDownloader
                             $"Source exhausted for {task.Wad.FileName}: "
                             + $"{download.Source.Url}; source discovery is still running");
                     }
+                    else if (WebSearchEnabled
+                             && !webFallbackAttempted.Contains(task))
+                    {
+                        task.Status = WadDownloadStatus.Searching;
+                        task.StatusMessage =
+                            $"Searching ({task.SitesSearched}/{task.TotalSitesToSearch})...";
+                        ProgressUpdated?.Invoke(this, task);
+                        LogWarning(
+                            $"Every discovered source failed for {task.Wad.FileName}; "
+                            + "web-search fallback will run");
+                    }
                     else
                     {
                         MarkTaskAllSourcesFailed(task);
                         remaining.Remove(task);
                     }
+
+                    discoveryState.NotifySourceChanged();
                 }
             }
         }
@@ -360,6 +482,39 @@ public partial class WadDownloader
             await AwaitActiveDownloadsAfterCancellationAsync(active.Values);
             MarkPendingTasksCancelled(remaining);
         }
+        finally
+        {
+            webFallbackCts.Cancel();
+            if (webFallbackTask != null)
+            {
+                try
+                {
+                    await webFallbackTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected when downloads finish before the fallback scan.
+                }
+                catch (Exception ex)
+                {
+                    LogWarning($"Web-search fallback stopped: {ex.Message}");
+                }
+            }
+        }
+    }
+
+    private static bool TryGetSupportedDownloadUri(string? url, out Uri uri)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var parsedUri)
+            && (parsedUri.Scheme == Uri.UriSchemeHttp
+                || parsedUri.Scheme == Uri.UriSchemeHttps))
+        {
+            uri = parsedUri;
+            return true;
+        }
+
+        uri = null!;
+        return false;
     }
 
     private SourceAssignment? SelectNextSource(
@@ -395,9 +550,7 @@ public partial class WadDownloader
             {
                 if (task.ExhaustedUrls.Contains(source.Url)
                     || activeUrls.Contains(source.Url)
-                    || !Uri.TryCreate(source.Url, UriKind.Absolute, out var uri)
-                    || (uri.Scheme != Uri.UriSchemeHttp
-                        && uri.Scheme != Uri.UriSchemeHttps))
+                    || !TryGetSupportedDownloadUri(source.Url, out var uri))
                 {
                     continue;
                 }
@@ -539,7 +692,8 @@ public partial class WadDownloader
         IEnumerable<ActiveDownload> downloads,
         SourceDiscoveryState discoveryState,
         long observedSourceVersion,
-        CancellationToken ct)
+        CancellationToken ct,
+        Task? additionalActivity = null)
     {
         using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var sourceChanged = discoveryState.WaitForChangeAsync(
@@ -548,6 +702,10 @@ public partial class WadDownloader
         var waitTasks = downloads
             .Select(download => (Task)download.Operation)
             .Append(sourceChanged);
+        if (additionalActivity != null)
+        {
+            waitTasks = waitTasks.Append(additionalActivity);
+        }
 
         await Task.WhenAny(waitTasks);
         waitCts.Cancel();

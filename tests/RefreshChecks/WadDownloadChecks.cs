@@ -17,8 +17,11 @@ internal static class WadDownloadChecks
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await CheckContentRecognitionAsync(fixture, timeout.Token);
         await CheckDownloadAsync(fixture, timeout.Token);
+        await CheckStopsProbingAfterSourceSucceedsAsync(fixture, timeout.Token);
+        await CheckResumesDiscoveryAfterHashMismatchAsync(fixture, timeout.Token);
+        await CheckFilenameMatchingAsync(fixture, timeout.Token);
         await CheckCancelledDownloadAsync(fixture, timeout.Token);
-        await CheckArchiveDownloadAsync(fixture, timeout.Token);
+        await CheckAlternateExtensionIsNotProbedAsync(fixture, timeout.Token);
     }
 
     private static async Task CheckContentRecognitionAsync(TestDirectory fixture, CancellationToken ct)
@@ -177,41 +180,163 @@ internal static class WadDownloadChecks
         }
     }
 
-    private static async Task CheckArchiveDownloadAsync(TestDirectory fixture, CancellationToken ct)
+    private static async Task CheckStopsProbingAfterSourceSucceedsAsync(
+        TestDirectory fixture,
+        CancellationToken ct)
     {
-        var previous = CreateWad("IWAD");
-        var replacement = CreateWad("PWAD");
-        var cases = new (string Name, byte[] Contents, string? Hash, bool Succeeds)[]
+        var destination = fixture.GetPath("single-source-download");
+        Directory.CreateDirectory(destination);
+        var wad = CreateWad("PWAD");
+        await using var firstSource = new DownloadServer(new Dictionary<string, byte[]>
         {
-            ("valid", replacement, Convert.ToHexString(MD5.HashData(replacement)).ToLowerInvariant(), true),
-            ("hash-mismatch", replacement, new string('0', 32), false),
-            ("invalid", Encoding.ASCII.GetBytes("<html>Invalid archive contents</html>"), null, false)
+            ["single-source.pk3"] = wad
+        });
+        await using var unusedMirror = new DownloadServer(new Dictionary<string, byte[]>
+        {
+            ["single-source.pk3"] = wad
+        });
+        using var downloader = new WadDownloader(
+            [firstSource.Site, unusedMirror.Site])
+        {
+            IdgamesEnabled = false,
+            WebSearchEnabled = false
         };
-        foreach (var test in cases)
+        var task = new WadDownloadTask
         {
-            var destination = fixture.GetPath("archive-download-" + test.Name);
-            Directory.CreateDirectory(destination);
-            var originalPath = Path.Combine(destination, "archive.pk3");
-            await File.WriteAllBytesAsync(originalPath, previous, ct);
-            var archiveCopy = Path.Combine(destination, "archive.zip");
-            await File.WriteAllTextAsync(archiveCopy, "Existing source archive must be retained", ct);
-            await using var server = new DownloadServer(new Dictionary<string, byte[]>
+            Wad = new WadInfo(
+                "single-source.pk3",
+                Convert.ToHexString(MD5.HashData(wad)).ToLowerInvariant())
+        };
+
+        await downloader.DownloadWadsAsync([task], destination, ct);
+        ct.ThrowIfCancellationRequested();
+
+        RegressionAssert.That(task.Status == WadDownloadStatus.Completed
+            && firstSource.RequestedFileNames.Count > 0
+            && unusedMirror.RequestedFileNames.IsEmpty,
+            "A successfully validated source stops discovery before probing later mirrors");
+    }
+
+    private static async Task CheckResumesDiscoveryAfterHashMismatchAsync(
+        TestDirectory fixture,
+        CancellationToken ct)
+    {
+        var destination = fixture.GetPath("hash-mismatch-fallback");
+        Directory.CreateDirectory(destination);
+        var wrongWad = CreateWad("IWAD");
+        var expectedWad = CreateWad("PWAD");
+        await using var mismatchingSource = new DownloadServer(
+            new Dictionary<string, byte[]>
             {
-                ["archive.zip"] = CreateZip("archive.pk3", test.Contents)
+                ["hash-fallback.pk3"] = wrongWad
             });
-            using var downloader = new WadDownloader([server.Site]) { IdgamesEnabled = false, WebSearchEnabled = false };
-            var task = new WadDownloadTask { Wad = new WadInfo("archive.pk3", test.Hash) };
-            await downloader.DownloadWadsAsync([task], destination, ct);
-            ct.ThrowIfCancellationRequested();
-            RegressionAssert.That(task.Status == (test.Succeeds ? WadDownloadStatus.Completed : WadDownloadStatus.Failed)
-                && File.ReadAllBytes(originalPath).SequenceEqual(test.Succeeds ? replacement : previous)
-                && File.ReadAllText(archiveCopy) == "Existing source archive must be retained"
-                && Directory.EnumerateFiles(destination).Count() == (test.Succeeds ? 3 : 2),
-                $"{test.Name} archive download validates its staged extraction before replacing or archiving only the destination");
-            if (test.Succeeds && WadHashCacheService.Instance.IsEnabled)
-                RegressionAssert.That(WadHashCacheService.Instance.TryGetCachedHash(originalPath) == test.Hash,
-                    "An extracted replacement records its verified snapshot at the installed inner-file path");
-        }
+        await using var correctSource = new DownloadServer(
+            new Dictionary<string, byte[]>
+            {
+                ["hash-fallback.pk3"] = expectedWad
+            });
+        using var downloader = new WadDownloader(
+            [mismatchingSource.Site, correctSource.Site])
+        {
+            IdgamesEnabled = false,
+            WebSearchEnabled = false
+        };
+        var task = new WadDownloadTask
+        {
+            Wad = new WadInfo(
+                "hash-fallback.pk3",
+                Convert.ToHexString(MD5.HashData(expectedWad)).ToLowerInvariant())
+        };
+
+        await downloader.DownloadWadsAsync([task], destination, ct);
+        ct.ThrowIfCancellationRequested();
+
+        RegressionAssert.That(task.Status == WadDownloadStatus.Completed
+            && task.SourceUrl?.Equals(
+                correctSource.Site.Replace(
+                    "%WadName%",
+                    task.Wad.FileName,
+                    StringComparison.OrdinalIgnoreCase),
+                StringComparison.OrdinalIgnoreCase) == true
+            && mismatchingSource.RequestedFileNames.Count > 0
+            && correctSource.RequestedFileNames.Count > 0,
+            "A hash-mismatching source is exhausted before the next source is searched and accepted");
+    }
+
+    private static async Task CheckFilenameMatchingAsync(TestDirectory fixture, CancellationToken ct)
+    {
+        var wad = CreateWad("PWAD");
+        var hash = Convert.ToHexString(MD5.HashData(wad)).ToLowerInvariant();
+        var destination = fixture.GetPath("case-insensitive-name-download");
+        Directory.CreateDirectory(destination);
+        var archive = CreateZip("archive.pk3", wad);
+        await using var server = new DownloadServer(
+            new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["index.html"] = Encoding.UTF8.GetBytes(
+                "<a href=\"/MiXeD.WaD\">download</a>"
+                + "<a href=\"/archive.zip\">different extension</a>"),
+            ["MiXeD.WaD"] = wad,
+            ["archive.zip"] = archive
+        });
+        using var downloader = new WadDownloader([server.Page])
+        {
+            IdgamesEnabled = false,
+            WebSearchEnabled = false
+        };
+        var caseInsensitiveMatch = new WadDownloadTask
+        {
+            Wad = new WadInfo("mixed.wad", hash)
+        };
+        var differentExtension = new WadDownloadTask
+        {
+            Wad = new WadInfo("archive.pk3")
+        };
+        await downloader.DownloadWadsAsync(
+            [caseInsensitiveMatch, differentExtension],
+            destination,
+            ct);
+        ct.ThrowIfCancellationRequested();
+
+        RegressionAssert.That(caseInsensitiveMatch.Status == WadDownloadStatus.Completed
+            && File.ReadAllBytes(Path.Combine(destination, "mixed.wad")).SequenceEqual(wad)
+            && server.RequestedFileNames.Any(name => name == "MiXeD.WaD"),
+            "Page sources match the exact requested filename case-insensitively");
+        RegressionAssert.That(differentExtension.Status == WadDownloadStatus.Failed
+            && differentExtension.ErrorMessage?.Contains(
+                "not found",
+                StringComparison.OrdinalIgnoreCase) == true
+            && !server.RequestedFileNames.Any(name => name == "archive.zip"),
+            "Page sources do not match or probe a different extension with the same base name");
+    }
+
+    private static async Task CheckAlternateExtensionIsNotProbedAsync(
+        TestDirectory fixture,
+        CancellationToken ct)
+    {
+        var destination = fixture.GetPath("alternate-extension-download");
+        Directory.CreateDirectory(destination);
+        var wad = CreateWad("PWAD");
+        await using var server = new DownloadServer(new Dictionary<string, byte[]>
+        {
+            ["archive.zip"] = CreateZip("archive.pk3", wad)
+        });
+        using var downloader = new WadDownloader([server.Site])
+        {
+            IdgamesEnabled = false,
+            WebSearchEnabled = false
+        };
+        var task = new WadDownloadTask { Wad = new WadInfo("archive.pk3") };
+        await downloader.DownloadWadsAsync([task], destination, ct);
+        ct.ThrowIfCancellationRequested();
+
+        RegressionAssert.That(task.Status == WadDownloadStatus.Failed
+            && task.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true
+            && server.RequestedFileNames.Count > 0
+            && server.RequestedFileNames.All(name =>
+                name.Equals("archive.pk3", StringComparison.OrdinalIgnoreCase))
+            && !Directory.EnumerateFiles(destination).Any(),
+            "A template source probes only the requested filename, not an archive with a different extension");
     }
 
     private static byte[] CreateZip(string fileName, byte[] contents)
@@ -245,6 +370,11 @@ internal static class WadDownloadChecks
         private readonly Func<string, CancellationToken, Task>? _beforeBody;
         private readonly Task _serving;
         public string Site { get; }
+        public string Page => Site.Replace(
+            "%WadName%",
+            "index.html",
+            StringComparison.OrdinalIgnoreCase);
+        public System.Collections.Concurrent.ConcurrentBag<string> RequestedFileNames { get; } = new();
 
         public DownloadServer(IReadOnlyDictionary<string, byte[]> files,
             Func<string, CancellationToken, Task>? beforeBody = null)
@@ -271,6 +401,7 @@ internal static class WadDownloadChecks
                         while (!string.IsNullOrEmpty(await reader.ReadLineAsync(ct))) { }
                         var fileName = request is { Length: >= 2 }
                             ? Uri.UnescapeDataString(request[1].TrimStart('/')) : string.Empty;
+                        RequestedFileNames.Add(fileName);
                         var found = _files.TryGetValue(fileName, out var payload);
                         var body = payload ?? [];
                         var header = Encoding.ASCII.GetBytes($"HTTP/1.1 {(found ? "200 OK" : "404 Not Found")}\r\n"
