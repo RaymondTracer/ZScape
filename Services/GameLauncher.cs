@@ -285,7 +285,18 @@ public class GameLauncher : IDisposable
             var baseName = Path.GetFileNameWithoutExtension(name);
             var extension = Path.GetExtension(name);
             var matchingPath = wadManager.FindWadByHash(hash, baseName, extension, cancellationToken,
-                file => progress?.Report(new SaveStateProgress { Status = $"Checking archived {Path.GetFileName(file)}", Current = current - 1, Total = missingWads.Count }));
+                file => progress?.Report(new SaveStateProgress
+                {
+                    Status = $"Checking local version of {Path.GetFileName(file)}",
+                    Current = current - 1,
+                    Total = missingWads.Count
+                }),
+                (file, bytesProcessed) => progress?.Report(new SaveStateProgress
+                {
+                    Status = $"Checking local version of {Path.GetFileName(file)} ({bytesProcessed / (1024d * 1024d):F1} MB)",
+                    Current = current - 1,
+                    Total = missingWads.Count
+                }));
             if (string.IsNullOrEmpty(matchingPath))
             {
                 needsDownload.Add(new WadInfo(name, hash));
@@ -689,20 +700,34 @@ public class GameLauncher : IDisposable
         IDictionary<string, WadResolutionResult>? resolvedWads = null)
     {
         var needsDownload = new List<WadInfo>();
+        var current = 0;
 
         foreach (var mismatch in mismatches)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report(new SaveStateProgress { Status = $"Resolving version of {mismatch.WadName}" });
+            progress?.Report(new SaveStateProgress
+            {
+                Status = $"Resolving version of {mismatch.WadName}",
+                Current = current,
+                Total = mismatches.Count
+            });
             var resolution = wadManager.ResolveWadAsync(mismatch.WadName, mismatch.ExpectedHash,
                 WadHashLookupMode.Verify, hashCache, cancellationToken).GetAwaiter().GetResult();
             if (resolution.Status != WadResolutionStatus.Matched)
             {
                 var matchingPath = wadManager.FindWadByHash(mismatch.ExpectedHash,
                     Path.GetFileNameWithoutExtension(mismatch.WadName), Path.GetExtension(mismatch.WadName),
+                    hashCache,
                     cancellationToken, file => progress?.Report(new SaveStateProgress
                     {
-                        Status = $"Checking local version of {Path.GetFileName(file)}"
+                        Status = $"Checking local version of {Path.GetFileName(file)}",
+                        Current = current,
+                        Total = mismatches.Count
+                    }), (file, bytesProcessed) => progress?.Report(new SaveStateProgress
+                    {
+                        Status = $"Checking local version of {Path.GetFileName(file)} ({bytesProcessed / (1024d * 1024d):F1} MB)",
+                        Current = current,
+                        Total = mismatches.Count
                     }));
                 if (!string.IsNullOrEmpty(matchingPath))
                 {
@@ -724,6 +749,14 @@ public class GameLauncher : IDisposable
                 resolvedWads[mismatch.WadName] = resolution;
             if (resolution.Status != WadResolutionStatus.Matched)
                 needsDownload.Add(new WadInfo(mismatch.WadName, mismatch.ExpectedHash));
+
+            current++;
+            progress?.Report(new SaveStateProgress
+            {
+                Status = $"Resolved version of {mismatch.WadName}",
+                Current = current,
+                Total = mismatches.Count
+            });
         }
         
         cancellationToken.ThrowIfCancellationRequested();

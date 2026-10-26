@@ -242,6 +242,18 @@ public sealed class WadHashCacheService
             forceRefresh: false).ConfigureAwait(false);
     }
 
+    // Recursive lookups may hash several candidate files. Defer serializing
+    // the full cache until the scan completes instead of rewriting it once per
+    // candidate; the caller flushes in a finally block, including cancellation.
+    internal Task<WadHashResult> GetHashForBatchAsync(
+        string filePath,
+        Action<long>? progress,
+        CancellationToken cancellationToken) =>
+        GetHashCoreAsync(filePath, progress, cancellationToken,
+            forceRefresh: false, cacheResult: true, persistChanges: false);
+
+    internal Task PersistPendingChangesAsync() => PersistIfDirtyAsync();
+
     /// <summary>
     /// Recalculates a file's full MD5 even when its current snapshot already
     /// has a valid cache entry. The freshly calculated value replaces that
@@ -270,7 +282,8 @@ public sealed class WadHashCacheService
         Action<long>? progress,
         CancellationToken cancellationToken,
         bool forceRefresh,
-        bool cacheResult = true)
+        bool cacheResult = true,
+        bool persistChanges = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var initialSnapshot = TryCreateSnapshot(filePath);
@@ -317,7 +330,8 @@ public sealed class WadHashCacheService
         if (canCacheResult)
         {
             StoreHash(finalSnapshot, computedHash);
-            await PersistIfDirtyAsync().ConfigureAwait(false);
+            if (persistChanges)
+                await PersistIfDirtyAsync().ConfigureAwait(false);
         }
         return new WadHashResult(computedHash, FromCache: false, initialSnapshot.Length, ErrorMessage: null)
         {

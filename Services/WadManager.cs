@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using ZScape.Models;
 using ZScape.Utilities;
 
@@ -513,7 +514,19 @@ public partial class WadManager
         string baseName,
         string extension,
         CancellationToken cancellationToken = default,
-        Action<string>? checkingFile = null)
+        Action<string>? checkingFile = null,
+        Action<string, long>? hashingProgress = null) =>
+        FindWadByHash(expectedHash, baseName, extension, WadHashCacheService.Instance,
+            cancellationToken, checkingFile, hashingProgress);
+
+    internal string? FindWadByHash(
+        string expectedHash,
+        string baseName,
+        string extension,
+        WadHashCacheService hashCache,
+        CancellationToken cancellationToken = default,
+        Action<string>? checkingFile = null,
+        Action<string, long>? hashingProgress = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrEmpty(expectedHash))
@@ -522,26 +535,61 @@ public partial class WadManager
         string? matchingPath = null;
         // Archived copies may live below a configured root. Reuse the browser's
         // cancellable, reparse-safe traversal; normal FindWad remains root-only.
-        WadFileScanner.Scan(
-            GetSearchRootsInPriorityOrder(),
-            supportedFileFound: null,
-            progress: null,
-            cancellationToken,
-            recurseSubdirectories: true,
-            stopAfterFile: file =>
-            {
-                checkingFile?.Invoke(file);
-                cancellationToken.ThrowIfCancellationRequested();
-                var hash = ComputeFileHash(file, cancellationToken);
-                if (!string.Equals(hash, expectedHash, StringComparison.OrdinalIgnoreCase))
-                    return false;
+        try
+        {
+            WadFileScanner.Scan(
+                GetSearchRootsInPriorityOrder(),
+                supportedFileFound: null,
+                progress: null,
+                cancellationToken,
+                recurseSubdirectories: true,
+                stopAfterFile: file =>
+                {
+                    checkingFile?.Invoke(file);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var cachedHash = hashCache.TryGetCachedHashResult(file);
+                    var hash = cachedHash?.Hash;
+                    if (cachedHash == null)
+                    {
+                        long lastProgressTimestamp = 0;
 
-                matchingPath = file;
-                _logger.Verbose($"Found matching hash for {baseName}: {file}");
-                return true;
-            },
-            includeFile: file => Path.GetExtension(file).Equals(extension, StringComparison.OrdinalIgnoreCase)
-                && Path.GetFileNameWithoutExtension(file).StartsWith(baseName, StringComparison.OrdinalIgnoreCase));
+                        void ReportHashProgress(long bytesProcessed)
+                        {
+                            if (hashingProgress == null)
+                                return;
+
+                            var now = Stopwatch.GetTimestamp();
+                            if (lastProgressTimestamp != 0
+                                && Stopwatch.GetElapsedTime(lastProgressTimestamp, now)
+                                    < TimeSpan.FromMilliseconds(150))
+                            {
+                                return;
+                            }
+
+                            lastProgressTimestamp = now;
+                            hashingProgress(file, bytesProcessed);
+                        }
+
+                        hash = hashCache.GetHashForBatchAsync(file,
+                            hashingProgress == null ? null : ReportHashProgress,
+                            cancellationToken).GetAwaiter().GetResult().Hash;
+                    }
+
+                    if (!string.Equals(hash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                        return false;
+
+                    matchingPath = file;
+                    _logger.Verbose($"Found matching hash for {baseName}: {file}");
+                    return true;
+                },
+                includeFile: file => Path.GetExtension(file).Equals(extension, StringComparison.OrdinalIgnoreCase)
+                    && Path.GetFileNameWithoutExtension(file).StartsWith(baseName, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            hashCache.PersistPendingChangesAsync().GetAwaiter().GetResult();
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         return matchingPath;
     }

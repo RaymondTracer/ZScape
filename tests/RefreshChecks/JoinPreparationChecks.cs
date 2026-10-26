@@ -12,6 +12,7 @@ internal static class JoinPreparationChecks
     {
         CheckRequiredAndOptionalPreparation();
         CheckArchiveTraversalAndCancellation();
+        CheckArchiveHashCacheAndProgress();
         CheckBackgroundPreparationAndCommandAssembly();
         CheckDuplicateResolutionAndLaunchPaths();
         CheckNestedResolutionMembership();
@@ -96,6 +97,37 @@ internal static class JoinPreparationChecks
             stopAfterFile: _ => true);
         RegressionAssert.That(first.Files.Count == 1,
             "Shared traversal can stop at the first matched file rather than scanning the remaining tree");
+    }
+
+    private static void CheckArchiveHashCacheAndProgress()
+    {
+        using var directory = new TestDirectory();
+        var nested = directory.GetPath("nested");
+        Directory.CreateDirectory(nested);
+        var archived = directory.GetPath("nested", "mod_archive.pk3");
+        File.WriteAllText(archived, "expected archived content");
+        var expectedHash = Hash(archived);
+        var manager = new WadManager { DownloadPath = directory.Path };
+        var cachePath = directory.GetPath("hash-cache.json");
+        var hashCache = new WadHashCacheService(cachePath, () => true);
+        var progressBytes = new List<long>();
+
+        var firstMatch = manager.FindWadByHash(expectedHash, "mod", ".pk3", hashCache,
+            CancellationToken.None,
+            hashingProgress: (_, bytesProcessed) => progressBytes.Add(bytesProcessed));
+        RegressionAssert.That(firstMatch == archived
+            && string.Equals(hashCache.TryGetCachedHash(archived), expectedHash, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(new WadHashCacheService(cachePath, () => true).TryGetCachedHash(archived),
+                expectedHash, StringComparison.OrdinalIgnoreCase)
+            && progressBytes.Count > 0 && progressBytes[^1] == new FileInfo(archived).Length,
+            "Archive hash lookup persists the shared cache and reports bytes while hashing an uncached candidate");
+
+        var cachedProgressReported = false;
+        var cachedMatch = manager.FindWadByHash(expectedHash, "mod", ".pk3", hashCache,
+            CancellationToken.None,
+            hashingProgress: (_, _) => cachedProgressReported = true);
+        RegressionAssert.That(cachedMatch == archived && !cachedProgressReported,
+            "A repeated archive lookup reuses the snapshot-validated cached hash instead of rereading the file");
     }
 
     private static void CheckBackgroundPreparationAndCommandAssembly()
